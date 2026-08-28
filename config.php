@@ -82,7 +82,8 @@ return [
     'oauth_consent_password' => (string) ($_ENV['OAUTH_CONSENT_PASSWORD'] ?? getenv('OAUTH_CONSENT_PASSWORD') ?: ''),
 
     // Comma-separated allowlist of origins whose Client ID Metadata Documents
-    // (CIMD) this server will fetch. chatgpt.com is the default.
+    // (CIMD) are accepted as a FALLBACK when a client presents a URL-formatted
+    // client_id (not advertised in discovery; clients use DCR by default).
     'oauth_cimd_allowed_origins' => array_values(array_filter(array_map(
         'trim',
         explode(',', (string) ($_ENV['OAUTH_CIMD_ALLOWED_ORIGINS'] ?? getenv('OAUTH_CIMD_ALLOWED_ORIGINS') ?: 'chatgpt.com,localhost,127.0.0.1,::1'))

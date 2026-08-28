@@ -34,7 +34,7 @@ Deployable via FTP.
   the `initialize` handshake (through `2025-11-25`) and the stateless
   `2026-07-28` revision.
 - **OAuth 2.1** authorization code flow with PKCE (S256), refresh-token
-  rotation, RFC 9207 issuer identification, CIMD + DCR client registration,
+  rotation, RFC 9207 issuer identification, dynamic client registration (DCR),
   RFC 9728 protected-resource metadata and RFC 8414 authorization-server
   metadata.
 - **Six MCP tools:** `remember`, `recall`, `search_memory`, `update_memory`,
@@ -56,7 +56,7 @@ public_html/
     .htaccess        routes everything to index.php
 src/
     Http/App.php     routing + diagnostics
-    Auth/            OAuth authorization server, token store, CIMD, DCR, bearer middleware
+    Auth/            OAuth authorization server, token store, DCR, bearer middleware
     Memory/          Markdown storage, search, path validation
     Mcp/             MCP server (official mcp/sdk) + tool definitions
     Support/         logger, atomic JSON store
@@ -98,7 +98,7 @@ built-in, dependency-free loader.
 | `LOG_PATH` | `./data/logs` | Request log directory |
 | `OAUTH_USERNAME` | *(empty)* | If set, the consent page requires this username. |
 | `OAUTH_CONSENT_PASSWORD` | *(empty)* | Consent-page password: a plaintext value or a bcrypt hash (recommended; `password_hash()`). |
-| `OAUTH_CIMD_ALLOWED_ORIGINS` | `chatgpt.com,localhost,127.0.0.1,::1` | Origins whose CIMD docs may be fetched |
+| `OAUTH_CIMD_ALLOWED_ORIGINS` | `chatgpt.com,localhost,127.0.0.1,::1` | Origins accepted as a CIMD fallback (not advertised) |
 | `OAUTH_ACCESS_TOKEN_TTL` | `3600` | Access token lifetime (seconds) |
 | `OAUTH_REFRESH_TOKEN_TTL` | `7776000` | Refresh token lifetime (seconds) |
 | `OAUTH_CODE_TTL` | `600` | Authorization code lifetime (seconds) |
@@ -141,13 +141,15 @@ MemoryDown is its own OAuth 2.1 authorization server (single user). Endpoints:
 | `/oauth/token` | Token endpoint |
 | `/oauth/register` | Dynamic client registration (RFC 7591) |
 
-Client identification is supported via:
+Client identification uses **Dynamic Client Registration (DCR, RFC 7591)** —
+the same approach as a typical single-user MCP server. Every client (ChatGPT,
+MCP Inspector, Claude, OpenCode, …) registers itself at `/oauth/register` and
+then runs the authorization-code + PKCE flow. No outbound network calls are
+needed at runtime.
 
-- **CIMD** (Client ID Metadata Documents) — what ChatGPT uses. When a client
-  presents an HTTPS `client_id`, MemoryDown fetches and validates that
-  document (origin-allowlisted, SSRF-guarded, cached).
-- **DCR** (dynamic client registration) — for the MCP Inspector and other
-  clients.
+CIMD (Client ID Metadata Documents) is **not advertised** in discovery, so
+clients default to DCR. A URL-formatted `client_id` is still accepted as a
+fallback for allow-listed origins (`chatgpt.com` and loopback by default).
 
 V1 supports **public clients only** (`token_endpoint_auth_method: "none"` with
 PKCE). Signed `private_key_jwt` client assertions are not yet implemented.
@@ -227,7 +229,8 @@ User prefers Markdown-based notes.
 - Access tokens are audience-bound to the `resource` that was requested during
   OAuth; only this server's two canonical resources are accepted.
 - Tokens and authorization codes are stored only as SHA-256 hashes.
-- CIMD fetches are HTTPS-only, origin-allowlisted and SSRF-guarded.
+- CIMD (used only as a fallback for URL client_ids) is HTTPS-only,
+  origin-allowlisted and SSRF-guarded.
 - Secrets are never logged: the logger only records messages and safe scalars;
   never passwords, tokens, codes or client secrets. Error messages are scrubbed
   of the consent password before being logged.
@@ -249,8 +252,9 @@ User prefers Markdown-based notes.
 - Consent uses a single username + password (or just a password, optionally a
   bcrypt hash) rather than a full login with sessions and rate limiting. This
   is a deliberate simplification for a single-user personal server.
-- CIMD documents for `chatgpt.com` are fetched at runtime; if you need a fully
-  offline flow you can pre-allowlist your own client metadata origin.
+- CIMD is not advertised; it is only a fallback for allow-listed origins. If a
+  client presents a `chatgpt.com` client_id, its document is fetched at runtime
+  (needs outbound HTTPS from the host).
 - The `mcp/sdk` is official but pre-1.0 (experimental). Pin the version in
   `composer.lock`.
 - mTLS client-certificate verification of ChatGPT is not implemented (not

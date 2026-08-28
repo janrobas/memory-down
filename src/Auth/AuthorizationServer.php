@@ -14,8 +14,9 @@ use Psr\Log\LoggerInterface;
  * The OAuth 2.1 authorization server MemoryDown itself runs (single-user).
  *
  * Implements the authorization-code flow with PKCE (S256), refresh-token
- * rotation, RFC 9207 issuer identification, CIMD + DCR client registration
- * and the discovery documents ChatGPT needs:
+ * rotation, RFC 9207 issuer identification, dynamic client registration (DCR,
+ * RFC 7591 — with a CIMD fallback for URL client_ids) and the discovery
+ * documents MCP clients need:
  *
  *   GET /.well-known/oauth-authorization-server   (RFC 8414)
  *   GET /.well-known/openid-configuration         (OIDC discovery)
@@ -62,7 +63,6 @@ final class AuthorizationServer
             'code_challenge_methods_supported' => ['S256'],
             'scopes_supported' => self::ALLOWED_SCOPES,
             'authorization_response_iss_parameter_supported' => true,
-            'client_id_metadata_document_supported' => true,
             'service_documentation' => $base . '/health',
         ];
     }

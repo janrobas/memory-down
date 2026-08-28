@@ -218,7 +218,8 @@ check('AS metadata: authorization_endpoint', ($as['authorization_endpoint'] ?? '
 check('AS metadata: token_endpoint', ($as['token_endpoint'] ?? '') === $base . '/oauth/token');
 check('AS metadata: code_challenge_methods_supported includes S256', in_array('S256', $as['code_challenge_methods_supported'] ?? [], true));
 check('AS metadata: token_endpoint_auth_methods_supported includes none', in_array('none', $as['token_endpoint_auth_methods_supported'] ?? [], true));
-check('AS metadata: client_id_metadata_document_supported', true === ($as['client_id_metadata_document_supported'] ?? false));
+check('AS metadata: CIMD not advertised (DCR primary, like Calendar)', !array_key_exists('client_id_metadata_document_supported', $as));
+check('AS metadata: registration_endpoint present', isset($as['registration_endpoint']));
 check('AS metadata: iss parameter supported (RFC 9207)', true === ($as['authorization_response_iss_parameter_supported'] ?? false));
 
 $r = request('GET', '/.well-known/openid-configuration');

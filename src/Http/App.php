@@ -182,11 +182,12 @@ final class App
                 'token_endpoint_auth_methods' => ['none'],
                 'grant_types' => ['authorization_code', 'refresh_token'],
                 'issuer_identification_rfc9207' => true,
+                'dynamic_client_registration' => true,
                 'client_id_metadata_documents' => [
-                    'supported' => true,
+                    'advertised' => false,
+                    'accepted_as_fallback' => true,
                     'allowed_origins' => $this->config->oauthCimdAllowedOrigins,
                 ],
-                'dynamic_client_registration' => true,
             ],
             'token_lifetimes_seconds' => [
                 'access' => $this->config->oauthAccessTokenTtl,
