@@ -74,6 +74,9 @@ return [
     'oauth_refresh_token_ttl' => (int) ($_ENV['OAUTH_REFRESH_TOKEN_TTL'] ?? getenv('OAUTH_REFRESH_TOKEN_TTL') ?: 90 * 86400),
     'oauth_code_ttl' => (int) ($_ENV['OAUTH_CODE_TTL'] ?? getenv('OAUTH_CODE_TTL') ?: 600),
 
+    // Optional: if set, the OAuth consent page requires this username.
+    'oauth_username' => (string) ($_ENV['OAUTH_USERNAME'] ?? getenv('OAUTH_USERNAME') ?: ''),
+
     // Optional: if set, the OAuth consent page requires this password. May be
     // a plaintext value or a bcrypt hash (preferred, via password_hash()).
     'oauth_consent_password' => (string) ($_ENV['OAUTH_CONSENT_PASSWORD'] ?? getenv('OAUTH_CONSENT_PASSWORD') ?: ''),

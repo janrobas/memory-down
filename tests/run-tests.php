@@ -52,6 +52,7 @@ if (!$keepServer) {
     putenv('DATA_PATH=' . $tmp);
     putenv('MEMORY_PATH=' . $tmp . '/memory');
     putenv('LOG_PATH=' . $tmp . '/logs');
+    putenv('OAUTH_USERNAME=test-user');
     putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
 
     $extArgs = ['-d', 'extension_dir=' . dirname(PHP_BINARY) . '/ext'];
@@ -319,11 +320,15 @@ $r = request('GET', '/oauth/authorize?' . http_build_query([
 check('authorize: mismatched redirect_uri rejected', 400 === $r['status']);
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
-    http_build_query(['decision' => 'allow', 'consent_password' => 'wrong-password']));
-check('authorize: wrong consent password denied', 200 === $r['status'] && str_contains($r['body'], 'Incorrect password'));
+    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'consent_password' => 'wrong-password']));
+check('authorize: wrong consent password denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
-    http_build_query(['decision' => 'allow', 'consent_password' => 'test-password']));
+    http_build_query(['decision' => 'allow', 'username' => 'wrong-user', 'consent_password' => 'test-password']));
+check('authorize: wrong username denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
+
+$r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
+    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'consent_password' => 'test-password']));
 $location = $r['headers']['location'] ?? '';
 check('authorize: approved -> 302 redirect', 302 === $r['status'], $location);
 check('authorize: code in redirect', str_contains($location, 'code='));

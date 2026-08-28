@@ -96,6 +96,7 @@ built-in, dependency-free loader.
 | `DATA_PATH` | `./data` | Runtime data (auth, sessions) |
 | `MEMORY_PATH` | `./data/memory` | Where Markdown memory lives |
 | `LOG_PATH` | `./data/logs` | Request log directory |
+| `OAUTH_USERNAME` | *(empty)* | If set, the consent page requires this username. |
 | `OAUTH_CONSENT_PASSWORD` | *(empty)* | Consent-page password: a plaintext value or a bcrypt hash (recommended; `password_hash()`). |
 | `OAUTH_CIMD_ALLOWED_ORIGINS` | `chatgpt.com,localhost,127.0.0.1,::1` | Origins whose CIMD docs may be fetched |
 | `OAUTH_ACCESS_TOKEN_TTL` | `3600` | Access token lifetime (seconds) |
@@ -245,9 +246,9 @@ User prefers Markdown-based notes.
 - Public OAuth clients only (`none` + PKCE); `private_key_jwt` is not
   implemented, so ChatGPT will use the public-client flow.
 - No revocation endpoint; refresh tokens are rotated on use and expire.
-- Consent is a single shared password (optionally a bcrypt hash) rather than a
-  full username/password login with sessions and rate limiting. This is a
-  deliberate simplification for a single-user personal server.
+- Consent uses a single username + password (or just a password, optionally a
+  bcrypt hash) rather than a full login with sessions and rate limiting. This
+  is a deliberate simplification for a single-user personal server.
 - CIMD documents for `chatgpt.com` are fetched at runtime; if you need a fully
   offline flow you can pre-allowlist your own client metadata origin.
 - The `mcp/sdk` is official but pre-1.0 (experimental). Pin the version in

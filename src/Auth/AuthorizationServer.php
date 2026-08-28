@@ -121,13 +121,11 @@ final class AuthorizationServer
                 return $this->consentPage($request, $client, $params, 'Invalid decision.');
             }
 
-            if ('' !== $this->config->oauthConsentPassword) {
-                $given = (string) ($params['consent_password'] ?? '');
-                if (!$this->consentPasswordValid($given)) {
-                    $this->logger->warning('oauth.consent.password_failed');
+            $consentError = $this->validateConsent($params);
+            if (null !== $consentError) {
+                $this->logger->warning('oauth.consent.rejected');
 
-                    return $this->consentPage($request, $client, $params, 'Incorrect password.');
-                }
+                return $this->consentPage($request, $client, $params, $consentError);
             }
 
             $scope = $this->normalizeScope((string) ($params['scope'] ?? TokenStore::SCOPE));
@@ -400,7 +398,7 @@ final class AuthorizationServer
             . 'h1{font-size:1.25rem}.muted{color:#666;word-break:break-all}'
             . 'button{margin-top:1rem;padding:.6rem 1.2rem;border-radius:6px;border:0;cursor:pointer;font-size:1rem}'
             . '.allow{background:#146c43;color:#fff;margin-right:.5rem}.deny{background:#eee}'
-            . 'input[type=password]{width:100%;padding:.5rem;margin-top:1rem;border:1px solid #ccc;border-radius:6px}'
+            . 'input[type=password],input[type=text]{width:100%;padding:.5rem;margin-top:1rem;border:1px solid #ccc;border-radius:6px}'
             . '.err{color:#b02a37;background:#f8d7da;border:1px solid #f5c2c7;padding:.6rem;border-radius:6px;margin-bottom:1rem}</style>';
         $body[] = '</head><body><div class="card">';
         $body[] = '<h1>' . htmlspecialchars($this->config->appName, ENT_QUOTES) . ' authorization</h1>';
@@ -421,6 +419,9 @@ final class AuthorizationServer
                 $value = is_array($params[$keep]) ? implode(' ', $params[$keep]) : (string) $params[$keep];
                 $body[] = '<input type="hidden" name="' . htmlspecialchars($keep, ENT_QUOTES) . '" value="' . htmlspecialchars($value, ENT_QUOTES) . '">';
             }
+        }
+        if ('' !== $this->config->oauthUsername) {
+            $body[] = '<input type="text" name="username" placeholder="Username" required>';
         }
         if ('' !== $this->config->oauthConsentPassword) {
             $body[] = '<input type="password" name="consent_password" placeholder="Consent password" required>';
@@ -505,6 +506,30 @@ final class AuthorizationServer
         $base = $this->config->appBaseUrl;
 
         return in_array($resource, [$base, $base . '/mcp'], true) ? $resource : '';
+    }
+
+    /**
+     * Validate the consent credentials (username and/or password) against the
+     * configured values. Returns an error message, or null on success.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function validateConsent(array $params): ?string
+    {
+        if ('' !== $this->config->oauthUsername) {
+            $givenUser = (string) ($params['username'] ?? '');
+            if (!hash_equals($this->config->oauthUsername, $givenUser)) {
+                return 'Invalid username or password.';
+            }
+        }
+        if ('' !== $this->config->oauthConsentPassword) {
+            $givenPassword = (string) ($params['consent_password'] ?? '');
+            if (!$this->consentPasswordValid($givenPassword)) {
+                return 'Invalid username or password.';
+            }
+        }
+
+        return null;
     }
 
     /**

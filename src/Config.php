@@ -21,6 +21,7 @@ final class Config
     public readonly int $oauthAccessTokenTtl;
     public readonly int $oauthRefreshTokenTtl;
     public readonly int $oauthCodeTtl;
+    public readonly string $oauthUsername;
     public readonly string $oauthConsentPassword;
     /** @var list<string> */
     public readonly array $oauthCimdAllowedOrigins;
@@ -39,6 +40,7 @@ final class Config
         $this->oauthAccessTokenTtl = (int) $c['oauth_access_token_ttl'];
         $this->oauthRefreshTokenTtl = (int) $c['oauth_refresh_token_ttl'];
         $this->oauthCodeTtl = (int) $c['oauth_code_ttl'];
+        $this->oauthUsername = (string) $c['oauth_username'];
         $this->oauthConsentPassword = (string) $c['oauth_consent_password'];
         $this->oauthCimdAllowedOrigins = $c['oauth_cimd_allowed_origins'];
         $this->mcpSessionTtl = (int) $c['mcp_session_ttl'];
