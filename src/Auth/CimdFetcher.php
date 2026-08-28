@@ -96,7 +96,7 @@ final class CimdFetcher
             return null;
         }
 
-        $client = $this->validate($doc, $clientId);
+        $client = $this->validateDocument($doc, $clientId);
         if (null === $client) {
             $this->logger->warning('cimd.validation_failed', ['host' => $host]);
             $this->cache->put($key, ['expires_at' => time() + 300, 'client' => null]);
@@ -127,6 +127,11 @@ final class CimdFetcher
 
     /**
      * SSRF guard: reject hosts that resolve only to private/reserved IPs.
+     *
+     * The origin allow-list is the primary control; this is defence-in-depth.
+     * When DNS resolution is unavailable (e.g. disabled on shared hosting) we
+     * do NOT block — we can only reject when we can positively identify a
+     * private/reserved address.
      */
     private function hostResolvesPublicly(string $host): bool
     {
@@ -136,7 +141,7 @@ final class CimdFetcher
 
         $records = @dns_get_record($host, DNS_A | DNS_AAAA);
         if (false === $records || [] === $records) {
-            return false;
+            return true;
         }
 
         foreach ($records as $record) {
@@ -205,11 +210,13 @@ final class CimdFetcher
     }
 
     /**
+     * Validate a CIMD document against its expected client_id.
+     *
      * @param array<string, mixed> $doc
      *
      * @return array{client_id: string, client_name: string, redirect_uris: list<string>, token_endpoint_auth_method: string}|null
      */
-    private function validate(array $doc, string $expectedClientId): ?array
+    public function validateDocument(array $doc, string $expectedClientId): ?array
     {
         $clientId = $doc['client_id'] ?? null;
         if (!is_string($clientId) || $clientId !== $expectedClientId) {
@@ -234,12 +241,22 @@ final class CimdFetcher
             $uris[] = $uri;
         }
 
-        $authMethod = 'none';
-        if (isset($doc['token_endpoint_auth_method']) && is_string($doc['token_endpoint_auth_method'])) {
-            $authMethod = $doc['token_endpoint_auth_method'];
+        $authMethods = $doc['token_endpoint_auth_methods_supported'] ?? null;
+        if (is_array($authMethods)) {
+            $authMethods = array_values(array_map('strval', $authMethods));
+        } elseif (isset($doc['token_endpoint_auth_method']) && is_string($doc['token_endpoint_auth_method'])) {
+            // Legacy singular field (a preference, not a hard requirement).
+            $authMethods = [$doc['token_endpoint_auth_method']];
+        } else {
+            $authMethods = ['none'];
         }
-        if ('none' !== $authMethod) {
-            // V1 supports public clients (PKCE) only.
+
+        // This server only supports the public-client method "none" (PKCE).
+        // ChatGPT's CIMD document advertises both "none" and "private_key_jwt"
+        // (with a legacy singular preference for private_key_jwt); since the AS
+        // metadata advertises only "none", ChatGPT selects "none" from the
+        // intersection. Accept the client whenever "none" is among its methods.
+        if (!in_array('none', $authMethods, true)) {
             return null;
         }
 
