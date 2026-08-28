@@ -1,0 +1,24 @@
+{
+    "name": "memorydown/memorydown",
+    "description": "A tiny personal AI memory server: MCP over HTTPS with OAuth 2.1, storing memory as Markdown files. Built for cheap PHP shared hosting.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2",
+        "ext-fileinfo": "*",
+        "ext-mbstring": "*",
+        "ext-openssl": "*",
+        "mcp/sdk": "^0.8",
+        "nyholm/psr7": "^1.8",
+        "nyholm/psr7-server": "^1.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "MemoryDown\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

@@ -1,0 +1,12 @@
+/vendor/
+
+# Runtime state (never commit credentials or tokens)
+/data/auth/
+/data/sessions/
+/data/logs/
+
+# Local configuration/secrets
+/.env
+
+# Local test artifacts
+/tests/tmp-run/

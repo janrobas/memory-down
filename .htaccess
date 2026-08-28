@@ -1,0 +1,10 @@
+# If the document root has to point at the project root instead of public_html/,
+# deny everything except public_html/ (preferred layout: document root = public_html/).
+# This file is a safety net only.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^public_html/ - [L]
+    RewriteRule ^$ - [L]
+    RewriteRule ^ - [F]
+</IfModule>
