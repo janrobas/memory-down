@@ -164,6 +164,10 @@ server URL (e.g. `https://memory.example.com/mcp`), choose **OAuth**, and approv
 the consent page. The server answers MCP at both `/` and `/mcp`, so it works
 whether ChatGPT probes the base URL or the path.
 
+After connecting, paste the block from [`CHATGPT-INSTRUCTIONS.md`](CHATGPT-INSTRUCTIONS.md)
+into ChatGPT's custom instructions so it uses MemoryDown by default instead of its
+built-in memory.
+
 ## Testing & diagnostics
 
 ```bash
