@@ -7,9 +7,9 @@ namespace MemoryDown\Mcp;
 use Mcp\Schema\Content\TextContent;
 use Mcp\Schema\Result\CallToolResult;
 use Mcp\Schema\ToolAnnotations;
-use MemoryDown\Memory\MemorySearch;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
+use MemoryDown\Memory\SearchEngine;
 
 /**
  * The six MCP tools of V1, written for AI agents.
@@ -22,12 +22,10 @@ final class MemoryTools
 {
     private const DEFAULT_LIMIT = 10;
 
-    private MemorySearch $search;
-
     public function __construct(
         private readonly MemoryStore $store,
+        private readonly SearchEngine $search,
     ) {
-        $this->search = new MemorySearch($store);
     }
 
     /** @return array{handler: callable, name: string, description: string, annotations: ToolAnnotations, inputSchema: array<string, mixed>}[] */
@@ -67,7 +65,7 @@ final class MemoryTools
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
                     'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, facts, people, context. Defaults to "facts".'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional tags for grouping and search.'],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"].'],
                 ],
                 'required' => ['content'],
             ],
@@ -112,10 +110,11 @@ final class MemoryTools
     {
         return [
             'name' => 'recall',
-            'description' => 'Retrieve memories relevant to the current conversation. '
-                . 'Provide a query to find memories on a topic; without a query the most recently updated '
-                . 'memories are returned. Use this at the start of a conversation when the user\'s request '
-                . 'may depend on previously stored preferences, project context or facts.',
+            'description' => "Load the user's persistent memory into context. Call this proactively at the "
+                . 'start of a conversation and whenever the discussion moves to a new topic, so you have the '
+                . 'user\'s relevant preferences, projects, decisions, facts and history in mind before '
+                . 'answering. You do not need the user to ask about their memory. Without a query the most '
+                . 'recently updated memories are returned; with a query, the most relevant ones.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
@@ -123,7 +122,7 @@ final class MemoryTools
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'Optional search words describing the memory you need.'],
+                    'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories.'],
                     'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, facts, people, context).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
                 ],
@@ -154,9 +153,11 @@ final class MemoryTools
     {
         return [
             'name' => 'search_memory',
-            'description' => 'Full-text search over the Markdown memory corpus. '
-                . 'Matches filenames, titles, frontmatter tags and body text, ranked by relevance. '
-                . 'Use this when you need to find whether a specific fact, decision or preference was stored.',
+            'description' => "Search the user's persistent memory. Use this tool whenever answering "
+                . 'questions about the user\'s personal preferences, facts, history, previous decisions, '
+                . 'projects, people, or anything the user may have asked to remember. Check it before '
+                . 'answering anything personal or past-related, even if the user does not mention memory '
+                . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
@@ -164,8 +165,8 @@ final class MemoryTools
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'The words to search for.'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category.'],
+                    'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember.'],
+                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, facts, people, context).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
                     'include_body' => ['type' => 'boolean', 'description' => 'Include the full body of matching memories (default false; results include a snippet).'],
                 ],
@@ -210,7 +211,7 @@ final class MemoryTools
                     'id' => ['type' => 'string', 'description' => 'The id of the memory entry to update.'],
                     'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'New title.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list.'],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search).'],
                     'category' => ['type' => 'string', 'description' => 'New category; the file is moved there.'],
                 ],
                 'required' => ['id'],

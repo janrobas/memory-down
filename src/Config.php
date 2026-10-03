@@ -28,6 +28,13 @@ final class Config
 
     public readonly int $mcpSessionTtl;
 
+    public readonly bool $uiEnabled;
+    public readonly string $adminPasswordHash;
+    public readonly string $adminSetupToken;
+
+    public readonly bool $indexEnabled;
+    public readonly string $indexPath;
+
     public function __construct(array $c)
     {
         $this->appBaseUrl = (string) $c['app_base_url'];
@@ -44,6 +51,13 @@ final class Config
         $this->oauthConsentPassword = (string) $c['oauth_consent_password'];
         $this->oauthCimdAllowedOrigins = $c['oauth_cimd_allowed_origins'];
         $this->mcpSessionTtl = (int) $c['mcp_session_ttl'];
+
+        $this->uiEnabled = (bool) ($c['ui_enabled'] ?? true);
+        $this->adminPasswordHash = (string) ($c['admin_password_hash'] ?? '');
+        $this->adminSetupToken = (string) ($c['admin_setup_token'] ?? '');
+
+        $this->indexEnabled = (bool) ($c['index_enabled'] ?? true);
+        $this->indexPath = (string) ($c['index_path'] ?? $this->dataPath . '/index/memory.sqlite');
     }
 
     public function isProduction(): bool

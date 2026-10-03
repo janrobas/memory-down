@@ -53,6 +53,10 @@ if (is_file($__envFile)) {
 }
 unset($__envFile, $__lines, $__line, $__key, $__value, $__len, $__first, $__last);
 
+// Resolve the data directory once so derived defaults (index, logs, sessions)
+// stay inside it even when DATA_PATH is overridden (e.g. tests, deployments).
+$__dataPath = rtrim((string) ($_ENV['DATA_PATH'] ?? getenv('DATA_PATH') ?: __DIR__ . '/data'), '/\\');
+
 return [
     // Public HTTPS base URL of the application, without trailing slash.
     // Example: https://memory.example.com
@@ -64,10 +68,10 @@ return [
     'app_version' => '1.0.0',
 
     // Absolute paths (defaults assume the repository layout).
-    'data_path' => rtrim((string) ($_ENV['DATA_PATH'] ?? getenv('DATA_PATH') ?: __DIR__ . '/data'), '/'),
-    'memory_path' => rtrim((string) ($_ENV['MEMORY_PATH'] ?? getenv('MEMORY_PATH') ?: __DIR__ . '/data/memory'), '/'),
+    'data_path' => $__dataPath,
+    'memory_path' => rtrim((string) ($_ENV['MEMORY_PATH'] ?? getenv('MEMORY_PATH') ?: $__dataPath . '/memory'), '/\\'),
 
-    'log_path' => rtrim((string) ($_ENV['LOG_PATH'] ?? getenv('LOG_PATH') ?: __DIR__ . '/data/logs'), '/'),
+    'log_path' => rtrim((string) ($_ENV['LOG_PATH'] ?? getenv('LOG_PATH') ?: $__dataPath . '/logs'), '/\\'),
 
     // OAuth: token lifetimes in seconds.
     'oauth_access_token_ttl' => (int) ($_ENV['OAUTH_ACCESS_TOKEN_TTL'] ?? getenv('OAUTH_ACCESS_TOKEN_TTL') ?: 3600),
@@ -91,4 +95,28 @@ return [
 
     // MCP session lifetime in seconds.
     'mcp_session_ttl' => (int) ($_ENV['MCP_SESSION_TTL'] ?? getenv('MCP_SESSION_TTL') ?: 3600),
+
+    // -----------------------------------------------------------------------
+    // Web admin UI (/ui): browse, search and edit memories.
+    // -----------------------------------------------------------------------
+    'ui_enabled' => filter_var(
+        $_ENV['UI_ENABLED'] ?? getenv('UI_ENABLED') ?: 'true',
+        FILTER_VALIDATE_BOOL
+    ),
+
+    // bcrypt/argon hash of the admin password. Empty is allowed on first run:
+    // /ui/setup stores a hash in data/auth/ui.json instead.
+    'admin_password_hash' => (string) ($_ENV['ADMIN_PASSWORD_HASH'] ?? getenv('ADMIN_PASSWORD_HASH') ?: ''),
+
+    // Optional extra secret required by the first-run /ui/setup form.
+    'admin_setup_token' => (string) ($_ENV['ADMIN_SETUP_TOKEN'] ?? getenv('ADMIN_SETUP_TOKEN') ?: ''),
+
+    // -----------------------------------------------------------------------
+    // Full-text search index (disposable SQLite FTS5 cache over the Markdown).
+    // -----------------------------------------------------------------------
+    'index_enabled' => filter_var(
+        $_ENV['INDEX_ENABLED'] ?? getenv('INDEX_ENABLED') ?: 'true',
+        FILTER_VALIDATE_BOOL
+    ),
+    'index_path' => rtrim((string) ($_ENV['INDEX_PATH'] ?? getenv('INDEX_PATH') ?: $__dataPath . '/index/memory.sqlite'), '/\\'),
 ];

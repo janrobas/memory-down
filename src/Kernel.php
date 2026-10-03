@@ -20,6 +20,7 @@ final class Kernel
     public readonly Config $config;
     public readonly FileLogger $logger;
     public readonly Memory\MemoryStore $memory;
+    public readonly Memory\SearchEngine $search;
     public readonly Auth\TokenStore $tokens;
     public readonly Auth\ClientRegistry $clients;
     public readonly Auth\AuthorizationServer $auth;
@@ -63,6 +64,18 @@ final class Kernel
             $config->memoryPath,
             $config->dataPath . '/auth',
             $this->logger,
+        );
+
+        $indexDir = dirname($config->indexPath);
+        if (!is_dir($indexDir) && !mkdir($indexDir, 0775, true) && !is_dir($indexDir)) {
+            throw new \RuntimeException("Cannot create index directory: {$indexDir}");
+        }
+
+        $this->search = new Memory\MemoryIndex(
+            $this->memory,
+            $config->indexPath,
+            $this->logger,
+            $config->indexEnabled,
         );
 
         $this->tokens = new Auth\TokenStore(

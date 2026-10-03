@@ -22,14 +22,26 @@ final class Response
     public static function secure(ResponseInterface $response): ResponseInterface
     {
         $isHtml = str_contains($response->getHeaderLine('Content-Type'), 'text/html');
+        $isAdmin = $response->hasHeader(\MemoryDown\Web\WebApp::ADMIN_HEADER);
+
+        if ($isAdmin) {
+            $response = $response->withoutHeader(\MemoryDown\Web\WebApp::ADMIN_HEADER);
+        }
+
+        $policy = match (true) {
+            // Admin UI: same-origin assets only; no inline scripts, no CDN.
+            $isAdmin => "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                . "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+                . "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            $isHtml => "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+            default => "default-src 'none'",
+        };
 
         return $response
             ->withHeader('X-Content-Type-Options', 'nosniff')
             ->withHeader('X-Frame-Options', 'DENY')
             ->withHeader('Referrer-Policy', 'no-referrer')
-            ->withHeader('Content-Security-Policy', $isHtml
-                ? "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-                : "default-src 'none'");
+            ->withHeader('Content-Security-Policy', $policy);
     }
 
     /**

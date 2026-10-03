@@ -5,6 +5,9 @@
 /data/sessions/
 /data/logs/
 
+# Disposable full-text search index (rebuilt from the Markdown files)
+/data/index/
+
 # Local configuration/secrets
 /.env
 

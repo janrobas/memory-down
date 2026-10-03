@@ -9,12 +9,17 @@ namespace MemoryDown\Memory;
  * index). Scores filename, title, tags and body matches; returns ranked
  * documents with a snippet.
  */
-final class MemorySearch
+final class MemorySearch implements SearchEngine
 {
     public function __construct(
         private readonly MemoryStore $store,
         private readonly int $maxResults = 10,
     ) {
+    }
+
+    public function rebuild(): void
+    {
+        // Direct file search has no derived state to rebuild.
     }
 
     /**

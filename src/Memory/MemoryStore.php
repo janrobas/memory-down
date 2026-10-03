@@ -88,8 +88,8 @@ final class MemoryStore
             'source' => self::SOURCE,
             'id' => $id,
         ];
-        $body = trim($content);
-        $raw = Frontmatter::render($frontmatter) . "\n\n" . ($title !== '' ? "# {$title}\n\n" : '') . $body . "\n";
+        $body = self::bodyWithTitle($title, $content);
+        $raw = Frontmatter::render($frontmatter) . "\n\n" . $body . "\n";
 
         if (false === file_put_contents($file, $raw, LOCK_EX)) {
             throw new \RuntimeException("Failed to write memory file: {$category}/{$id}.md");
@@ -190,7 +190,7 @@ final class MemoryStore
             'source' => (string) ($current['source'] ?? self::SOURCE),
             'id' => $id,
         ];
-        $raw = Frontmatter::render($frontmatter) . "\n\n" . ($nextTitle !== '' ? "# {$nextTitle}\n\n" : '') . $nextContent . "\n";
+        $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
         if ($nextCategory === $category) {
             if (false === file_put_contents($file, $raw, LOCK_EX)) {
@@ -312,6 +312,50 @@ final class MemoryStore
         return $cats;
     }
 
+    /**
+     * Compose the file body: a single H1 for the title, then the content.
+     *
+     * The store's canonical layout is "# Title" followed by the body. When the
+     * supplied content already starts with an H1 (for example an entry written
+     * through the admin UI or imported from another tool), that leading heading
+     * is treated as the title and not duplicated.
+     */
+    private static function bodyWithTitle(string $title, string $content): string
+    {
+        $content = trim($content);
+        $heading = $title !== '' ? "# {$title}" : '';
+
+        // Adopt the first existing H1 as the title when none was supplied, and
+        // drop any leading H1s (including duplicates left by earlier versions)
+        // so exactly one title heading is ever written.
+        $content = self::stripLeadingHeadings($content, $adopted);
+        if ('' === $title && '' !== $adopted) {
+            $heading = '# ' . $adopted;
+        }
+        if ('' !== $heading) {
+            return $content !== '' ? $heading . "\n\n" . $content : $heading;
+        }
+
+        return $content;
+    }
+
+    /**
+     * Remove all leading H1 (`# ...`) lines, returning the remaining body.
+     * The first one found is exposed via $first (used as a fallback title).
+     */
+    private static function stripLeadingHeadings(string $text, ?string &$first = null): string
+    {
+        $text = ltrim($text);
+        while ('' !== $text && preg_match('/^#\s+(.+?)\s*(?:\r?\n|$)/', $text, $m)) {
+            if (null === $first) {
+                $first = trim($m[1]);
+            }
+            $text = ltrim(substr($text, strlen($m[0])));
+        }
+
+        return $text;
+    }
+
     private static function normalizeCategory(string $category): string
     {
         $category = strtolower(trim($category));
@@ -350,6 +394,11 @@ final class MemoryStore
         } elseif (preg_match('/^#\s+(.+)$/m', $body, $m)) {
             $title = trim($m[1]);
         }
+
+        // The title lives in the frontmatter / UI title field, not in the body.
+        // Strip the leading H1 (and any accidental duplicates) so that saving a
+        // memory back never re-prepends the title and compounds the heading.
+        $body = self::stripLeadingHeadings($body);
 
         $date = gmdate('Y-m-d');
         $created = isset($fm['created']) && is_string($fm['created']) ? $fm['created'] : $date;

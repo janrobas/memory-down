@@ -1,77 +1,48 @@
 # MemoryDown
 
-A tiny personal AI memory server written in plain PHP. It gives ChatGPT and
-other MCP clients persistent memory, stored as **Markdown files**, over MCP
-with OAuth 2.1.
+A tiny personal AI memory server in plain PHP. It gives ChatGPT and other MCP
+clients persistent memory, stored as **Markdown files**, over MCP with OAuth 2.1.
+Designed for cheap PHP shared hosting: no VPS, no Docker, no Node, no database
+requirement, no long-running processes. FTP-deployable.
 
 > **Disclaimer:** This project was vibe-coded with AI assistance. It works for
-> its author's single-user use case, but review the code before relying on it
-> for anything important.
+> its author's single-user use case, but review the code before relying on it for
+> anything important.
 
 ```
-ChatGPT / OpenCode / other MCP clients
-                ↓
-           MCP over HTTPS
-                ↓
-              OAuth 2.1
-                ↓
-            MemoryDown
-                ↓
-          Markdown files
+ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → MemoryDown → Markdown files
 ```
-
-Designed for cheap PHP shared hosting: no VPS, no Docker, no Node, no Python,
-no Redis, no MySQL/PostgreSQL, no database, no long-running processes.
-Deployable via FTP.
-
----
 
 ## Features
 
-- **Markdown is the source of truth.** Every memory is a `.md` file with a
-  small frontmatter block, portable to Obsidian / VS Code / Codex.
-- **MCP over Streamable HTTP**, serving *both* protocol eras from one endpoint:
-  the `initialize` handshake (through `2025-11-25`) and the stateless
-  `2026-07-28` revision.
-- **OAuth 2.1** authorization code flow with PKCE (S256), refresh-token
-  rotation, RFC 9207 issuer identification, dynamic client registration (DCR),
-  RFC 9728 protected-resource metadata and RFC 8414 authorization-server
-  metadata.
+- **Markdown is the source of truth.** Each memory is a `.md` file with simple
+  frontmatter, portable to Obsidian / VS Code / any editor.
+- **MCP over Streamable HTTP**, serving both the `initialize` handshake
+  (through `2025-11-25`) and the stateless `2026-07-28` revision.
+- **OAuth 2.1** authorization-code + PKCE (S256), refresh-token rotation,
+  RFC 9207 issuer identification, dynamic client registration (DCR), RFC 9728
+  protected-resource metadata and RFC 8414 authorization-server metadata.
 - **Six MCP tools:** `remember`, `recall`, `search_memory`, `update_memory`,
   `forget_memory`, `list_memory`.
+- **Admin UI** at `/ui`: a two-pane browser/editor (search on the left,
+  Markdown editor + live preview on the right) protected by a password. Themes,
+  autosave, drag-to-move between categories.
+- **Search:** a disposable SQLite FTS5 index (BM25), rebuilt from the Markdown
+  on demand, with automatic fallback to a direct file scan.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
-- **Filesystem-safe**: strict path whitelisting prevents traversal.
+- **Filesystem-safe:** strict path whitelisting prevents traversal.
 
 ## Requirements
 
-- PHP 8.2+ (8.3+ recommended)
-- PHP extensions: `fileinfo`, `mbstring`, `openssl` (plus `curl` recommended)
-- Composer (locally, to install dependencies before uploading)
+- **PHP 8.2+**. Note the bundled `vendor/` needs **8.4.1+**; for an older host,
+  rebuild dependencies pinned to its version (see Install).
+- Extensions: `fileinfo`, `mbstring`, `openssl` (`curl` recommended).
+  Optional but recommended: `pdo_sqlite` (with FTS5) for the fast search index.
+- Composer, used locally before uploading.
 
-## Project structure
+## Install
 
-```
-public_html/
-    index.php        front controller
-    .htaccess        routes everything to index.php
-src/
-    Http/App.php     routing + diagnostics
-    Auth/            OAuth authorization server, token store, DCR, bearer middleware
-    Memory/          Markdown storage, search, path validation
-    Mcp/             MCP server (official mcp/sdk) + tool definitions
-    Support/         logger, atomic JSON store
-config.php           environment-driven configuration
-.env.example         configuration template (copy to .env)
-data/
-    memory/          THE memory store (Markdown, portable)
-    auth/            OAuth codes/tokens/registered clients (generated)
-    sessions/        MCP sessions (generated)
-    logs/            request logs (generated)
-tests/run-tests.php  protocol-chain integration test
-composer.json
-```
-
-## Install & run locally
+### Run locally
 
 ```bash
 composer install
@@ -80,189 +51,156 @@ php -S 127.0.0.1:8080 -t public_html public_html/index.php
 
 Open http://127.0.0.1:8080/health.
 
+### Deploy (shared hosting, FTP)
+
+1. `composer install --no-dev --optimize-autoloader` locally.
+2. Upload the project via FTP (including `vendor/`).
+3. Point the domain/subdomain **document root at `public_html/`**.
+4. Make `data/` writable by PHP (`data/memory`, `data/auth`, `data/sessions`,
+   `data/logs`, `data/index` are created/used there).
+5. Copy `.env.example` to `.env`, fill it in, and upload it (see Configuration).
+6. Open `https://your-domain/health` and confirm `{"status":"ok",...}`.
+7. Set the admin password and open `/ui` (see Admin UI).
+8. Connect ChatGPT (see below).
+
+If you cannot change the document root, the root `.htaccess` denies everything
+except `public_html/`; point the domain at the project root instead.
+
+> **Composer + PHP version.** Run Composer with a PHP that matches the target
+> host. On a machine with an older default `php`, call a newer binary explicitly
+> (e.g. `php8.4 /path/to/composer.phar install ...`). To build for a host on
+> 8.3: `composer config platform.php 8.3.0 && composer update --no-dev`.
+
+### Upgrading an existing install
+
+Back up `data/` and `.env`, then upload the new files. **Never overwrite
+`data/` or `.env`** — they hold your memories, OAuth tokens and secrets (deleting
+`data/auth/` forces every MCP client to re-authenticate). Run `composer install
+--no-dev --optimize-autoloader` if dependencies changed. To roll back, restore
+the previous code files; `data/` and `.env` are untouched.
+
 ## Configuration
 
-Configuration is read in this order of precedence: **real environment
-variables → `.env` file → built-in defaults**. For a typical FTP deployment,
-copy `.env.example` to `.env`, fill it in, and upload it with the rest of the
-project (it is git-ignored). Values set in the hosting panel or php.ini take
-precedence over `.env`. No `.env` parser dependency is required — it is a
-built-in, dependency-free loader.
+Read in order: **real environment → `.env` file → built-in defaults**. Values set
+in the hosting panel or php.ini win over `.env`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `APP_BASE_URL` | `http://127.0.0.1:8080` | Public HTTPS base URL, no trailing slash |
 | `APP_ENV` | `development` | `production` / `development` |
-| `DATA_PATH` | `./data` | Runtime data (auth, sessions) |
+| `DATA_PATH` | `./data` | Runtime data (auth, sessions, index) |
 | `MEMORY_PATH` | `./data/memory` | Where Markdown memory lives |
 | `LOG_PATH` | `./data/logs` | Request log directory |
-| `OAUTH_USERNAME` | *(empty)* | If set, the consent page requires this username. |
-| `OAUTH_CONSENT_PASSWORD` | *(empty)* | Consent-page password: a plaintext value or a bcrypt hash (recommended; `password_hash()`). |
-| `OAUTH_CIMD_ALLOWED_ORIGINS` | `chatgpt.com,localhost,127.0.0.1,::1` | Origins accepted as a CIMD fallback (not advertised) |
+| `OAUTH_USERNAME` | *(empty)* | If set, the consent page requires this username |
+| `OAUTH_CONSENT_PASSWORD` | *(empty)* | Consent-page password (plaintext or bcrypt hash; hash preferred) |
+| `OAUTH_CIMD_ALLOWED_ORIGINS` | `chatgpt.com,localhost,127.0.0.1,::1` | Origins accepted as a CIMD fallback |
 | `OAUTH_ACCESS_TOKEN_TTL` | `3600` | Access token lifetime (seconds) |
 | `OAUTH_REFRESH_TOKEN_TTL` | `7776000` | Refresh token lifetime (seconds) |
 | `OAUTH_CODE_TTL` | `600` | Authorization code lifetime (seconds) |
-
-Example:
+| `UI_ENABLED` | `true` | Enable the admin UI at `/ui` |
+| `ADMIN_PASSWORD_HASH` | *(empty)* | Admin password as a bcrypt hash; if empty, set once via `/ui/setup` |
+| `ADMIN_SETUP_TOKEN` | *(empty)* | Optional extra secret for the first-run `/ui/setup` form |
+| `INDEX_ENABLED` | `true` | Build the SQLite FTS5 search index |
+| `INDEX_PATH` | `./data/index/memory.sqlite` | Location of the disposable search index |
 
 ```
 APP_BASE_URL=https://memory.example.com
 APP_ENV=production
-MEMORY_PATH=/absolute/path/to/data/memory
 OAUTH_CONSENT_PASSWORD=a-long-random-password
 ```
 
-## Deployment (shared hosting, FTP)
+## Admin UI (`/ui`)
 
-1. Run `composer install --no-dev` locally.
-2. Upload everything (including `vendor/`) via FTP.
-3. Point the domain/subdomain **document root at `public_html/`**.
-4. Make `data/` (and `data/memory`, `data/auth`, `data/sessions`, `data/logs`)
-   writable by PHP.
-5. Copy `.env.example` to `.env`, fill it in, and upload it — or set the same
-   values in the hosting panel / php.ini.
-6. Verify `https://your-domain/health` returns `{"status":"ok",...}`.
-7. Test OAuth discovery (below).
-8. Connect ChatGPT (below).
+A single-user, Obsidian-style web UI for browsing, searching and editing memories,
+separate from the MCP/OAuth layer.
 
-If you cannot change the document root, use the safety-net `.htaccess` at the
-project root that denies everything except `public_html/`, and point the domain at
-the project root instead.
+- **Left pane:** live search above memories grouped by category.
+- **Right pane:** title, category, tags, Markdown editor with a **Preview** tab
+  (rendered server-side by `league/commonmark`, raw HTML escaped). **Autosave**
+  (on switching memories, on blur, and after ~20s idle); `Ctrl/Cmd+S` forces a
+  save. Drag a memory onto a category to move it. Themes (white/dark/retro/
+  green/blue) are remembered in `localStorage`.
+- **Delete** appears next to the title for existing memories.
 
-## OAuth setup
+The UI will not open until an admin password exists:
 
-MemoryDown is its own OAuth 2.1 authorization server (single user). Endpoints:
+```bash
+php -r "echo password_hash('your-password', PASSWORD_DEFAULT);"
+# put the result in ADMIN_PASSWORD_HASH in .env
+```
+
+Or open `/ui` on a fresh install and use the one-time `/ui/setup` page
+(hash stored in `data/auth/ui.json`). For a public deployment, set
+`ADMIN_SETUP_TOKEN` first so a stranger cannot claim the instance, then remove it.
+
+Sessions live in `data/sessions/`; the cookie is `HttpOnly` + `SameSite=Lax`
+(`Secure` in production). All state-changing requests require a CSRF token.
+
+## Search index
+
+Search uses a **disposable SQLite FTS5 index** (`INDEX_PATH`). Markdown stays the
+source of truth; the index is a cache. It rebuilds automatically when the corpus
+changes, can be rebuilt via `POST /ui/reindex`, and falls back to a direct
+`.md` scan when `pdo_sqlite`/FTS5 is unavailable. Deleting it loses nothing.
+
+## OAuth & connecting ChatGPT
+
+MemoryDown is its own single-user OAuth 2.1 authorization server.
 
 | Endpoint | Purpose |
 | --- | --- |
 | `/.well-known/oauth-protected-resource` and `.../mcp` | RFC 9728 resource metadata |
-| `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration` | RFC 8414 / OIDC discovery |
+| `/.well-known/oauth-authorization-server` / `/.well-known/openid-configuration` | RFC 8414 / OIDC discovery |
 | `/oauth/authorize` | Consent page |
 | `/oauth/token` | Token endpoint |
 | `/oauth/register` | Dynamic client registration (RFC 7591) |
 
-Client identification uses **Dynamic Client Registration (DCR, RFC 7591)** —
-the same approach as a typical single-user MCP server. Every client (ChatGPT,
-MCP Inspector, Claude, OpenCode, …) registers itself at `/oauth/register` and
-then runs the authorization-code + PKCE flow. No outbound network calls are
-needed at runtime.
+Clients register via **DCR** (like a typical single-user MCP server) and run the
+authorization-code + PKCE flow. CIMD is not advertised but is accepted as a
+fallback for allow-listed origins. Public clients only (`none` + PKCE).
 
-CIMD (Client ID Metadata Documents) is **not advertised** in discovery, so
-clients default to DCR. A URL-formatted `client_id` is still accepted as a
-fallback for allow-listed origins (`chatgpt.com` and loopback by default).
+To connect ChatGPT: enable **developer mode**, create a new connector, enter your
+server URL (e.g. `https://memory.example.com/mcp`), choose **OAuth**, and approve
+the consent page. The server answers MCP at both `/` and `/mcp`, so it works
+whether ChatGPT probes the base URL or the path.
 
-V1 supports **public clients only** (`token_endpoint_auth_method: "none"` with
-PKCE). Signed `private_key_jwt` client assertions are not yet implemented.
-
-## Connect ChatGPT
-
-1. In ChatGPT, enable **developer mode** (Settings → Security and login).
-2. Go to **ChatGPT → Connectors** (or Plugins) and create a new connection.
-3. Enter your server URL, e.g. `https://memory.example.com/mcp`.
-4. Choose **OAuth** authentication.
-5. ChatGPT will discover your metadata, open the consent page, and after you
-   approve it will exchange a code for tokens and start calling tools.
-
-Because MemoryDown serves RFC 9728 metadata at both the root and `/mcp`, and
-answers MCP at both `/` and `/mcp`, the connection works whether ChatGPT probes
-the base URL or the `/mcp` path.
-
-## Test manually
-
-Health and discovery (no auth):
+## Testing & diagnostics
 
 ```bash
 curl -s https://memory.example.com/health
-curl -s https://memory.example.com/.well-known/oauth-protected-resource
-curl -s https://memory.example.com/.well-known/oauth-authorization-server
+php tests/run-tests.php   # full chain: health → discovery → 401 → DCR → token → MCP → tools → traversal
 ```
 
-Unauthenticated MCP request should return `401` with a challenge:
-
-```bash
-curl -si https://memory.example.com/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}'
-# -> HTTP/1.1 401 Unauthorized
-#    WWW-Authenticate: Bearer resource_metadata="https://.../.well-known/oauth-protected-resource/mcp", scope="memory:all"
-```
-
-Full protocol-chain test (spawns an isolated server and walks health →
-discovery → 401 → DCR → consent → token → refresh → MCP both eras → tool calls
-→ traversal attacks):
-
-```bash
-php tests/run-tests.php
-```
-
-To test with the official MCP Inspector (needs Node), point it at your server
-URL with OAuth enabled; it will DCR-register and drive the same flow.
-
-## Testing the memory tools
-
-After connecting, ChatGPT (or the Inspector) can call the tools. `remember`
-writes a file like:
-
-```markdown
----
-type: preferences
-tags:
-  - notes
-  - markdown
-created: 2026-08-28
-updated: 2026-08-28
-source: chatgpt
-id: notes-system-a1b2c3
----
-
-# Notes system
-
-User prefers Markdown-based notes.
-```
+`/health` reports `checks.search_index.engine` as `sqlite-fts5` (indexed) or
+`direct` (fallback).
 
 ## Security notes
 
-- Memory paths are strictly whitelisted (categories and ids by regex, plus a
-  canonical-path containment check) — `../`, encoded traversal, absolute paths
-  and deletion outside the memory root are rejected.
-- Access tokens are audience-bound to the `resource` that was requested during
-  OAuth; only this server's two canonical resources are accepted.
-- Tokens and authorization codes are stored only as SHA-256 hashes.
-- CIMD (used only as a fallback for URL client_ids) is HTTPS-only,
-  origin-allowlisted and SSRF-guarded.
-- Secrets are never logged: the logger only records messages and safe scalars;
-  never passwords, tokens, codes or client secrets. Error messages are scrubbed
-  of the consent password before being logged.
-- All responses carry security headers (`X-Content-Type-Options`,
-  `X-Frame-Options`, `Referrer-Policy`, a restrictive `Content-Security-Policy`).
-- The MCP endpoint deliberately does **not** use Origin/Host allow-listing
-  (DNS-rebinding protection): ChatGPT's connector may send an `Origin` header,
-  and strict allow-listing would reject it with `403`. The endpoint is already
-  gated by OAuth bearer tokens and served behind a web server that validates
-  `Host`.
-- Set `OAUTH_CONSENT_PASSWORD` (ideally a bcrypt hash) so the consent page is
-  not click-through-only.
+- Memory paths are whitelisted (categories/ids by regex plus canonical-path
+  containment); traversal and deletion outside the memory root are rejected.
+- Access tokens are audience-bound to the requested `resource`; tokens and codes
+  are stored only as SHA-256 hashes.
+- Secrets are never logged; error messages are scrubbed of the consent password.
+- All responses carry security headers; the admin pages use a `script-src 'self'`
+  CSP, every other route keeps `default-src 'none'`.
+- Set `OAUTH_CONSENT_PASSWORD` (ideally a hash) so the consent page is not
+  click-through-only.
 
-## Limitations / uncertainties (V1)
+## Limitations
 
-- Public OAuth clients only (`none` + PKCE); `private_key_jwt` is not
-  implemented, so ChatGPT will use the public-client flow.
-- No revocation endpoint; refresh tokens are rotated on use and expire.
-- Consent uses a single username + password (or just a password, optionally a
-  bcrypt hash) rather than a full login with sessions and rate limiting. This
-  is a deliberate simplification for a single-user personal server.
-- CIMD is not advertised; it is only a fallback for allow-listed origins. If a
-  client presents a `chatgpt.com` client_id, its document is fetched at runtime
-  (needs outbound HTTPS from the host).
-- The `mcp/sdk` is official but pre-1.0 (experimental). Pin the version in
-  `composer.lock`.
-- mTLS client-certificate verification of ChatGPT is not implemented (not
-  required to connect; shared hosting usually cannot do it).
-- Full-text search is simple (substring/token ranking), no embeddings — by
-  design for V1.
+- Single-user only (one admin password, one OAuth consent). Run one instance per
+  person to host several people.
+- Keyword/BM25 search — no embeddings or vector search.
+- Public OAuth clients only (`none` + PKCE); no revocation endpoint.
+- `mcp/sdk` is pre-1.0 (experimental); pin it in `composer.lock`.
 
-## AGENTS.md
+## Troubleshooting
 
-See `AGENTS.md` for the project's core principles and constraints (Markdown as
-source of truth, shared-hosting limits, no framework, memory semantics, etc.).
+- **`composer install` says PHP version mismatch** — you ran Composer with an
+  older PHP; use 8.2+, or pin `platform.php` to the host version.
+- **Search shows `engine: direct`** — `pdo_sqlite` is not enabled; the app still
+  works, searching files directly.
+- **`/ui` returns `internal_error`** — check `data/logs/app.log`; usually
+  `data/sessions/` or `data/index/` not writable, or `vendor/` not uploaded.
+
+See `AGENTS.md` for the project's core principles and constraints.

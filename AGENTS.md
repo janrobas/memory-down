@@ -607,6 +607,26 @@ Do NOT add these to V1:
 
 These can be considered later.
 
+### Amendment: admin UI and search index (in scope)
+
+Two items from the list above have since been explicitly taken into scope, under
+the constraints that follow. The rest of the list still stands.
+
+- **A single-user admin UI** (`/ui`) is in scope: browse, search and edit the
+  Markdown memory store. It must stay server-rendered PHP with optional light,
+  vendored JavaScript — **no frontend framework and no build step** — and remain
+  deployable via FTP on shared hosting. It is protected by a single admin
+  password (hash only; never plaintext) and PHP sessions.
+
+- **A full-text search index** is in scope, but **SQLite may only ever be a
+  disposable cache**, never canonical storage. Markdown files remain the source
+  of truth. The index must be rebuildable from the Markdown at any time, and the
+  application must fall back to direct file search when `pdo_sqlite` is absent.
+  Deleting the index must lose nothing.
+
+Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
+(one instance per person instead), teams, billing, background jobs/queues.
+
 The first goal is:
 
     ChatGPT

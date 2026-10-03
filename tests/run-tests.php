@@ -54,9 +54,10 @@ if (!$keepServer) {
     putenv('LOG_PATH=' . $tmp . '/logs');
     putenv('OAUTH_USERNAME=test-user');
     putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
+    putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
 
     $extArgs = ['-d', 'extension_dir=' . dirname(PHP_BINARY) . '/ext'];
-    foreach (['curl', 'fileinfo', 'mbstring', 'openssl'] as $ext) {
+    foreach (['curl', 'fileinfo', 'mbstring', 'openssl', 'pdo_sqlite', 'sqlite3'] as $ext) {
         $extArgs[] = '-d';
         $extArgs[] = 'extension=' . $ext;
     }
@@ -100,12 +101,22 @@ function section(string $title): void
  *
  * @return array{status: int, headers: array<string, string>, body: string}
  */
+/** @var array<string, string> session cookie jar shared by all requests */
+$GLOBALS['memorydown_cookies'] = [];
+
 function request(string $method, string $path, array $headers = [], ?string $body = null): array
 {
     global $base;
     $headerLines = [];
     foreach ($headers as $k => $v) {
         $headerLines[] = "{$k}: {$v}";
+    }
+    if ([] !== $GLOBALS['memorydown_cookies']) {
+        $pairs = [];
+        foreach ($GLOBALS['memorydown_cookies'] as $name => $value) {
+            $pairs[] = "{$name}={$value}";
+        }
+        $headerLines[] = 'Cookie: ' . implode('; ', $pairs);
     }
     $ctx = stream_context_create(['http' => [
         'method' => $method,
@@ -121,6 +132,12 @@ function request(string $method, string $path, array $headers = [], ?string $bod
     foreach ($http_response_header ?? [] as $line) {
         if (preg_match('#^HTTP/\S+\s+(\d+)#', $line, $m)) {
             $status = (int) $m[1];
+        } elseif (preg_match('/^set-cookie:\s*(.*)$/i', $line, $m)) {
+            $pair = trim(explode(';', $m[1])[0]);
+            if (str_contains($pair, '=')) {
+                [$name, $value] = explode('=', $pair, 2);
+                $GLOBALS['memorydown_cookies'][trim($name)] = trim($value);
+            }
         } elseif (preg_match('/^([^:]+):\s*(.*)$/', $line, $m)) {
             $parsedHeaders[strtolower($m[1])] = $m[2];
         }
@@ -452,6 +469,8 @@ check('remember -> Markdown file exists', is_file($mdFile), $mdFile);
 $mdRaw = is_file($mdFile) ? (string) file_get_contents($mdFile) : '';
 check('remember -> frontmatter written', str_starts_with($mdRaw, "---\n"));
 check('remember -> body written', str_contains($mdRaw, 'concise answers'));
+check('remember -> tags written to frontmatter', str_contains($mdRaw, 'answers') && str_contains($mdRaw, 'style'), $mdRaw);
+check('remember -> tags returned in result', ['answers', 'style'] === ($remembered['memory']['tags'] ?? []), json_encode($remembered['memory']['tags'] ?? null));
 
 $r = request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 4, 'method' => 'tools/call',
@@ -583,6 +602,193 @@ $r = request('POST', '/mcp', $session, json_encode([
     'params' => ['name' => 'forget_memory', 'arguments' => ['id' => 'nonexistent-000000']],
 ]));
 check('forget_memory: unknown id -> tool error', true === ((jsonBody($r['body']))['result']['isError'] ?? false));
+
+/* ------------------------------------------------------------------ *
+ *  9. Admin UI: password, session, CRUD, preview, search index
+ * ------------------------------------------------------------------ */
+
+section('Admin UI (session, CRUD, preview, index)');
+
+$r = request('GET', '/ui');
+check('GET /ui unauthenticated -> 302 to login', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'), (string) $r['status']);
+
+$r = request('GET', '/ui/login');
+check('GET /ui/login -> 200', 200 === $r['status']);
+preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $m);
+$adminCsrf = $m[1] ?? '';
+check('admin login page exposes csrf token', '' !== $adminCsrf);
+
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'password' => 'wrong-password']));
+check('admin login wrong password -> 401', 401 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['password' => 'secret123']));
+check('admin login missing csrf -> 400', 400 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'password' => 'secret123']));
+check('admin login -> 302 to /ui', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui'), (string) $r['status']);
+
+$r = request('GET', '/ui');
+check('GET /ui authenticated -> 200 shell', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
+check('admin CSP allows self-hosted scripts', str_contains($r['headers']['content-security-policy'] ?? '', "script-src 'self'"));
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
+$apiCsrf = $m[1] ?? '';
+check('admin shell exposes csrf token', '' !== $apiCsrf);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'preferences',
+    'title' => 'Editor preference',
+    'tags' => ['ui', 'markdown'],
+    'content' => 'The user prefers a **two-pane** editor with live preview.',
+]));
+$created = jsonBody($r['body']);
+$adminId = $created['memory']['id'] ?? '';
+check('admin API create -> 200 + id', 200 === $r['status'] && '' !== $adminId, $r['body']);
+$adminFile = $tmp . '/memory/preferences/' . $adminId . '.md';
+check('admin API create -> Markdown file written', is_file($adminFile), $adminFile);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json'], json_encode(['category' => 'facts', 'content' => 'no csrf']));
+check('admin API create without csrf -> 403', 403 === $r['status'], (string) $r['status']);
+
+$r = request('GET', '/ui/api/tree');
+check('admin API tree -> lists new memory', str_contains($r['body'], $adminId));
+
+$r = request('GET', '/ui/api/search?q=two-pane');
+check('admin API search -> finds new memory', str_contains($r['body'], $adminId), $r['body']);
+
+$r = request('GET', '/ui/api/memory?category=preferences&id=' . rawurlencode($adminId));
+check('admin API get -> returns body', str_contains($r['body'], 'two-pane'));
+check('admin API get -> returns tags', ['ui', 'markdown'] === (jsonBody($r['body'])['memory']['tags'] ?? []), $r['body']);
+
+// Update only the tags; they must persist (the editor saves tags on blur).
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $adminId,
+    'category' => 'preferences',
+    'title' => 'Editor preference',
+    'tags' => 'ui, markdown, editor',
+    'content' => 'The user prefers a **two-pane** editor with live preview.',
+]));
+$tagged = jsonBody($r['body']);
+check('admin API save tags -> updated', ['ui', 'markdown', 'editor'] === ($tagged['memory']['tags'] ?? []), $r['body']);
+
+$r = request('POST', '/ui/api/preview', ['Content-Type' => 'application/json'], json_encode([
+    'markdown' => "# Heading\n\n**bold** and <script>alert(1)</script>",
+]));
+$preview = jsonBody($r['body']);
+check('admin API preview -> renders Markdown', str_contains($preview['html'] ?? '', '<strong>bold</strong>'), $r['body']);
+check('admin API preview -> escapes raw HTML', !str_contains($preview['html'] ?? '', '<script>'));
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode(['category' => '../../evil', 'content' => 'x']));
+check('admin API create traversal category -> 400', 400 === $r['status'], (string) $r['status']);
+
+// Move a memory between categories (the drag-and-drop / "move to" flow).
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $adminId,
+    'category' => 'projects',
+    'title' => 'Editor preference',
+    'tags' => ['ui', 'markdown'],
+    'content' => 'The user prefers a **two-pane** editor with live preview.',
+]));
+$moved = jsonBody($r['body']);
+check('admin API move -> category updated', 'projects' === ($moved['memory']['category'] ?? ''), $r['body']);
+$movedFile = $tmp . '/memory/projects/' . $adminId . '.md';
+clearstatcache(true, $adminFile);
+check('admin API move -> file relocated on disk', is_file($movedFile) && !is_file($adminFile), $movedFile);
+check('admin API move -> old location gone', !is_file($adminFile));
+
+// Create a memory directly in a non-default category (new-in-category).
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'people',
+    'title' => 'A person',
+    'content' => 'Lives in a category chosen at creation time.',
+]));
+$inCat = jsonBody($r['body']);
+$inCatId = $inCat['memory']['id'] ?? '';
+check('admin API new-in-category -> created in people', 'people' === ($inCat['memory']['category'] ?? ''), $r['body']);
+check('admin API new-in-category -> file in people', '' !== $inCatId && is_file($tmp . '/memory/people/' . $inCatId . '.md'));
+
+// Clean up the extra entry.
+request('DELETE', '/ui/api/memory?category=people&id=' . rawurlencode($inCatId), ['X-CSRF-Token' => $apiCsrf]);
+
+// The admin UI must serve its static assets with sane MIME types, even when
+// the host does not rewrite them (PHP built-in server fallback).
+$r = request('GET', '/assets/app.css');
+check('assets: app.css served as text/css', 200 === $r['status'] && str_starts_with($r['headers']['content-type'] ?? '', 'text/css'), (string) $r['status']);
+$r = request('GET', '/assets/app.js');
+check('assets: app.js served as javascript', 200 === $r['status'] && str_contains($r['headers']['content-type'] ?? '', 'javascript'), (string) $r['status']);
+$r = request('GET', '/assets/../config.php');
+check('assets: path traversal blocked', 404 === $r['status'], (string) $r['status']);
+
+// Content that already starts with an H1 must not get a duplicated title
+// heading when written through the store.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'context',
+    'title' => 'Heading test',
+    'content' => "# Heading test\n\nBody under an existing H1.",
+]));
+$h1doc = jsonBody($r['body']);
+$h1id = $h1doc['memory']['id'] ?? '';
+$h1raw = '' !== $h1id ? (string) @file_get_contents($tmp . '/memory/context/' . $h1id . '.md') : '';
+check('H1: title heading written once', 1 === preg_match_all('/^#\s+Heading test$/m', $h1raw), $h1raw);
+
+// Round-trip: the body returned by the API must not contain the title H1, so
+// opening and re-saving never duplicates it (the live-server regression).
+$r = request('GET', '/ui/api/memory?category=context&id=' . rawurlencode($h1id));
+$loadedBody = jsonBody($r['body'])['memory']['body'] ?? '';
+check('H1: GET body excludes the title heading', !str_contains($loadedBody, '# Heading test'), $loadedBody);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $h1id,
+    'category' => 'context',
+    'title' => 'Heading test renamed',
+    'tags' => '',
+    'content' => $loadedBody, // as the UI would re-send it
+]));
+$round = jsonBody($r['body']);
+check('H1: round-trip rename -> ok', 200 === $r['status'], $r['body']);
+$roundRaw = (string) @file_get_contents($tmp . '/memory/context/' . $h1id . '.md');
+check('H1: rename leaves exactly one H1', 1 === preg_match_all('/^#\s+/m', $roundRaw), $roundRaw);
+check('H1: rename applied', str_contains($roundRaw, '# Heading test renamed'));
+
+// A pre-corrupted file (several leading H1s) heals to one H1 on save.
+$corrupt = $tmp . '/memory/context/' . $h1id . '.md';
+file_put_contents($corrupt, "---\ntype: context\nid: {$h1id}\n---\n\n# A\n\n# A\n\n# A\n\nBody.\n");
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $h1id, 'category' => 'context', 'title' => 'A', 'tags' => '', 'content' => 'Body.',
+]));
+$healed = (string) @file_get_contents($corrupt);
+check('H1: corrupted duplicates heal to one H1', 1 === preg_match_all('/^#\s+A$/m', $healed), $healed);
+
+if ('' !== $h1id) {
+    request('DELETE', '/ui/api/memory?category=context&id=' . rawurlencode($h1id), ['X-CSRF-Token' => $apiCsrf]);
+}
+
+$r = request('GET', '/health');
+$index = jsonBody($r['body'])['checks']['search_index'] ?? [];
+check('health -> reports search index engine', in_array($index['engine'] ?? '', ['sqlite-fts5', 'direct'], true), $r['body']);
+
+// Externally dropped file (e.g. via FTP) is picked up after a search triggers
+// an index refresh.
+$dropped = $tmp . '/memory/context/dropped-by-ftp.md';
+@mkdir(dirname($dropped), 0775, true);
+file_put_contents($dropped, "# Dropped by FTP\n\nA memory placed directly on disk.\n");
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('dropped ftp'));
+check('index: externally dropped .md is found', str_contains($r['body'], 'dropped-by-ftp'), $r['body']);
+@unlink($dropped);
+
+// Reindex endpoint (UI button) reports a status object.
+$r = request('POST', '/ui/reindex', ['X-CSRF-Token' => $apiCsrf]);
+$reindex = jsonBody($r['body']);
+check('reindex -> 200 with status', 200 === $r['status'] && isset($reindex['status']['engine']), $r['body']);
+
+$r = request('DELETE', '/ui/api/memory?category=projects&id=' . rawurlencode($adminId), ['X-CSRF-Token' => $apiCsrf]);
+check('admin API delete -> 200', 200 === $r['status'], (string) $r['status']);
+clearstatcache(true, $movedFile);
+check('admin API delete -> Markdown file removed', !is_file($movedFile));
+
+$r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
+check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui');
+check('GET /ui after logout -> 302 to login', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'));
 
 /* ------------------------------------------------------------------ *
  *  Summary

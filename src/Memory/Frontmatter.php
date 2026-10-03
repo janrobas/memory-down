@@ -24,7 +24,8 @@ final class Frontmatter
             if (!is_string($key) || !preg_match('/^[a-zA-Z0-9_-]+$/', $key)) {
                 continue;
             }
-            $lines[] = $key . ': ' . self::renderValue($value);
+            $rendered = self::renderValue($value);
+            $lines[] = str_starts_with($rendered, "\n") ? $key . ':' . $rendered : $key . ': ' . $rendered;
         }
         $lines[] = '---';
 
@@ -101,6 +102,12 @@ final class Frontmatter
             if (preg_match('/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/', $line, $m)) {
                 $key = $m[1];
                 $value = trim($m[2]);
+                if ('' === $value) {
+                    // A bare "key:" opens a list whose items follow on "- " lines.
+                    $data[$key] = [];
+                    $lastKey = $key;
+                    continue;
+                }
                 $data[$key] = self::parseScalar($value);
                 $lastKey = is_array($data[$key]) ? $key : null;
             }

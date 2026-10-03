@@ -72,6 +72,8 @@ final class App
 
         try {
             return match (true) {
+                str_starts_with($path, '/assets/') && 'GET' === $method => $this->asset($path),
+                str_starts_with($path, '/ui') => \MemoryDown\Web\WebApp::fromKernel()->handle($request),
                 '/health' === $path && 'GET' === $method => $this->json($this->health()),
                 '/health/mcp' === $path && 'GET' === $method => $this->json($this->healthMcp()),
                 '/health/oauth' === $path && 'GET' === $method => $this->json($this->healthOauth()),
@@ -104,6 +106,64 @@ final class App
         return str_contains(strtolower($request->getHeaderLine('Accept')), 'text/event-stream');
     }
 
+    /**
+     * Serve a static admin asset (CSS/JS) from public_html/assets.
+     *
+     * Apache serves these directly from .htaccess; this fallback covers the
+     * PHP built-in server and hosts where that rewrite is unavailable. Only a
+     * strict filename whitelist inside a single directory is ever served.
+     */
+    private function asset(string $path): ResponseInterface
+    {
+        $name = substr($path, strlen('/assets/'));
+
+        $types = [
+            'css' => 'text/css; charset=utf-8',
+            'js' => 'application/javascript; charset=utf-8',
+        ];
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+
+        if (!isset($types[$ext])
+            || 1 !== preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(css|js)$/', $name)
+            || str_contains($name, '..')
+        ) {
+            return $this->notFound();
+        }
+
+        $file = dirname(__DIR__, 2) . '/public_html/assets/' . $name;
+        if (!is_file($file)) {
+            return $this->notFound();
+        }
+
+        $contents = file_get_contents($file);
+        if (false === $contents) {
+            return $this->notFound();
+        }
+
+        $mtime = (int) @filemtime($file);
+        $etag = '"' . dechex($mtime) . '-' . dechex((int) @filesize($file)) . '"';
+
+        // Revalidate on every load so UI updates take effect immediately; a
+        // matching validator lets the client reuse its cached copy.
+        if ($request = $_SERVER['HTTP_IF_NONE_MATCH'] ?? null) {
+            if (trim((string) $request) === $etag) {
+                return (new Psr17Factory())->createResponse(304)
+                    ->withHeader('ETag', $etag)
+                    ->withHeader('Cache-Control', 'no-cache');
+            }
+        }
+
+        $response = (new Psr17Factory())->createResponse(200)
+            ->withHeader('Content-Type', $types[$ext])
+            ->withHeader('Cache-Control', 'no-cache')
+            ->withHeader('ETag', $etag)
+            ->withHeader('Last-Modified', gmdate('D, d M Y H:i:s', $mtime) . ' GMT')
+            ->withHeader('X-Content-Type-Options', 'nosniff');
+        $response->getBody()->write($contents);
+
+        return $response;
+    }
+
     /* ------------------------------------------------------------------ *
      *  Diagnostics
      * ------------------------------------------------------------------ */
@@ -129,6 +189,9 @@ final class App
                 'data_writable' => is_writable($dataPath),
                 'sessions_writable' => is_writable($dataPath . '/sessions'),
                 'log_writable' => is_writable($this->config->logPath),
+                'search_index' => Kernel::get()->search instanceof \MemoryDown\Memory\MemoryIndex
+                    ? Kernel::get()->search->status()
+                    : ['engine' => 'direct', 'available' => true],
             ],
         ];
     }
@@ -148,7 +211,7 @@ final class App
             ],
             'tools' => array_map(
                 static fn (array $t): string => $t['name'],
-                (new \MemoryDown\Mcp\MemoryTools(Kernel::get()->memory))->definitions(),
+                (new \MemoryDown\Mcp\MemoryTools(Kernel::get()->memory, Kernel::get()->search))->definitions(),
             ),
             'session_store' => 'file',
             'sessions_writable' => is_writable($this->config->dataPath . '/sessions'),
