@@ -41,6 +41,9 @@
   var newCats = document.getElementById('new-cats');
   var moveField = document.getElementById('move-field');
   var moveCategory = document.getElementById('move-category');
+  var backdrop = document.getElementById('backdrop');
+  var openMemoriesBtn = document.getElementById('open-memories');
+  var openMenuBtn = document.getElementById('open-menu');
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
@@ -177,6 +180,96 @@
         setStatus('Network error.', 'err');
       });
     });
+  }
+
+  /* --------------------------------------------------------------- drawers */
+
+  var MOBILE = '(max-width: 820px)';
+
+  function isMobile() { return window.matchMedia(MOBILE).matches; }
+
+  function drawerState() {
+    return shell.classList.contains('drawer-left') ? 'left'
+      : shell.classList.contains('drawer-right') ? 'right'
+      : null;
+  }
+
+  function openDrawer(side) {
+    shell.classList.remove('drawer-left', 'drawer-right');
+    shell.classList.add(side === 'left' ? 'drawer-left' : 'drawer-right');
+    backdrop.hidden = false;
+    openMemoriesBtn.setAttribute('aria-expanded', String(side === 'left'));
+    openMenuBtn.setAttribute('aria-expanded', String(side === 'right'));
+    document.body.classList.add('drawer-open');
+    if (side === 'left' && search) { search.focus(); }
+  }
+
+  function closeDrawer() {
+    if (!drawerState()) { return; }
+    shell.classList.remove('drawer-left', 'drawer-right');
+    backdrop.hidden = true;
+    openMemoriesBtn.setAttribute('aria-expanded', 'false');
+    openMenuBtn.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('drawer-open');
+  }
+
+  function toggleDrawer(side) {
+    if (drawerState() === side) { closeDrawer(); } else { openDrawer(side); }
+  }
+
+  function wireDrawers() {
+    if (!openMemoriesBtn || !openMenuBtn) { return; }
+
+    openMemoriesBtn.addEventListener('click', function () { toggleDrawer('left'); });
+    openMenuBtn.addEventListener('click', function () { toggleDrawer('right'); });
+    var closeMenu = document.getElementById('close-menu');
+    if (closeMenu) { closeMenu.addEventListener('click', closeDrawer); }
+    backdrop.addEventListener('click', closeDrawer);
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { closeDrawer(); }
+    });
+
+    // Opening the drawer must not stay open when the viewport grows to desktop.
+    var mq = window.matchMedia(MOBILE);
+    var onChange = function () { if (!mq.matches) { closeDrawer(); } };
+    if (mq.addEventListener) { mq.addEventListener('change', onChange); }
+    else if (mq.addListener) { mq.addListener(onChange); }
+
+    wireEdgeSwipe();
+  }
+
+  // Swipe from the left edge to open the memories drawer; swipe across the open
+  // drawer to close it (left) or open commands (right→ then left). Simple
+  // threshold-based gesture, no library.
+  function wireEdgeSwipe() {
+    var startX = 0, startY = 0, tracking = false, fromEdge = false;
+
+    var onStart = function (event) {
+      if (!isMobile() || !event.touches || event.touches.length !== 1) { return; }
+      var t = event.touches[0];
+      startX = t.clientX; startY = t.clientY; tracking = true;
+      // An edge-swipe begins within 24px of the left border.
+      fromEdge = startX <= 24;
+    };
+
+    var onEnd = function (event) {
+      if (!tracking) { return; }
+      tracking = false;
+      var t = (event.changedTouches && event.changedTouches[0]) || null;
+      if (!t) { return; }
+      var dx = t.clientX - startX;
+      var dy = t.clientY - startY;
+      if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.5) { return; } // horizontal only
+
+      var state = drawerState();
+      if (dx > 0 && !state && fromEdge) { openDrawer('left'); }
+      else if (dx < 0 && state === 'left') { closeDrawer(); }
+      else if (dx > 0 && state === 'right') { closeDrawer(); }
+    };
+
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchend', onEnd, { passive: true });
   }
 
   /* ------------------------------------------------------------ utilities */
@@ -581,7 +674,10 @@
   });
 
   newBtn.addEventListener('click', function () {
-    saveBeforeSwitch().then(function () { startNew('facts'); });
+    saveBeforeSwitch().then(function () {
+      startNew('facts');
+      if (isMobile()) { closeDrawer(); }
+    });
   });
 
   list.addEventListener('click', function (event) {
@@ -590,9 +686,11 @@
     event.preventDefault();
     var category = link.getAttribute('data-category');
     var id = link.getAttribute('data-id');
-    if (id === fId.value && category === fCategory.value) { return; }
+    if (id === fId.value && category === fCategory.value) { closeDrawer(); return; }
     saveBeforeSwitch().then(function (ok) {
-      if (ok) { loadMemory(category, id); }
+      if (!ok) { return; }
+      loadMemory(category, id);
+      if (isMobile()) { closeDrawer(); }
     });
   });
 
@@ -787,5 +885,6 @@
   themeSwitcher();
   wireLogout();
   wireReindex();
+  wireDrawers();
   applyCollapsed();
 })();

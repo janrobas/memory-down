@@ -64,6 +64,7 @@ if (!in_array($selCategory, $categories, true)) {
 
       <div class="editor-head">
         <div class="editor-topbar">
+          <button type="button" id="open-memories" class="icon-btn" aria-controls="sidebar" aria-expanded="false" title="Memories">☰</button>
           <span class="breadcrumb" id="breadcrumb"><?= '' !== $selId ? WebApp::h($selCategory) . '<span class="sep">/</span>' . WebApp::h($selId) : 'New memory' ?></span>
           <span class="spacer"></span>
 
@@ -71,20 +72,8 @@ if (!in_array($selCategory, $categories, true)) {
                 data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
                 data-indexed="<?= (int) ($engine['indexed'] ?? 0) ?>"
                 title="Search index"><?= WebApp::h(($engine['engine'] ?? 'direct') === 'sqlite-fts5' ? 'Indexed ' . (int) ($engine['indexed'] ?? 0) : 'Direct search') ?></span>
-          <button type="button" id="reindex" title="Rebuild the search index">⟳ Reindex</button>
 
-          <div class="theme-picker">
-            <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>
-            <div class="theme-menu" id="theme-menu" hidden role="menu">
-              <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
-              <button type="button" role="menuitem" data-theme-value="dark"><span class="swatch dark"></span>Dark</button>
-              <button type="button" role="menuitem" data-theme-value="retro"><span class="swatch retro"></span>Retro orange</button>
-              <button type="button" role="menuitem" data-theme-value="green"><span class="swatch green"></span>Green</button>
-              <button type="button" role="menuitem" data-theme-value="blue"><span class="swatch blue"></span>Blue</button>
-            </div>
-          </div>
-
-          <button type="button" id="logout" title="Sign out">Logout</button>
+          <button type="button" id="open-menu" class="icon-btn" aria-controls="command-drawer" aria-expanded="false" title="Menu">⋯</button>
         </div>
 
         <div class="title-row">
@@ -128,4 +117,28 @@ if (!in_array($selCategory, $categories, true)) {
       </div>
     </form>
   </main>
+
+  <aside class="command-drawer" id="command-drawer" aria-label="Menu">
+    <div class="command-head">
+      <strong>Menu</strong>
+      <button type="button" id="close-menu" class="icon-btn" title="Close">✕</button>
+    </div>
+
+    <button type="button" id="reindex" title="Rebuild the search index">⟳ Reindex</button>
+
+    <div class="theme-picker">
+      <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>
+      <div class="theme-menu" id="theme-menu" hidden role="menu">
+        <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
+        <button type="button" role="menuitem" data-theme-value="dark"><span class="swatch dark"></span>Dark</button>
+        <button type="button" role="menuitem" data-theme-value="retro"><span class="swatch retro"></span>Retro orange</button>
+        <button type="button" role="menuitem" data-theme-value="green"><span class="swatch green"></span>Green</button>
+        <button type="button" role="menuitem" data-theme-value="blue"><span class="swatch blue"></span>Blue</button>
+      </div>
+    </div>
+
+    <button type="button" id="logout" title="Sign out">Logout</button>
+  </aside>
+
+  <div class="backdrop" id="backdrop" hidden></div>
 </div>

@@ -629,6 +629,7 @@ check('admin login -> 302 to /ui', 302 === $r['status'] && str_contains($r['head
 
 $r = request('GET', '/ui');
 check('GET /ui authenticated -> 200 shell', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
+check('serial: mobile drawers present', str_contains($r['body'], 'id="open-memories"') && str_contains($r['body'], 'id="open-menu"') && str_contains($r['body'], 'id="command-drawer"') && str_contains($r['body'], 'id="backdrop"'), (string) $r['status']);
 check('admin CSP allows self-hosted scripts', str_contains($r['headers']['content-security-policy'] ?? '', "script-src 'self'"));
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
 $apiCsrf = $m[1] ?? '';
