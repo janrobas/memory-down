@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 128" width="430" height="128" role="img" aria-label="MemoryDown">
+  <desc>MemoryDown wordmark: stacked cards with a downward arrow.</desc>
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="#1f7a44"/>
+  <path d="M64 18 V42 M48 28 L64 44 L80 28" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="32" y="78" width="64" height="26" rx="8" fill="#ffffff" opacity=".5"/>
+  <rect x="32" y="62" width="64" height="26" rx="8" fill="#ffffff" opacity=".75"/>
+  <rect x="32" y="46" width="64" height="26" rx="8" fill="#ffffff"/>
+  <text x="152" y="82" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="46" font-weight="700" fill="#1f7a44">MemoryDown</text>
+</svg>

@@ -120,11 +120,14 @@ final class App
         $types = [
             'css' => 'text/css; charset=utf-8',
             'js' => 'application/javascript; charset=utf-8',
+            'svg' => 'image/svg+xml',
+            'png' => 'image/png',
+            'ico' => 'image/x-icon',
         ];
         $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
 
         if (!isset($types[$ext])
-            || 1 !== preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(css|js)$/', $name)
+            || 1 !== preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(css|js|svg|png|ico)$/', $name)
             || str_contains($name, '..')
         ) {
             return $this->notFound();
@@ -286,6 +289,7 @@ final class App
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
 <title>{$this->config->appName}</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;color:#1a1a1a}

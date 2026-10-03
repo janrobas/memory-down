@@ -1,3 +1,5 @@
+<img src="public_html/assets/logo.svg" alt="MemoryDown" width="96" height="96">
+
 # MemoryDown
 
 A tiny personal AI memory server in plain PHP. It gives ChatGPT and other MCP
@@ -6,8 +8,7 @@ Designed for cheap PHP shared hosting: no VPS, no Docker, no Node, no database
 requirement, no long-running processes. FTP-deployable.
 
 > **Disclaimer:** This project was vibe-coded with AI assistance. It works for
-> its author's single-user use case, but review the code before relying on it for
-> anything important.
+> its author's single-user use case.
 
 ```
 ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → MemoryDown → Markdown files

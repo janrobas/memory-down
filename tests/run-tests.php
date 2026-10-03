@@ -730,6 +730,9 @@ $r = request('GET', '/assets/app.css');
 check('assets: app.css served as text/css', 200 === $r['status'] && str_starts_with($r['headers']['content-type'] ?? '', 'text/css'), (string) $r['status']);
 $r = request('GET', '/assets/app.js');
 check('assets: app.js served as javascript', 200 === $r['status'] && str_contains($r['headers']['content-type'] ?? '', 'javascript'), (string) $r['status']);
+$r = request('GET', '/assets/favicon.svg');
+check('assets: favicon.svg served as image/svg+xml', 200 === $r['status'] && str_contains($r['headers']['content-type'] ?? '', 'image/svg+xml'), (string) $r['status']);
+check('assets: favicon.svg has content', 200 === $r['status'] && str_contains($r['body'], '<svg'));
 $r = request('GET', '/assets/../config.php');
 check('assets: path traversal blocked', 404 === $r['status'], (string) $r['status']);
 
