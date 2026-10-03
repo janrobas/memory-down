@@ -60,6 +60,7 @@ final class MemoryStore
         string $category,
         array $tags = [],
         string $id = '',
+        bool $archived = false,
     ): array {
         $category = self::normalizeCategory($category);
         $dir = $this->paths->categoryDir($category);
@@ -88,6 +89,9 @@ final class MemoryStore
             'source' => self::SOURCE,
             'id' => $id,
         ];
+        if ($archived) {
+            $frontmatter['archived'] = true;
+        }
         $body = self::bodyWithTitle($title, $content);
         $raw = Frontmatter::render($frontmatter) . "\n\n" . $body . "\n";
 
@@ -153,7 +157,7 @@ final class MemoryStore
     }
 
     /**
-     * @param array{content?: string, title?: string, tags?: string[], category?: string} $changes
+     * @param array{content?: string, title?: string, tags?: string[], category?: string, archived?: bool} $changes
      *
      * @return array<string, mixed>
      */
@@ -168,6 +172,9 @@ final class MemoryStore
         $nextTitle = (string) ($changes['title'] ?? $current['title'] ?? '');
         $nextTags = array_values(array_unique(array_filter(array_map('strval', $changes['tags'] ?? $current['tags'] ?? []))));
         $nextContent = trim((string) ($changes['content'] ?? $current['body'] ?? ''));
+        $nextArchived = array_key_exists('archived', $changes)
+            ? (bool) $changes['archived']
+            : (bool) ($current['archived'] ?? false);
 
         $dir = $this->paths->categoryDir($nextCategory);
         if (null === $dir) {
@@ -190,6 +197,9 @@ final class MemoryStore
             'source' => (string) ($current['source'] ?? self::SOURCE),
             'id' => $id,
         ];
+        if ($nextArchived) {
+            $frontmatter['archived'] = true;
+        }
         $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
         if ($nextCategory === $category) {
@@ -231,12 +241,14 @@ final class MemoryStore
     }
 
     /**
-     * List entries, newest first.
+     * List entries, active first then newest first. Optionally restrict to a
+     * single archived state and/or a tag (exact, case-insensitive).
      *
      * @return list<array<string, mixed>>
      */
-    public function list(?string $category = null, int $limit = 50): array
+    public function list(?string $category = null, int $limit = 50, ?bool $archived = null, ?string $tag = null): array
     {
+        $tag = null !== $tag ? strtolower(trim($tag)) : null;
         $docs = [];
         foreach ($this->collectFiles($category) as $file) {
             $relative = substr($file, strlen($this->paths->root()) + 1);
@@ -247,12 +259,22 @@ final class MemoryStore
             $cat = $relParts[0];
             $id = substr($relParts[1], 0, -3);
             $doc = $this->read($cat, $id);
-            if (null !== $doc) {
-                $docs[] = $doc;
+            if (null === $doc) {
+                continue;
             }
+            if (null !== $archived && (bool) $doc['archived'] !== $archived) {
+                continue;
+            }
+            if (null !== $tag && '' !== $tag && !in_array($tag, array_map('strtolower', $doc['tags']), true)) {
+                continue;
+            }
+            $docs[] = $doc;
         }
 
-        usort($docs, static fn (array $a, array $b): int => strcmp((string) ($b['updated'] ?? ''), (string) ($a['updated'] ?? '')));
+        usort($docs, static function (array $a, array $b): int {
+            return ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
+                ?: strcmp((string) ($b['updated'] ?? ''), (string) ($a['updated'] ?? ''));
+        });
 
         return array_slice($docs, 0, max(1, $limit));
     }
@@ -415,6 +437,7 @@ final class MemoryStore
             'created' => $created,
             'updated' => $updated,
             'source' => isset($fm['source']) && is_string($fm['source']) ? $fm['source'] : 'unknown',
+            'archived' => filter_var($fm['archived'] ?? false, FILTER_VALIDATE_BOOL),
             'body' => $body,
         ];
     }

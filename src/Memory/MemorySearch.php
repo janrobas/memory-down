@@ -25,11 +25,11 @@ final class MemorySearch implements SearchEngine
     /**
      * @return list<array<string, mixed>> ranked results, each with an added "score" and "snippet"
      */
-    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false): array
+    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null): array
     {
         $limit = min(max(1, $limit), 50);
-        $needles = $this->tokenize($query);
-        if ([] === $needles) {
+        $q = SearchQuery::parse($query)->withExplicit($tag, $archived);
+        if ($q->isEmpty()) {
             return [];
         }
 
@@ -39,21 +39,22 @@ final class MemorySearch implements SearchEngine
             if (null === $doc) {
                 continue;
             }
-
-            $score = 0;
-            $haystack = strtolower($doc['title'] . ' ' . $doc['body'] . ' ' . implode(' ', $doc['tags']) . ' ' . $doc['id']);
-            foreach ($needles as $needle) {
-                $count = substr_count($haystack, $needle);
-                if ($count > 0) {
-                    $score += min($count, 5);
-                }
+            if (null !== $q->archived && (bool) ($doc['archived'] ?? false) !== $q->archived) {
+                continue;
+            }
+            if ([] !== $q->tags && !$this->hasAllTags($doc, $q->tags)) {
+                continue;
             }
 
-            if ($score > 0) {
-                $title = strtolower($doc['title'] ?? '');
-                $tagText = strtolower(implode(' ', $doc['tags']));
-                $idText = strtolower($doc['id']);
-                foreach ($needles as $needle) {
+            $title = strtolower($doc['title'] ?? '');
+            $tagText = strtolower(implode(' ', $doc['tags']));
+            $idText = strtolower($doc['id']);
+            $haystack = $title . ' ' . strtolower((string) $doc['body']) . ' ' . $tagText . ' ' . $idText;
+
+            $score = 0;
+            foreach ($q->terms as $needle) {
+                if (substr_count($haystack, $needle) > 0) {
+                    $score += min(substr_count($haystack, $needle), 5);
                     if (str_contains($title, $needle)) {
                         $score += 3;
                     }
@@ -64,18 +65,24 @@ final class MemorySearch implements SearchEngine
                         $score += 1;
                     }
                 }
-
-                $result = $doc;
-                $result['score'] = $score;
-                $result['snippet'] = $this->snippet((string) $doc['body'], $query);
-                if (!$includeBody) {
-                    unset($result['body']);
-                }
-                $results[] = $result;
             }
+
+            // A tag-only query has no text terms: every tag-matching doc qualifies.
+            if ([] !== $q->terms && 0 === $score) {
+                continue;
+            }
+
+            $result = $doc;
+            $result['score'] = $score;
+            $result['snippet'] = $this->snippet((string) $doc['body'], $q->terms[0] ?? $query);
+            if (!$includeBody) {
+                unset($result['body']);
+            }
+            $results[] = $result;
         }
 
-        usort($results, static fn (array $a, array $b): int => ($b['score'] ?? 0) <=> ($a['score'] ?? 0));
+        usort($results, static fn (array $a, array $b): int => ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
+            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0)));
         $results = array_slice($results, 0, $limit);
 
         foreach ($results as $i => $result) {
@@ -86,19 +93,19 @@ final class MemorySearch implements SearchEngine
     }
 
     /**
-     * @return list<string> lowercase, deduplicated query tokens (length >= 2)
+     * @param array<string, mixed> $doc
+     * @param list<string>         $tags
      */
-    private function tokenize(string $query): array
+    private function hasAllTags(array $doc, array $tags): bool
     {
-        $tokens = [];
-        foreach (preg_split('/\s+/', strtolower(trim($query))) ?: [] as $token) {
-            $token = trim($token, "\"'.,;:!?()[]{}");
-            if (mb_strlen($token) >= 2) {
-                $tokens[] = $token;
+        $docTags = array_map('strtolower', array_map('strval', $doc['tags'] ?? []));
+        foreach ($tags as $tag) {
+            if (!in_array($tag, $docTags, true)) {
+                return false;
             }
         }
 
-        return array_values(array_unique($tokens));
+        return true;
     }
 
     private function snippet(string $body, string $query): string

@@ -27,9 +27,11 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   `forget_memory`, `list_memory`.
 - **Admin UI** at `/ui`: a two-pane browser/editor (search on the left,
   Markdown editor + live preview on the right) protected by a password. Themes,
-  autosave, drag-to-move between categories.
+  autosave, drag-to-move between categories. An **All / Active / Archived**
+  filter, a per-memory **Archived** checkbox, and `tag:foo` search.
 - **Search:** a disposable SQLite FTS5 index (BM25), rebuilt from the Markdown
-  on demand, with automatic fallback to a direct file scan.
+  on demand, with automatic fallback to a direct file scan. Archived memories
+  stay indexed and searchable but rank after active ones.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
 
@@ -115,12 +117,16 @@ OAUTH_CONSENT_PASSWORD=a-long-random-password
 A single-user, Obsidian-style web UI for browsing, searching and editing memories,
 separate from the MCP/OAuth layer.
 
-- **Left pane:** live search above memories grouped by category.
+- **Left pane:** live search above memories grouped by category, with an
+  **All / Active / Archived** filter. Search accepts `tag:foo` to require a tag
+  (e.g. `tag:project-x notes`). Archived memories stay searchable and are shown
+  with an `archived` badge, ranked after active ones.
 - **Right pane:** title, category, tags, Markdown editor with a **Preview** tab
-  (rendered server-side by `league/commonmark`, raw HTML escaped). **Autosave**
-  (on switching memories, on blur, and after ~20s idle); `Ctrl/Cmd+S` forces a
-  save. Drag a memory onto a category to move it. Themes (white/dark/retro/
-  green/blue) are remembered in `localStorage`.
+  (rendered server-side by `league/commonmark`, raw HTML escaped). The
+  **Archived** checkbox archives/restores an entry (kept as frontmatter, never
+  deleted). **Autosave** (on switching memories, on blur, and after ~20s idle);
+  `Ctrl/Cmd+S` forces a save. Drag a memory onto a category to move it. Themes
+  (white/dark/retro/green/blue) are remembered in `localStorage`.
 - **Delete** appears next to the title for existing memories.
 
 The UI will not open until an admin password exists:
@@ -143,6 +149,8 @@ Search uses a **disposable SQLite FTS5 index** (`INDEX_PATH`). Markdown stays th
 source of truth; the index is a cache. It rebuilds automatically when the corpus
 changes, can be rebuilt via `POST /ui/reindex`, and falls back to a direct
 `.md` scan when `pdo_sqlite`/FTS5 is unavailable. Deleting it loses nothing.
+Every `.md` file is indexed, including archived memories (archiving sets an
+`archived: true` frontmatter key; the file is never moved or hidden).
 
 ## OAuth & connecting ChatGPT
 

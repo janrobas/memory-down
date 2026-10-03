@@ -62,22 +62,28 @@ final class MemoryIndex implements SearchEngine
         ];
     }
 
-    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false): array
+    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null): array
     {
-        if (!$this->available) {
-            return $this->fallback->search($query, $category, $limit, $includeBody);
+        $q = SearchQuery::parse($query)->withExplicit($tag, $archived);
+        if ($q->isEmpty()) {
+            return [];
+        }
+
+        // No text terms (tag-only / filter-only): the direct engine scans and
+        // filters exactly, so there is nothing for FTS to match on.
+        if (!$this->available || [] === $q->terms) {
+            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
         }
 
         $limit = min(max(1, $limit), 50);
-        $tokens = $this->tokenize($query);
-        if ([] === $tokens) {
-            return [];
-        }
+        // Fetch a wider window: archived entries are demoted after reading, so
+        // they must not crowd active hits out of a tight LIMIT.
+        $candidates = min(max($limit * 4, 50), 200);
 
         try {
             $this->ensureFresh();
 
-            $match = $this->matchExpression($tokens);
+            $match = $this->matchExpression($q->terms);
             $sql = 'SELECT id, category, bm25(memories) AS rank, '
                 . "snippet(memories, 4, '', '\u{2026}', '\u{2026}', 24) AS snippet "
                 . 'FROM memories WHERE memories MATCH :match';
@@ -91,20 +97,26 @@ final class MemoryIndex implements SearchEngine
             if (null !== $category) {
                 $stmt->bindValue(':category', $category, \PDO::PARAM_STR);
             }
-            $stmt->bindValue(':limit', $limit, \PDO::PARAM_INT);
+            $stmt->bindValue(':limit', $candidates, \PDO::PARAM_INT);
             $stmt->execute();
 
             $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\Throwable $e) {
             $this->logger->warning('memory.index.query_failed', ['message' => $e->getMessage()]);
 
-            return $this->fallback->search($query, $category, $limit, $includeBody);
+            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
         }
 
         $results = [];
         foreach ($rows as $row) {
             $doc = $this->store->read((string) $row['category'], (string) $row['id']);
             if (null === $doc) {
+                continue;
+            }
+            if (null !== $q->archived && (bool) ($doc['archived'] ?? false) !== $q->archived) {
+                continue;
+            }
+            if ([] !== $q->tags && !$this->hasAllTags($doc, $q->tags)) {
                 continue;
             }
             $doc['score'] = round(-1 * (float) $row['rank'], 4);
@@ -115,11 +127,31 @@ final class MemoryIndex implements SearchEngine
             $results[] = $doc;
         }
 
+        usort($results, static fn (array $a, array $b): int => ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
+            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0)));
+        $results = array_slice($results, 0, $limit);
+
         foreach ($results as $i => $result) {
             $results[$i]['rank'] = $i + 1;
         }
 
         return $results;
+    }
+
+    /**
+     * @param array<string, mixed> $doc
+     * @param list<string>         $tags
+     */
+    private function hasAllTags(array $doc, array $tags): bool
+    {
+        $docTags = array_map('strtolower', array_map('strval', $doc['tags'] ?? []));
+        foreach ($tags as $tag) {
+            if (!in_array($tag, $docTags, true)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -264,21 +296,5 @@ final class MemoryIndex implements SearchEngine
         }
 
         return implode(' OR ', $clauses);
-    }
-
-    /**
-     * @return list<string> lowercase, deduplicated query tokens (length >= 2)
-     */
-    private function tokenize(string $query): array
-    {
-        $tokens = [];
-        foreach (preg_split('/\s+/', strtolower(trim($query))) ?: [] as $token) {
-            $token = trim($token, "\"'.,;:!?()[]{}");
-            if (mb_strlen($token) >= 2) {
-                $tokens[] = $token;
-            }
-        }
-
-        return array_values(array_unique($tokens));
     }
 }

@@ -18,6 +18,7 @@ $selCategory = $selected['category'] ?? 'facts';
 $selId = $selected['id'] ?? '';
 $selTitle = $selected['title'] ?? '';
 $selTags = $selected ? implode(', ', $selected['tags'] ?? []) : '';
+$selArchived = (bool) ($selected['archived'] ?? false);
 $selBody = $selected['body'] ?? '';
 if (!in_array($selCategory, $categories, true)) {
     $categories[] = $selCategory;
@@ -31,7 +32,12 @@ if (!in_array($selCategory, $categories, true)) {
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="brand">MemoryDown</div>
-      <input id="search" type="search" class="search" placeholder="Search memories…" autocomplete="off" aria-label="Search memories">
+      <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
+      <div class="filter" id="filter" role="group" aria-label="Show memories">
+        <button type="button" class="filter-btn active" data-filter="all">All</button>
+        <button type="button" class="filter-btn" data-filter="active">Active</button>
+        <button type="button" class="filter-btn" data-filter="archived">Archived</button>
+      </div>
       <button id="new-memory" type="button" class="primary block">+ New memory</button>
     </div>
     <nav id="list" class="list" aria-label="Memories">
@@ -102,6 +108,13 @@ if (!in_array($selCategory, $categories, true)) {
             <span class="field-label">Tags</span>
             <input id="f-tags" name="tags" placeholder="comma, separated" value="<?= WebApp::h($selTags) ?>">
           </label>
+          <div class="field check">
+            <span class="field-label">Archived</span>
+            <label class="check-label">
+              <input type="checkbox" id="f-archived" name="archived" value="1"<?= $selArchived ? ' checked' : '' ?>>
+              <span>Archived</span>
+            </label>
+          </div>
         </div>
       </div>
 

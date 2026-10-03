@@ -283,6 +283,10 @@ final class App
 
     private function landingPage(): ResponseInterface
     {
+        $uiLink = $this->config->uiEnabled
+            ? '<li><a href="/ui">Admin UI — browse &amp; edit memories</a></li>'
+            : '';
+
         $html = <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -302,6 +306,7 @@ a{color:#146c43}
 <p>Personal AI memory server (v{$this->config->appVersion}). Persistent memory is stored as Markdown files.</p>
 <p>This host serves the MCP endpoint at <code>/mcp</code> (and at the base URL) over Streamable HTTP with OAuth 2.1.</p>
 <ul>
+{$uiLink}
 <li><a href="/health">/health</a></li>
 <li><a href="/health/mcp">/health/mcp</a></li>
 <li><a href="/health/oauth">/health/oauth</a></li>

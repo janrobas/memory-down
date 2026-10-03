@@ -31,6 +31,7 @@
   var fTitle = document.getElementById('f-title');
   var fCategory = document.getElementById('f-category');
   var fTags = document.getElementById('f-tags');
+  var fArchived = document.getElementById('f-archived');
   var fContent = document.getElementById('f-content');
   var deleteBtn = document.getElementById('delete');
   var newBtn = document.getElementById('new-memory');
@@ -41,12 +42,28 @@
   var newCats = document.getElementById('new-cats');
   var moveField = document.getElementById('move-field');
   var moveCategory = document.getElementById('move-category');
+  var filterBar = document.getElementById('filter');
   var backdrop = document.getElementById('backdrop');
   var openMemoriesBtn = document.getElementById('open-memories');
   var openMenuBtn = document.getElementById('open-menu');
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
+
+  var FILTER_KEY = 'memorydown.filter';
+  var filterMode = loadFilter();
+
+  function loadFilter() {
+    var value = 'all';
+    try { value = localStorage.getItem(FILTER_KEY) || 'all'; } catch (e) { value = 'all'; }
+    return ['all', 'active', 'archived'].indexOf(value) >= 0 ? value : 'all';
+  }
+
+  function passesFilter(archived) {
+    if (filterMode === 'active') { return !archived; }
+    if (filterMode === 'archived') { return !!archived; }
+    return true;
+  }
 
   var endpoint = {
     tree: '/ui/api/tree',
@@ -293,7 +310,7 @@
   /* ------------------------------------------------------- editor state */
 
   // Snapshot of what's currently persisted, used to detect unsaved changes.
-  var saved = { id: '', title: '', category: '', tags: '', content: '' };
+  var saved = { id: '', title: '', category: '', tags: '', archived: false, content: '' };
   var saving = false;
   var queuedSave = null;
 
@@ -303,6 +320,7 @@
       title: fTitle.value,
       category: fCategory.value,
       tags: fTags.value,
+      archived: !!fArchived.checked,
       content: fContent.value
     };
   }
@@ -313,6 +331,7 @@
       || p.title !== saved.title
       || p.category !== saved.category
       || p.tags !== saved.tags
+      || p.archived !== saved.archived
       || p.content !== saved.content;
   }
 
@@ -322,6 +341,7 @@
       title: payload.title,
       category: payload.category,
       tags: payload.tags,
+      archived: !!payload.archived,
       content: payload.content
     };
   }
@@ -336,12 +356,18 @@
   function memLink(item) {
     var li = document.createElement('li');
     var a = document.createElement('a');
-    a.className = 'mem';
+    a.className = 'mem' + (item.archived ? ' archived' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
     a.setAttribute('data-category', item.category);
     a.setAttribute('data-id', item.id);
     a.setAttribute('draggable', 'true');
     a.textContent = item.title || item.id;
+    if (item.archived) {
+      var badge = document.createElement('span');
+      badge.className = 'badge-archived';
+      badge.textContent = 'archived';
+      a.appendChild(badge);
+    }
     li.appendChild(a);
     return li;
   }
@@ -363,21 +389,27 @@
     list.textContent = '';
     var total = 0;
     categories.forEach(function (group) {
-      total += group.memories.length;
+      var visible = group.memories.filter(function (mem) { return passesFilter(!!mem.archived); });
+      total += visible.length;
+      if (filterMode !== 'all' && visible.length === 0) { return; }
       var section = document.createElement('section');
       section.className = 'cat';
       section.setAttribute('data-category', group.name);
-      section.appendChild(sectionTitle(group.name, group.memories.length));
+      section.appendChild(sectionTitle(group.name, visible.length));
       var ul = document.createElement('ul');
-      group.memories.forEach(function (mem) {
-        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title }));
+      visible.forEach(function (mem) {
+        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived }));
       });
       section.appendChild(ul);
       list.appendChild(section);
     });
     var empty = document.getElementById('list-empty');
-    if (empty) { empty.hidden = total > 0; }
+    if (empty) {
+      empty.hidden = total > 0;
+      empty.textContent = filterMode === 'archived' ? 'No archived memories.' : 'No memories yet.';
+    }
     markActive(fId.value ? fCategory.value : '', fId.value);
+    applyCollapsed();
   }
 
   function renderResults(results) {
@@ -478,6 +510,7 @@
     fId.value = doc.id;
     fTitle.value = doc.title || '';
     fTags.value = (doc.tags || []).join(', ');
+    fArchived.checked = !!doc.archived;
     fContent.value = doc.body || '';
     syncCategoryUI(doc.category);
     deleteBtn.disabled = false;
@@ -493,6 +526,7 @@
       title: fTitle.value,
       category: doc.category,
       tags: fTags.value,
+      archived: fArchived.checked,
       content: fContent.value
     });
     setStatus('');
@@ -519,6 +553,7 @@
     fId.value = '';
     fTitle.value = '';
     fTags.value = '';
+    fArchived.checked = false;
     fContent.value = '';
     deleteBtn.disabled = true;
     deleteBtn.hidden = true;
@@ -529,7 +564,7 @@
     markActive('', '');
     history.replaceState(null, '', '/ui');
     resetTabs();
-    snapshot({ id: '', title: '', category: fCategory.value, tags: '', content: '' });
+    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, content: '' });
     setStatus('');
     fTitle.focus();
   }
@@ -633,6 +668,7 @@
           title: doc.title || '',
           category: toCategory,
           tags: (doc.tags || []).join(', '),
+          archived: !!doc.archived,
           content: doc.body || ''
         };
         return api(endpoint.memory, { method: 'POST', body: payload }).then(function (saved) {
@@ -797,12 +833,39 @@
   var doSearch = debounce(function () {
     var q = search.value.trim();
     if (q.length < 2) { refreshTree(); return; }
-    api(endpoint.search + '?q=' + encodeURIComponent(q)).then(function (res) {
+    var url = endpoint.search + '?q=' + encodeURIComponent(q) + '&archived=' + encodeURIComponent(filterMode);
+    api(url).then(function (res) {
       if (res.ok) { renderResults(res.data.results || []); }
     });
   }, 180);
 
   search.addEventListener('input', doSearch);
+
+  /* All / Active / Archived filter. */
+  function markActiveFilter() {
+    if (!filterBar) { return; }
+    Array.prototype.forEach.call(filterBar.querySelectorAll('.filter-btn'), function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-filter') === filterMode);
+    });
+  }
+
+  function wireFilter() {
+    markActiveFilter();
+    if (!filterBar) { return; }
+    filterBar.addEventListener('click', function (event) {
+      var btn = event.target.closest('.filter-btn');
+      if (!btn) { return; }
+      filterMode = btn.getAttribute('data-filter') || 'all';
+      try { localStorage.setItem(FILTER_KEY, filterMode); } catch (e) { /* ignore */ }
+      markActiveFilter();
+      if (search.value.trim().length >= 2) { doSearch(); } else { refreshTree(); }
+    });
+  }
+
+  /* Archive toggle: saved immediately (a discrete action, like a move). */
+  fArchived.addEventListener('change', function () {
+    if (isDirty()) { saveIdle.cancel(); save(); }
+  });
 
   /* Write / Preview tabs. */
   Array.prototype.forEach.call(tabs, function (tab) {
@@ -886,5 +949,9 @@
   wireLogout();
   wireReindex();
   wireDrawers();
+  wireFilter();
   applyCollapsed();
+  // Re-render from the API so the persisted All/Active/Archived filter applies
+  // to the server-rendered tree (which otherwise shows everything).
+  refreshTree().catch(function () { /* ignore */ });
 })();

@@ -66,10 +66,11 @@ final class MemoryTools
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
                     'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category).'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"].'],
+                    'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
                 'required' => ['content'],
             ],
-            'handler' => function (string $content, string $title = '', string $category = 'facts', array $tags = []): CallToolResult {
+            'handler' => function (string $content, string $title = '', string $category = 'facts', array $tags = [], bool $archived = false): CallToolResult {
                 $title = trim($title);
                 $content = trim($content);
                 if ('' === $content) {
@@ -82,11 +83,15 @@ final class MemoryTools
 
                 $duplicate = $this->store->findDuplicate($content, $title, $category);
                 if (null !== $duplicate) {
-                    $updated = $this->store->update($duplicate['category'], $duplicate['id'], [
+                    $changes = [
                         'content' => $content,
                         'title' => $title !== '' ? $title : $duplicate['title'],
                         'tags' => array_merge($duplicate['tags'], $tags),
-                    ]);
+                    ];
+                    if ($archived) {
+                        $changes['archived'] = true;
+                    }
+                    $updated = $this->store->update($duplicate['category'], $duplicate['id'], $changes);
 
                     return self::ok([
                         'action' => 'updated',
@@ -95,7 +100,7 @@ final class MemoryTools
                     ]);
                 }
 
-                $doc = $this->store->create($content, $title, $category, $tags);
+                $doc = $this->store->create($content, $title, $category, $tags, archived: $archived);
 
                 return self::ok([
                     'action' => 'created',
@@ -114,7 +119,8 @@ final class MemoryTools
                 . 'start of a conversation and whenever the discussion moves to a new topic, so you have the '
                 . 'user\'s relevant preferences, projects, decisions, facts and history in mind before '
                 . 'answering. You do not need the user to ask about their memory. Without a query the most '
-                . 'recently updated memories are returned; with a query, the most relevant ones.',
+                . 'recently updated memories are returned; with a query, the most relevant ones. Archived '
+                . 'memories are included but ranked after active ones; pass archived="active" to exclude them.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
@@ -122,21 +128,36 @@ final class MemoryTools
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories.'],
+                    'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories. May include "tag:foo" to require a tag.'],
                     'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, facts, people, context, notes).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
+                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
                 ],
             ],
-            'handler' => function (string $query = '', string $category = '', int $limit = self::DEFAULT_LIMIT): CallToolResult {
+            'handler' => function (string $query = '', string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
                 if (!PathValidator::isCategory($category) && '' !== $category) {
                     return self::fail('Invalid category.');
                 }
                 $limit = min(max(1, $limit), 50);
                 $query = trim($query);
+                $archivedFilter = self::archivedFilter($archived);
 
                 $docs = '' !== $query
-                    ? $this->search->search($query, '' !== $category ? $category : null, $limit, includeBody: true)
-                    : $this->store->list('' !== $category ? $category : null, $limit);
+                    ? $this->search->search(
+                        $query,
+                        '' !== $category ? $category : null,
+                        $limit,
+                        includeBody: true,
+                        tag: '' !== $tag ? $tag : null,
+                        archived: $archivedFilter,
+                    )
+                    : $this->store->list(
+                        '' !== $category ? $category : null,
+                        $limit,
+                        $archivedFilter,
+                        '' !== $tag ? $tag : null,
+                    );
 
                 if ([] === $docs) {
                     return self::ok(['memories' => [], 'message' => 'No memories found.']);
@@ -157,7 +178,9 @@ final class MemoryTools
                 . 'questions about the user\'s personal preferences, facts, history, previous decisions, '
                 . 'projects, people, or anything the user may have asked to remember. Check it before '
                 . 'answering anything personal or past-related, even if the user does not mention memory '
-                . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance.',
+                . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance. '
+                . 'Archived memories are included but ranked after active ones; pass archived="active" to '
+                . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
@@ -165,14 +188,16 @@ final class MemoryTools
             'inputSchema' => [
                 'type' => 'object',
                 'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember.'],
+                    'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
                     'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, facts, people, context, notes).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
                     'include_body' => ['type' => 'boolean', 'description' => 'Include the full body of matching memories (default false; results include a snippet).'],
+                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
                 ],
                 'required' => ['query'],
             ],
-            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, bool $includeBody = false): CallToolResult {
+            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, bool $includeBody = false, string $tag = '', string $archived = 'all'): CallToolResult {
                 $query = trim($query);
                 if ('' === $query) {
                     return self::fail('query must not be empty.');
@@ -182,7 +207,14 @@ final class MemoryTools
                 }
                 $limit = min(max(1, $limit), 50);
 
-                $results = $this->search->search($query, '' !== $category ? $category : null, $limit, $includeBody);
+                $results = $this->search->search(
+                    $query,
+                    '' !== $category ? $category : null,
+                    $limit,
+                    $includeBody,
+                    '' !== $tag ? $tag : null,
+                    self::archivedFilter($archived),
+                );
                 if ([] === $results) {
                     return self::ok(['results' => [], 'message' => 'No matches.']);
                 }
@@ -213,10 +245,11 @@ final class MemoryTools
                     'title' => ['type' => 'string', 'description' => 'New title.'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search).'],
                     'category' => ['type' => 'string', 'description' => 'New category; the file is moved there.'],
+                    'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
                 ],
                 'required' => ['id'],
             ],
-            'handler' => function (string $id, string $content = '', string $title = '', array $tags = [], string $category = ''): CallToolResult {
+            'handler' => function (string $id, string $content = '', string $title = '', array $tags = [], string $category = '', ?bool $archived = null): CallToolResult {
                 if (!PathValidator::isId($id)) {
                     return self::fail('Invalid memory id.');
                 }
@@ -236,8 +269,11 @@ final class MemoryTools
                     }
                     $changes['category'] = $category;
                 }
+                if (null !== $archived) {
+                    $changes['archived'] = $archived;
+                }
                 if ([] === $changes) {
-                    return self::fail('Nothing to update: provide at least one of content, title, tags or category.');
+                    return self::fail('Nothing to update: provide at least one of content, title, tags, category or archived.');
                 }
 
                 try {
@@ -300,7 +336,8 @@ final class MemoryTools
             'name' => 'list_memory',
             'description' => 'List memory entries (metadata only, no full bodies), newest first. '
                 . 'Useful for discovering what is stored and obtaining ids for update_memory or forget_memory. '
-                . 'With no category all categories are listed.',
+                . 'With no category all categories are listed. Archived memories are included but listed '
+                . 'after active ones; pass archived="active" to exclude them.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
@@ -310,15 +347,22 @@ final class MemoryTools
                 'properties' => [
                     'category' => ['type' => 'string', 'description' => 'Restrict to one category.'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum entries (default 10, max 200).'],
+                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
                 ],
             ],
-            'handler' => function (string $category = '', int $limit = self::DEFAULT_LIMIT): CallToolResult {
+            'handler' => function (string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
                 if (!PathValidator::isCategory($category) && '' !== $category) {
                     return self::fail('Invalid category.');
                 }
                 $limit = min(max(1, $limit), 200);
 
-                $docs = $this->store->list('' !== $category ? $category : null, $limit);
+                $docs = $this->store->list(
+                    '' !== $category ? $category : null,
+                    $limit,
+                    self::archivedFilter($archived),
+                    '' !== $tag ? $tag : null,
+                );
 
                 return self::ok([
                     'categories' => $this->store->categories(),
@@ -343,6 +387,19 @@ final class MemoryTools
         }
 
         return 'facts';
+    }
+
+    /**
+     * Map a tri-state "all|active|archived" selector to a nullable boolean
+     * filter (null = all). Unknown values mean "all".
+     */
+    private static function archivedFilter(string $value): ?bool
+    {
+        return match (strtolower(trim($value))) {
+            'archived' => true,
+            'active' => false,
+            default => null,
+        };
     }
 
     /**

@@ -34,6 +34,9 @@ final class Frontmatter
 
     private static function renderValue(mixed $value): string
     {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
         if (is_array($value)) {
             $items = [];
             foreach ($value as $item) {

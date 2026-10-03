@@ -248,8 +248,9 @@ final class WebApp
         $q = trim((string) ($query['q'] ?? ''));
         $category = (string) ($query['category'] ?? '');
         $limit = (int) ($query['limit'] ?? 30);
+        $tag = trim((string) ($query['tag'] ?? ''));
 
-        if ('' === $q) {
+        if ('' === $q && '' === $tag) {
             return $this->json(['results' => []]);
         }
 
@@ -258,6 +259,8 @@ final class WebApp
             PathValidator::isCategory($category) ? $category : null,
             min(max(1, $limit), 50),
             false,
+            '' !== $tag ? $tag : null,
+            self::archivedFilter((string) ($query['archived'] ?? 'all')),
         );
 
         $light = array_map(static fn (array $r): array => [
@@ -266,6 +269,7 @@ final class WebApp
             'title' => $r['title'],
             'updated' => $r['updated'] ?? '',
             'tags' => $r['tags'] ?? [],
+            'archived' => (bool) ($r['archived'] ?? false),
             'score' => $r['score'] ?? 0,
             'snippet' => $r['snippet'] ?? '',
         ], $results);
@@ -305,6 +309,7 @@ final class WebApp
         $title = trim((string) ($data['title'] ?? ''));
         $content = (string) ($data['content'] ?? '');
         $tags = $this->normalizeTags($data['tags'] ?? []);
+        $archived = filter_var($data['archived'] ?? false, FILTER_VALIDATE_BOOL);
 
         if (!PathValidator::isCategory($category)) {
             return $this->json(['error' => 'Invalid category.'], 400);
@@ -315,7 +320,7 @@ final class WebApp
 
         try {
             if ('' === $id) {
-                $doc = $this->store->create($content, $title, $category, $tags);
+                $doc = $this->store->create($content, $title, $category, $tags, archived: $archived);
             } else {
                 if (!PathValidator::isId($id)) {
                     return $this->json(['error' => 'Invalid id.'], 400);
@@ -325,6 +330,7 @@ final class WebApp
                     'content' => $content,
                     'tags' => $tags,
                     'category' => $category,
+                    'archived' => $archived,
                 ]);
             }
         } catch (\InvalidArgumentException $e) {
@@ -409,6 +415,7 @@ final class WebApp
                 'title' => $doc['title'],
                 'updated' => $doc['updated'] ?? '',
                 'tags' => $doc['tags'] ?? [],
+                'archived' => (bool) ($doc['archived'] ?? false),
             ];
         }
 
@@ -476,6 +483,19 @@ final class WebApp
         }
 
         return array_values(array_unique($tags));
+    }
+
+    /**
+     * Map a tri-state "all|active|archived" selector to a nullable boolean
+     * filter (null = all).
+     */
+    private static function archivedFilter(string $value): ?bool
+    {
+        return match (strtolower(trim($value))) {
+            'archived' => true,
+            'active' => false,
+            default => null,
+        };
     }
 
     private function categoryFor(string $id): string

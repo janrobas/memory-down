@@ -803,6 +803,120 @@ check('admin API delete -> 200', 200 === $r['status'], (string) $r['status']);
 clearstatcache(true, $movedFile);
 check('admin API delete -> Markdown file removed', !is_file($movedFile));
 
+/* ------------------------------------------------------------------ *
+ * 10. Archive & tag search
+ * ------------------------------------------------------------------ */
+
+section('Archive & tag search');
+
+$r = request('GET', '/');
+check('landing page links to admin UI', str_contains($r['body'], 'href="/ui"'), $r['body']);
+
+// Two memories sharing a keyword, one active and one archived.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts',
+    'title' => 'Active quokka note',
+    'content' => 'The quokka appears here as the active entry.',
+]));
+$activeDoc = jsonBody($r['body']);
+$activeId = $activeDoc['memory']['id'] ?? '';
+check('archive: active memory created', 200 === $r['status'] && '' !== $activeId, $r['body']);
+check('archive: active memory archived=false', false === ($activeDoc['memory']['archived'] ?? true), $r['body']);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts',
+    'title' => 'Archived quokka note',
+    'content' => 'The quokka appears here as the stored entry.',
+    'archived' => true,
+    'tags' => ['tagonly', 'quokka'],
+]));
+$archDoc = jsonBody($r['body']);
+$archId = $archDoc['memory']['id'] ?? '';
+check('archive: archived memory created', 200 === $r['status'] && '' !== $archId, $r['body']);
+check('archive: archived flag returned', true === ($archDoc['memory']['archived'] ?? false), $r['body']);
+
+$archFile = $tmp . '/memory/facts/' . $archId . '.md';
+$archRaw = is_file($archFile) ? (string) file_get_contents($archFile) : '';
+check('archive: frontmatter archived: true', str_contains($archRaw, 'archived: true'), $archRaw);
+
+// Default search returns both, with active ranked before archived.
+$r = request('GET', '/ui/api/search?q=quokka');
+$results = jsonBody($r['body'])['results'] ?? [];
+$ids = array_column($results, 'id');
+check('search: default includes archived', in_array($archId, $ids, true), $r['body']);
+check('search: active ranked before archived', ($ids[0] ?? '') === $activeId, json_encode($ids));
+$archPos = array_search($archId, $ids, true);
+check('search: archived flag in results', false !== $archPos && true === ($results[$archPos]['archived'] ?? false), $r['body']);
+
+// Filter modes.
+$r = request('GET', '/ui/api/search?q=quokka&archived=archived');
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: archived filter returns only archived', in_array($archId, $ids, true) && !in_array($activeId, $ids, true), $r['body']);
+$r = request('GET', '/ui/api/search?q=quokka&archived=active');
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: active filter returns only active', in_array($activeId, $ids, true) && !in_array($archId, $ids, true), $r['body']);
+
+// tag: query syntax (standalone, no free-text terms).
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:tagonly'));
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: tag: syntax finds tagged entry', in_array($archId, $ids, true), $r['body']);
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:does-not-exist'));
+check('search: tag: syntax no false positives', [] === (jsonBody($r['body'])['results'] ?? []), $r['body']);
+
+// Unarchive via admin API removes the frontmatter key.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $archId,
+    'category' => 'facts',
+    'title' => 'Archived quokka note',
+    'content' => 'The quokka appears here as the stored entry.',
+    'tags' => ['tagonly', 'quokka'],
+    'archived' => false,
+]));
+$unarch = jsonBody($r['body']);
+check('archive: unarchive via save', false === ($unarch['memory']['archived'] ?? true), $r['body']);
+$archRaw = (string) @file_get_contents($archFile);
+check('archive: unarchive removes frontmatter key', !str_contains($archRaw, 'archived:'), $archRaw);
+
+// MCP tools: archive on remember, filters on search/update.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 20, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => [
+        'content' => 'MCP archived entry about narwhal.', 'title' => 'MCP archived narwhal',
+        'category' => 'facts', 'tags' => ['narwhal'], 'archived' => true,
+    ]],
+]));
+$mcpArch = jsonBody($r['body']);
+$mcpArchId = toolResult($mcpArch)['memory']['id'] ?? '';
+check('mcp remember archived -> created', false === ($mcpArch['result']['isError'] ?? true) && true === (toolResult($mcpArch)['memory']['archived'] ?? false), $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 21, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'narwhal', 'archived' => 'archived']],
+]));
+$mcpSearch = toolResult(jsonBody($r['body']));
+check('mcp search archived filter -> found', '' !== $mcpArchId && ($mcpSearch['results'][0]['id'] ?? '') === $mcpArchId, $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 22, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => ['id' => $mcpArchId, 'archived' => false]],
+]));
+$mcpUnarch = toolResult(jsonBody($r['body']));
+check('mcp update_memory unarchive -> active', false === ($mcpUnarch['memory']['archived'] ?? true), $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 23, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'tag:narwhal']],
+]));
+check('mcp search tag: syntax -> found', '' !== $mcpArchId && ((toolResult(jsonBody($r['body']))['results'][0]['id'] ?? '') === $mcpArchId), $r['body']);
+
+// Clean up the archive-test entries.
+request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($activeId), ['X-CSRF-Token' => $apiCsrf]);
+request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($archId), ['X-CSRF-Token' => $apiCsrf]);
+request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 24, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $mcpArchId, 'category' => 'facts']],
+]));
+
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
 $r = request('GET', '/ui');

@@ -232,6 +232,30 @@ body.app { overflow: hidden; }
 
 .search { margin-bottom: .2rem; }
 
+/* All / Active / Archived filter */
+.filter {
+  display: flex;
+  gap: .2rem;
+  margin: .35rem 0 .1rem;
+  padding: .15rem;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.filter-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: .3rem .2rem;
+  font-size: .78rem;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--muted);
+}
+
+.filter-btn:hover { background: var(--panel); color: var(--text); }
+.filter-btn.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+
 .list { overflow-y: auto; padding: .5rem; flex: 1; min-height: 0; }
 
 .cat { margin-bottom: .75rem; border-radius: var(--radius); }
@@ -278,6 +302,22 @@ body.app { overflow: hidden; }
 
 .mem:hover { background: var(--bg); }
 .mem.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+
+.mem.archived { color: var(--muted); }
+
+.mem .badge-archived {
+  display: inline-block;
+  margin-left: .4rem;
+  padding: 0 .35rem;
+  font-size: .62rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  vertical-align: middle;
+}
 
 .mem.dragging { opacity: .4; }
 
@@ -363,7 +403,8 @@ body.dragging .cat.drop-hover .cat-name {
 
 .command-drawer {
   position: absolute;
-  top: .55rem;
+  top: .9rem;
+  height: 2.1rem;
   right: 1.1rem;
   display: flex;
   align-items: center;
@@ -424,6 +465,21 @@ body.dragging .cat.drop-hover .cat-name {
 }
 
 .editor-meta .field.grow { flex: 1; min-width: 160px; }
+
+.editor-meta .field.check { flex: 0 0 auto; }
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin: 0;
+  font-size: .85rem;
+  color: var(--text);
+  white-space: nowrap;
+  min-height: 2.1rem;
+}
+
+.check-label input[type="checkbox"] { width: auto; margin: 0; }
 
 .editor-meta .field-label,
 .new-cats .new-label {
@@ -626,6 +682,7 @@ body.dragging .cat.drop-hover .cat-name {
     bottom: 0;
     right: 0;
     left: auto;
+    height: auto;
     z-index: 60;
     width: min(86vw, 300px);
     flex-direction: column;
