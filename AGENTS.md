@@ -275,6 +275,7 @@ Example:
         facts/
         people/
         context/
+        notes/
 
 Example:
 

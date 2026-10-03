@@ -28,6 +28,7 @@ final class PathValidator
         'facts',
         'people',
         'context',
+        'notes',
     ];
 
     private string $root;

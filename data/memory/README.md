@@ -13,6 +13,7 @@ Layout:
       facts/         general durable facts
       people/        information about people
       context/       long-term situational context
+      notes/         catch-all for anything else
 
 Each entry is `{category}/{slug-id}.md` with simple frontmatter:
 

@@ -710,6 +710,20 @@ check('admin API new-in-category -> file in people', '' !== $inCatId && is_file(
 // Clean up the extra entry.
 request('DELETE', '/ui/api/memory?category=people&id=' . rawurlencode($inCatId), ['X-CSRF-Token' => $apiCsrf]);
 
+// The "notes" catch-all category is accepted and gets its own directory.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes',
+    'title' => 'Catch-all note',
+    'content' => 'Anything that does not fit another category.',
+]));
+$note = jsonBody($r['body']);
+$noteId = $note['memory']['id'] ?? '';
+check('admin API notes category -> created', 'notes' === ($note['memory']['category'] ?? ''), $r['body']);
+check('admin API notes category -> file in notes/', '' !== $noteId && is_file($tmp . '/memory/notes/' . $noteId . '.md'));
+if ('' !== $noteId) {
+    request('DELETE', '/ui/api/memory?category=notes&id=' . rawurlencode($noteId), ['X-CSRF-Token' => $apiCsrf]);
+}
+
 // The admin UI must serve its static assets with sane MIME types, even when
 // the host does not rewrite them (PHP built-in server fallback).
 $r = request('GET', '/assets/app.css');

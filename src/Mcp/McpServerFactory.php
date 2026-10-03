@@ -45,6 +45,7 @@ Categories:
 - facts: general durable facts
 - people: information about people
 - context: long-term situational context
+- notes: catch-all for anything that does not clearly fit the categories above
 
 Tags:
 - Optional but recommended: when calling remember or update_memory, add 1-3 short lowercase tags (e.g. "project-x", "meeting-notes") to make memories easier to group and search later.
