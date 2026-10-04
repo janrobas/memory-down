@@ -932,6 +932,40 @@ check('search: tag: syntax finds tagged entry', in_array($archId, $ids, true), $
 $r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:does-not-exist'));
 check('search: tag: syntax no false positives', [] === (jsonBody($r['body'])['results'] ?? []), $r['body']);
 
+// tag: is exact (no prefix) and scoped to tags, never body text.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Tag prefix probe', 'content' => 'unrelated body', 'tags' => ['tagonlyextra'],
+]));
+$extraTagId = jsonBody($r['body'])['memory']['id'] ?? '';
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Body mention probe', 'content' => 'This body mentions tagonly but carries no such tag.',
+]));
+$bodyMentionId = jsonBody($r['body'])['memory']['id'] ?? '';
+
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:tagonly'));
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: tag: finds the exact tag', in_array($archId, $ids, true), $r['body']);
+check('search: tag: exact, no prefix match', !in_array($extraTagId, $ids, true), $r['body']);
+check('search: tag: does not match body text', !in_array($bodyMentionId, $ids, true), $r['body']);
+
+// text AND tag: both must match the same entry.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Zebra mix', 'content' => 'zebra in the mix', 'tags' => ['mix'],
+]));
+$mixA = jsonBody($r['body'])['memory']['id'] ?? '';
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Mix only', 'content' => 'nothing here', 'tags' => ['mix'],
+]));
+$mixB = jsonBody($r['body'])['memory']['id'] ?? '';
+
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('zebra tag:mix'));
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: text AND tag requires both', in_array($mixA, $ids, true) && !in_array($mixB, $ids, true), json_encode($ids));
+
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:mix'));
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: tag: alone matches all with the tag', in_array($mixA, $ids, true) && in_array($mixB, $ids, true), json_encode($ids));
+
 // Unarchive via admin API removes the frontmatter key.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'id' => $archId,

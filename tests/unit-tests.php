@@ -17,6 +17,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MemoryDown\Memory\Frontmatter;
+use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\SearchQuery;
@@ -159,6 +160,53 @@ check('separate keys have separate buckets', $limiter->allow('ip2', 3, 60));
 
 $off = new RateLimiter($rlDir, false);
 check('disabled limiter always allows', $off->allow('ip1', 1, 60) && $off->allow('ip1', 1, 60));
+
+/* ------------------------------------------------------------------ *
+ *  MemoryIndex (SQLite FTS5; skipped when pdo_sqlite is unavailable)
+ * ------------------------------------------------------------------ */
+
+section('MemoryIndex');
+
+if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    echo "  SKIP  pdo_sqlite unavailable\n";
+} else {
+    $idxRoot = $root . '/index-store';
+    $idxStore = new MemoryStore($idxRoot, $root . '/index-auth');
+    $idxStore->create('Alpha body about narwhal.', 'Alpha', 'facts', ['alpha-tag']);
+    $idxStore->create('Beta body about narwhal too.', 'Beta', 'facts', ['beta-tag'], archived: true);
+
+    $dbPath = $root . '/index/memory.sqlite';
+    @mkdir(dirname($dbPath), 0775, true);
+
+    // Simulate an index built by an older version (no archived column, v1 meta).
+    $legacy = new PDO('sqlite:' . $dbPath);
+    $legacy->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $legacy->exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    $legacy->exec("CREATE VIRTUAL TABLE memories USING fts5(id UNINDEXED, category UNINDEXED, title, tags, body, tokenize='unicode61')");
+    $legacy->exec("INSERT INTO meta (key, value) VALUES ('signature', 'stale')");
+    $legacy = null;
+
+    $index = new MemoryIndex($idxStore, $dbPath);
+    check('migrates old schema and is available', $index->isAvailable());
+
+    $r = $index->search('narwhal');
+    check('search works after migration', 2 === count($r), json_encode(array_column($r, 'id')));
+
+    $r = $index->search('narwhal', archived: true, limit: 1);
+    check('archived filter pushed into SQL', 1 === count($r) && true === ($r[0]['archived'] ?? false), json_encode($r));
+
+    $r = $index->search('tag:alpha-tag');
+    check('tag-only via FTS matches', 1 === count($r) && 'Alpha' === ($r[0]['title'] ?? ''), json_encode($r));
+
+    $r = $index->search('tag:alpha-tagextra');
+    check('tag-only is exact (no prefix match)', [] === $r, json_encode($r));
+
+    $r = $index->search('narwhal tag:beta-tag');
+    check('text AND tag requires both on one entry', 1 === count($r) && 'Beta' === ($r[0]['title'] ?? ''), json_encode($r));
+
+    $r = $index->search('alpha tag:beta-tag');
+    check('text AND tag with no overlap is empty', [] === $r, json_encode($r));
+}
 
 /* ------------------------------------------------------------------ *
  *  Summary

@@ -15,13 +15,26 @@ use Psr\Log\NullLogger;
  * shared host without pdo_sqlite) the constructor marks the index unusable and
  * every search transparently falls back to {@see MemorySearch} (direct scan).
  *
- * The index is refreshed lazily: a cheap corpus signature (file count + newest
- * mtime) is compared against the value stored in the database, and the whole
- * index is rebuilt when it differs. This needs no background workers, which
- * suits ordinary PHP shared hosting.
+ * The index is refreshed lazily: a cheap per-file corpus signature (path +
+ * size + mtime hash) is compared against the value stored in the database, and
+ * the whole index is rebuilt when it differs. This needs no background
+ * workers, which suits ordinary PHP shared hosting.
  */
 final class MemoryIndex implements SearchEngine
 {
+    /**
+     * FTS layout version. Bump when the columns change: the index is
+     * disposable, so a version mismatch just drops and rebuilds it from the
+     * Markdown on the next search.
+     */
+    private const SCHEMA_VERSION = '2';
+
+    /**
+     * FTS5 column list. `archived` is kept last and UNINDEXED so the existing
+     * positional references (bm25, snippet column 4 = body) stay valid.
+     */
+    private const FTS_COLUMNS = 'id UNINDEXED, category UNINDEXED, title, tags, body, archived UNINDEXED, tokenize=\'unicode61\'';
+
     private ?\PDO $pdo = null;
     private bool $available = false;
     private MemorySearch $fallback;
@@ -69,26 +82,36 @@ final class MemoryIndex implements SearchEngine
             return [];
         }
 
-        // No text terms (tag-only / filter-only): the direct engine scans and
-        // filters exactly, so there is nothing for FTS to match on.
-        if (!$this->available || [] === $q->terms) {
+        // With the index unavailable, always scan the Markdown directly.
+        if (!$this->available) {
             return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
         }
 
         $limit = min(max(1, $limit), 200);
-        // Fetch a wider window: archived entries are demoted after reading, so
-        // they must not crowd active hits out of a tight LIMIT.
+        // Fetch a wider window: the exact tag check can discard prefix
+        // over-matches after the query, so they must not crowd out real hits.
         $candidates = min(max($limit * 4, 50), 200);
 
         try {
             $this->ensureFresh();
 
-            $match = $this->matchExpression($q->terms);
+            // Free-text terms match title/tags/body; tag: directives are scoped
+            // to the tags column. Either group alone is enough; both AND.
+            $match = $this->matchExpression($q->terms, $q->tags);
+            if ('' === $match) {
+                return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
+            }
+
             $sql = 'SELECT id, category, bm25(memories) AS rank, '
                 . "snippet(memories, 4, '', '\u{2026}', '\u{2026}', 24) AS snippet "
                 . 'FROM memories WHERE memories MATCH :match';
             if (null !== $category) {
                 $sql .= ' AND category = :category';
+            }
+            if (null !== $q->archived) {
+                // Pushed into SQL so LIMIT applies after filtering; the flag is
+                // stored as text '1'/'0' in the UNINDEXED column.
+                $sql .= ' AND archived = :archived';
             }
             $sql .= ' ORDER BY bm25(memories) LIMIT :limit';
 
@@ -96,6 +119,9 @@ final class MemoryIndex implements SearchEngine
             $stmt->bindValue(':match', $match, \PDO::PARAM_STR);
             if (null !== $category) {
                 $stmt->bindValue(':category', $category, \PDO::PARAM_STR);
+            }
+            if (null !== $q->archived) {
+                $stmt->bindValue(':archived', $q->archived ? '1' : '0', \PDO::PARAM_STR);
             }
             $stmt->bindValue(':limit', $candidates, \PDO::PARAM_INT);
             $stmt->execute();
@@ -168,7 +194,7 @@ final class MemoryIndex implements SearchEngine
             $this->pdo->exec('DELETE FROM memories');
 
             $insert = $this->pdo->prepare(
-                'INSERT INTO memories (id, category, title, tags, body) VALUES (:id, :category, :title, :tags, :body)'
+                'INSERT INTO memories (id, category, title, tags, body, archived) VALUES (:id, :category, :title, :tags, :body, :archived)'
             );
 
             foreach ($this->store->collectFiles() as $file) {
@@ -184,6 +210,7 @@ final class MemoryIndex implements SearchEngine
                     ':title' => (string) $doc['title'],
                     ':tags' => implode(' ', $doc['tags']),
                     ':body' => (string) $doc['body'],
+                    ':archived' => !empty($doc['archived']) ? '1' : '0',
                 ]);
             }
 
@@ -217,18 +244,33 @@ final class MemoryIndex implements SearchEngine
             $pdo = new \PDO('sqlite:' . $this->dbPath);
             $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
             $pdo->exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-            $pdo->exec(
-                'CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5('
-                . "id UNINDEXED, category UNINDEXED, title, tags, body, tokenize='unicode61'"
-                . ')'
-            );
             $this->pdo = $pdo;
+            $this->ensureSchema();
             $this->available = true;
         } catch (\Throwable $e) {
             $this->logger->warning('memory.index.unavailable', ['message' => $e->getMessage()]);
             $this->pdo = null;
             $this->available = false;
         }
+    }
+
+    /**
+     * Create the FTS table, or drop and recreate it when the layout version
+     * changed. The index is disposable, so a rebuild from the Markdown is safe
+     * and loses nothing.
+     */
+    private function ensureSchema(): void
+    {
+        if (self::SCHEMA_VERSION === $this->getMeta('schema_version')) {
+            return;
+        }
+
+        $this->pdo->exec('DROP TABLE IF EXISTS memories');
+        $this->pdo->exec('CREATE VIRTUAL TABLE memories USING fts5(' . self::FTS_COLUMNS . ')');
+        $this->setMeta('schema_version', self::SCHEMA_VERSION);
+        // The corpus is unchanged but the new table is empty: clear the stored
+        // signature so the next search triggers a full rebuild.
+        $this->setMeta('signature', '');
     }
 
     private function ensureFresh(): void
@@ -286,15 +328,41 @@ final class MemoryIndex implements SearchEngine
     }
 
     /**
-     * @param list<string> $tokens
+     * Build an FTS5 MATCH expression.
+     *
+     * Free-text terms are prefix-matched against every indexed column
+     * (title, tags, body). "tag:" directives are restricted to the tags
+     * column, tokenised so tags containing punctuation still match; the exact
+     * tag check in {@see hasAllTags()} runs afterwards because FTS prefix
+     * matching is deliberately broader than tag equality.
+     *
+     * Returns '' when there is nothing indexable (the caller then scans files).
+     *
+     * @param list<string> $terms
+     * @param list<string> $tags
      */
-    private function matchExpression(array $tokens): string
+    private function matchExpression(array $terms, array $tags): string
     {
-        $clauses = [];
-        foreach ($tokens as $token) {
-            $clauses[] = '"' . str_replace('"', '""', $token) . '"*';
+        $groups = [];
+
+        $textClauses = [];
+        foreach ($terms as $term) {
+            $textClauses[] = '"' . str_replace('"', '""', $term) . '"*';
+        }
+        if ([] !== $textClauses) {
+            $groups[] = '(' . implode(' OR ', $textClauses) . ')';
         }
 
-        return implode(' OR ', $clauses);
+        $tagClauses = [];
+        foreach ($tags as $tag) {
+            foreach (preg_split('/[^a-z0-9]+/', $tag, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+                $tagClauses[] = 'tags : "' . str_replace('"', '""', $token) . '"*';
+            }
+        }
+        if ([] !== $tagClauses) {
+            $groups[] = '(' . implode(' AND ', $tagClauses) . ')';
+        }
+
+        return implode(' AND ', $groups);
     }
 }
