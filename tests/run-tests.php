@@ -23,9 +23,11 @@ const SCOPE = 'memory:all';
 
 $base = 'http://127.0.0.1:8123';
 $keepServer = false;
+$explicitBase = false;
 foreach (array_slice($argv, 1) as $arg) {
     if (str_starts_with($arg, '--base-url=')) {
         $base = rtrim(substr($arg, 11), '/');
+        $explicitBase = true;
     }
     if ('--keep-server' === $arg) {
         $keepServer = true;
@@ -36,14 +38,27 @@ foreach (array_slice($argv, 1) as $arg) {
  *  Environment
  * ------------------------------------------------------------------ */
 
-$tmp = __DIR__ . '/tmp-run';
-@exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($tmp));
+// A unique temp directory per run avoids stale state from a previous (possibly
+// still-running) server colliding with this one.
+$tmp = sys_get_temp_dir() . '/memorydown-e2e-' . getmypid() . '-' . bin2hex(random_bytes(3));
 mkdir($tmp . '/memory', 0775, true);
 mkdir($tmp . '/logs', 0775, true);
 
 $phpBin = PHP_BINARY;
 $host = parse_url($base, PHP_URL_HOST) ?: '127.0.0.1';
 $port = parse_url($base, PHP_URL_PORT) ?: 8123;
+
+// Unless an explicit --base-url was given, always bind a free ephemeral port so
+// a lingering server from a previous run cannot collide with this one.
+if (!$keepServer && !$explicitBase) {
+    $probe = @stream_socket_server('tcp://' . $host . ':0', $errno, $errstr);
+    if (false !== $probe) {
+        $name = stream_socket_get_name($probe, false);
+        $port = (int) substr((string) $name, strrpos((string) $name, ':') + 1);
+        fclose($probe);
+        $base = 'http://' . $host . ':' . $port;
+    }
+}
 
 $serverProc = null;
 if (!$keepServer) {
@@ -151,8 +166,9 @@ function jsonBody(string $body): array
     return json_decode($body, true) ?? [];
 }
 
-function waitForServer(string $base, int $attempts = 40): void
+function waitForServer(string $base, int $attempts = 80): void
 {
+    global $tmp;
     for ($i = 0; $i < $attempts; ++$i) {
         $ctx = stream_context_create(['http' => ['timeout' => 1, 'ignore_errors' => true]]);
         if (@file_get_contents($base . '/health', false, $ctx) !== false) {
@@ -163,7 +179,7 @@ function waitForServer(string $base, int $attempts = 40): void
 
     // Surface the server's own output so a failed start is diagnosable instead
     // of cascading into dozens of misleading assertion failures.
-    $log = __DIR__ . '/tmp-run/server.err.log';
+    $log = $tmp . '/server.err.log';
     fwrite(STDERR, "Server did not come up at {$base}\n");
     if (is_file($log)) {
         fwrite(STDERR, "--- server.err.log ---\n" . (string) file_get_contents($log) . "\n");
@@ -1072,6 +1088,11 @@ if ([] !== $failures) {
 if (!$keepServer && is_resource($serverProc)) {
     proc_terminate($serverProc);
     proc_close($serverProc);
+}
+
+// Best-effort cleanup of this run's isolated temp directory.
+if (!$keepServer) {
+    @exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($tmp));
 }
 
 exit($failed > 0 ? 1 : 0);
