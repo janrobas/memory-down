@@ -386,6 +386,20 @@ It should not automatically store every conversational detail.
 
 The MCP tool descriptions should clearly communicate appropriate memory behavior to AI agents.
 
+### Recommended tags (optional)
+
+Tags remain freeform. To make grouping and search easier, these optional tags are
+recommended to users (admin UI chips) and to AI agents (MCP instructions and the
+`remember`/`update_memory` tool descriptions):
+
+- `task` — an actionable item or thing to do
+- `idea` — a thought, proposal or possibility
+- `reference` — a durable pointer (link, system, doc, config)
+- `followup` — something to revisit or check back on
+
+They are a convention, not a schema: nothing enforces them, they are never a
+status, and custom tags are always allowed.
+
 ---
 
 ## Search architecture

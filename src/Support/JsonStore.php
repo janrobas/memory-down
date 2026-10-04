@@ -62,8 +62,12 @@ final class JsonStore
                 throw new \RuntimeException("Cannot lock store: {$this->file}");
             }
 
-            $size = filesize($this->file);
-            $raw = false !== $size && $size > 0 ? stream_get_contents($handle) : '';
+            // Read the whole file from the start. Do not gate on filesize():
+            // PHP's stat cache can return a stale size after a previous
+            // truncate+write in the same process, which would make the store
+            // look empty and silently drop records.
+            rewind($handle);
+            $raw = stream_get_contents($handle);
             $data = [];
             if (is_string($raw) && '' !== $raw) {
                 $decoded = json_decode($raw, true);

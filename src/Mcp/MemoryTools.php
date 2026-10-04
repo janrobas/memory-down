@@ -9,6 +9,7 @@ use Mcp\Schema\Result\CallToolResult;
 use Mcp\Schema\ToolAnnotations;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
+use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchEngine;
 
 /**
@@ -68,7 +69,7 @@ final class MemoryTools
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
                     'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category).'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"].'],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary()],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
                 'required' => ['content'],
@@ -256,7 +257,7 @@ final class MemoryTools
                     'id' => ['type' => 'string', 'description' => 'The id of the memory entry to update.'],
                     'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'New title.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search).'],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary()],
                     'category' => ['type' => 'string', 'description' => 'New category; the file is moved there.'],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
                 ],

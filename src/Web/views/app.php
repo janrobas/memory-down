@@ -112,6 +112,14 @@ if (!in_array($selCategory, $categories, true)) {
             <span class="field-label">Tags</span>
             <input id="f-tags" name="tags" placeholder="comma, separated" value="<?= WebApp::h($selTags) ?>">
           </label>
+          <div class="field grow tag-suggest-wrap">
+            <span class="field-label">Suggested</span>
+            <div class="tag-suggest" id="tag-suggest" role="group" aria-label="Suggested tags">
+              <?php foreach (\MemoryDown\Memory\RecommendedTags::LIST as $tag): ?>
+                <button type="button" class="tag-chip" data-tag="<?= WebApp::h($tag) ?>"><?= WebApp::h($tag) ?></button>
+              <?php endforeach; ?>
+            </div>
+          </div>
           <div class="field check">
             <span class="field-label">Archived</span>
             <label class="check-label">
@@ -124,8 +132,8 @@ if (!in_array($selCategory, $categories, true)) {
 
       <div class="editor-body">
         <div class="tabs" role="tablist" aria-label="Editor view">
+          <button type="button" class="tab" data-tab="preview" role="tab" aria-selected="false" aria-controls="preview" id="tab-preview">Read</button>
           <button type="button" class="tab active" data-tab="write" role="tab" aria-selected="true" aria-controls="f-content" id="tab-write">Write</button>
-          <button type="button" class="tab" data-tab="preview" role="tab" aria-selected="false" aria-controls="preview" id="tab-preview">Preview</button>
           <span class="status" id="status"></span>
         </div>
 

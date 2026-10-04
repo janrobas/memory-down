@@ -590,6 +590,7 @@
     fId.value = doc.id;
     fTitle.value = doc.title || '';
     fTags.value = (doc.tags || []).join(', ');
+    syncTagChips();
     fArchived.checked = !!doc.archived;
     fContent.value = doc.body || '';
     syncCategoryUI(doc.category);
@@ -634,6 +635,7 @@
     fId.value = '';
     fTitle.value = '';
     fTags.value = '';
+    syncTagChips();
     fArchived.checked = false;
     fContent.value = '';
     deleteBtn.disabled = true;
@@ -1040,6 +1042,55 @@
     });
   }
 
+  /* Suggested-tag chips: click to toggle a recommended tag. Freeform tags typed
+     into #f-tags keep working; the chips are just a convenience over that field. */
+  var tagSuggest = document.getElementById('tag-suggest');
+
+  function readTags() {
+    return fTags.value.split(',')
+      .map(function (t) { return t.trim(); })
+      .filter(function (t) { return t !== ''; });
+  }
+
+  function writeTags(list) {
+    // De-duplicate case-insensitively while preserving the typed casing.
+    var seen = {};
+    var out = [];
+    list.forEach(function (t) {
+      var key = t.toLowerCase();
+      if (!seen[key]) { seen[key] = true; out.push(t); }
+    });
+    fTags.value = out.join(', ');
+  }
+
+  function syncTagChips() {
+    if (!tagSuggest) { return; }
+    var current = readTags().map(function (t) { return t.toLowerCase(); });
+    Array.prototype.forEach.call(tagSuggest.querySelectorAll('.tag-chip'), function (chip) {
+      var tag = (chip.getAttribute('data-tag') || '').toLowerCase();
+      chip.classList.toggle('active', current.indexOf(tag) !== -1);
+    });
+  }
+
+  function wireTagChips() {
+    if (!tagSuggest) { return; }
+    tagSuggest.addEventListener('click', function (event) {
+      var chip = event.target.closest('.tag-chip');
+      if (!chip) { return; }
+      var tag = chip.getAttribute('data-tag') || '';
+      if ('' === tag) { return; }
+      var list = readTags();
+      var idx = -1;
+      list.forEach(function (t, i) { if (t.toLowerCase() === tag.toLowerCase()) { idx = i; } });
+      if (idx >= 0) { list.splice(idx, 1); } else { list.push(tag); }
+      writeTags(list);
+      syncTagChips();
+      onEdit();
+    });
+    // Keep chip state in sync when tags are typed by hand.
+    fTags.addEventListener('input', syncTagChips);
+  }
+
   /* All / Active / Archived filter. */
   function markActiveFilter() {
     if (!filterBar) { return; }
@@ -1248,6 +1299,7 @@
   wireBrandHome();
   wireSidebarResize();
   wireShortcuts();
+  wireTagChips();
   applyCollapsed();
   syncSearchClear();
 
@@ -1259,6 +1311,7 @@
   } else {
     showEditorEmpty(true);
   }
+  syncTagChips();
 
   var emptyNew = document.getElementById('editor-empty-new');
   if (emptyNew) {

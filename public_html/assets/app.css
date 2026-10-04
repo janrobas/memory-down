@@ -768,6 +768,32 @@ body.dragging .cat.drop-hover .cat-name {
   font-weight: 600;
 }
 
+/* Suggested-tag chips: click to toggle a recommended tag on the memory. */
+.tag-suggest-wrap .tag-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem;
+  align-items: center;
+  min-height: 2.1rem;
+}
+
+.tag-suggest .tag-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: .2rem .65rem;
+  font-size: .78rem;
+  color: var(--muted);
+}
+
+.tag-suggest .tag-chip:hover { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.tag-suggest .tag-chip.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 .editor-body {
   display: flex;
   flex-direction: column;

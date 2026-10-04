@@ -75,7 +75,7 @@ TXT;
                 description: 'Persistent Markdown-backed memory for AI agents.',
             )
             ->setLogger($logger)
-            ->setInstructions(self::INSTRUCTIONS)
+            ->setInstructions(self::INSTRUCTIONS . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary())
             ->setCapabilities(new ServerCapabilities(tools: true, resources: false, prompts: false))
             ->setSession(new FileSessionStore(
                 $config->dataPath . '/sessions',
