@@ -11,6 +11,7 @@ namespace MemoryDown\Memory;
  * can filter without a dedicated UI:
  *
  *   tag:project-x     require the exact tag "project-x" (repeatable, AND)
+ *   tag:"a b"         require the exact tag "a b" (quote multi-word tags)
  *   is:archived       only archived entries
  *   is:active         only active entries
  *
@@ -36,14 +37,15 @@ final class SearchQuery
         $tags = [];
         $archived = null;
 
-        foreach (preg_split('/\s+/', trim($query)) ?: [] as $word) {
-            $word = trim($word);
+        foreach (self::tokenize($query) as $word) {
             if ('' === $word) {
                 continue;
             }
 
-            if (preg_match('/^tag:(.+)$/i', $word, $m)) {
-                $tag = strtolower(trim($m[1], "\"'"));
+            if (preg_match('/^tag:(.+)$/is', $word, $m)) {
+                // The value may be a quoted phrase (tag:"a b"); the quotes group
+                // a multi-word tag into one value instead of splitting on space.
+                $tag = mb_strtolower(trim(self::unquote(trim($m[1]))));
                 if ('' !== $tag) {
                     $tags[] = $tag;
                 }
@@ -51,13 +53,13 @@ final class SearchQuery
             }
 
             if (preg_match('/^is:(archived|active)$/i', $word, $m)) {
-                $archived = 'archived' === strtolower($m[1]);
+                $archived = 'archived' === mb_strtolower($m[1]);
                 continue;
             }
 
             $word = trim($word, "\"'.,;:!?()[]{}");
             if (mb_strlen($word) >= 2) {
-                $terms[] = strtolower($word);
+                $terms[] = mb_strtolower($word);
             }
         }
 
@@ -69,6 +71,66 @@ final class SearchQuery
     }
 
     /**
+     * Split the query into tokens, keeping quoted phrases intact so that
+     * tag:"multi word tag" is one token. Single and double quotes are honoured.
+     *
+     * @return list<string>
+     */
+    private static function tokenize(string $query): array
+    {
+        $tokens = [];
+        $length = strlen($query);
+        $i = 0;
+
+        while ($i < $length) {
+            // Skip whitespace between tokens.
+            while ($i < $length && ctype_space($query[$i])) {
+                ++$i;
+            }
+            if ($i >= $length) {
+                break;
+            }
+
+            $start = $i;
+            $quote = '';
+            while ($i < $length) {
+                $char = $query[$i];
+                if ('' !== $quote) {
+                    if ($char === $quote) {
+                        $quote = '';
+                    }
+                } elseif ('"' === $char || "'" === $char) {
+                    $quote = $char;
+                } elseif (ctype_space($char)) {
+                    break;
+                }
+                ++$i;
+            }
+
+            $tokens[] = substr($query, $start, $i - $start);
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * Remove one pair of surrounding single or double quotes, if present.
+     */
+    private static function unquote(string $value): string
+    {
+        $length = strlen($value);
+        if ($length >= 2) {
+            $first = $value[0];
+            $last = $value[$length - 1];
+            if (('"' === $first && '"' === $last) || ("'" === $first && "'" === $last)) {
+                return substr($value, 1, -1);
+            }
+        }
+
+        return $value;
+    }
+
+    /**
      * Merge explicit parameters on top of the parsed directives. An explicit
      * value always wins; an explicit tag is added to any parsed tags.
      */
@@ -76,7 +138,7 @@ final class SearchQuery
     {
         $tags = $this->tags;
         if (null !== $tag && '' !== trim($tag)) {
-            $tags[] = strtolower(trim($tag));
+            $tags[] = mb_strtolower(trim($tag));
         }
 
         return new self(

@@ -981,6 +981,22 @@ $r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:mix'));
 $ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
 check('search: tag: alone matches all with the tag', in_array($mixA, $ids, true) && in_array($mixB, $ids, true), json_encode($ids));
 
+// Quoted multi-word / non-ASCII tags (the "tag:\"ŠC Kranj\"" case).
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'projects', 'title' => 'Mentorstvo diplomske naloge',
+    'content' => 'Mentorstvo pri diplomskih nalogah.',
+    'tags' => ['diplome', 'mentorstvo', 'ŠC Kranj'],
+]));
+$multiTagId = jsonBody($r['body'])['memory']['id'] ?? '';
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:"ŠC Kranj"'));
+$ids = array_column(jsonBody($r['body'])['results'] ?? [], 'id');
+check('search: quoted multi-word tag matches', in_array($multiTagId, $ids, true), $r['body']);
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('tag:"nope missing"'));
+check('search: quoted multi-word tag no false positives', !in_array($multiTagId, array_column(jsonBody($r['body'])['results'] ?? [], 'id'), true), $r['body']);
+if ('' !== $multiTagId) {
+    request('DELETE', '/ui/api/memory?category=projects&id=' . rawurlencode($multiTagId), ['X-CSRF-Token' => $apiCsrf]);
+}
+
 // Unarchive via admin API removes the frontmatter key.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'id' => $archId,

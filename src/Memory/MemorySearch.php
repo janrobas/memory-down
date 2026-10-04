@@ -98,7 +98,7 @@ final class MemorySearch implements SearchEngine
      */
     private function hasAllTags(array $doc, array $tags): bool
     {
-        $docTags = array_map('strtolower', array_map('strval', $doc['tags'] ?? []));
+        $docTags = array_map('mb_strtolower', array_map('strval', $doc['tags'] ?? []));
         foreach ($tags as $tag) {
             if (!in_array($tag, $docTags, true)) {
                 return false;

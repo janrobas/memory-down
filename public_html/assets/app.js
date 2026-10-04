@@ -871,6 +871,98 @@
     if (event.key === 'Escape') { clearSearch(); }
   });
 
+  /* -------------------------------------------------------- shortcuts */
+
+  // Keyboard cursor over the visible items in the left list (tree or results).
+  var cursorIndex = -1;
+
+  function visibleItems() {
+    return Array.prototype.slice.call(list.querySelectorAll('.mem'));
+  }
+
+  function setCursor(index) {
+    var items = visibleItems();
+    Array.prototype.forEach.call(items, function (el) { el.classList.remove('cursor'); });
+    if (!items.length) { cursorIndex = -1; return; }
+    cursorIndex = Math.max(0, Math.min(items.length - 1, index));
+    var el = items[cursorIndex];
+    el.classList.add('cursor');
+    el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function moveCursor(delta) {
+    var items = visibleItems();
+    if (!items.length) { return; }
+    var next = cursorIndex < 0
+      ? (delta > 0 ? 0 : items.length - 1)
+      : (cursorIndex + delta + items.length) % items.length; // wrap around
+    setCursor(next);
+  }
+
+  function clearCursor() {
+    cursorIndex = -1;
+    Array.prototype.forEach.call(list.querySelectorAll('.mem.cursor'), function (el) {
+      el.classList.remove('cursor');
+    });
+  }
+
+  function openCursor() {
+    var items = visibleItems();
+    if (cursorIndex < 0 || cursorIndex >= items.length) { return; }
+    var el = items[cursorIndex];
+    var category = el.getAttribute('data-category');
+    var id = el.getAttribute('data-id');
+    if (!id) { return; }
+    if (id === fId.value && category === fCategory.value) { return; }
+    saveBeforeSwitch().then(function (ok) {
+      if (ok) { loadMemory(category, id); }
+    });
+  }
+
+  // True when the user is typing in a field, so single-key shortcuts must not fire.
+  function isTyping() {
+    var el = document.activeElement;
+    if (!el) { return false; }
+    var tag = (el.tagName || '').toLowerCase();
+    return 'input' === tag || 'textarea' === tag || 'select' === tag || el.isContentEditable;
+  }
+
+  function wireShortcuts() {
+    // Clear the keyboard cursor when the pointer interacts with the list.
+    list.addEventListener('mousedown', function () { clearCursor(); });
+
+    search.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') { event.preventDefault(); moveCursor(1); }
+      else if (event.key === 'ArrowUp') { event.preventDefault(); moveCursor(-1); }
+      else if (event.key === 'Enter') { event.preventDefault(); openCursor(); }
+    });
+
+    document.addEventListener('keydown', function (event) {
+      // Ctrl/Cmd+K focuses search from anywhere (even while typing).
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        search.focus();
+        search.select();
+        return;
+      }
+
+      // The remaining shortcuts are single keys: never while typing in a field.
+      if (isTyping() || event.ctrlKey || event.metaKey || event.altKey) { return; }
+
+      if ('/' === event.key) {
+        event.preventDefault();
+        search.focus();
+        return;
+      }
+
+      if ('ArrowDown' === event.key) { event.preventDefault(); moveCursor(1); }
+      else if ('ArrowUp' === event.key) { event.preventDefault(); moveCursor(-1); }
+      else if ('Enter' === event.key) { event.preventDefault(); openCursor(); }
+      else if ('n' === event.key.toLowerCase()) { event.preventDefault(); newBtn.click(); }
+      else if ('e' === event.key.toLowerCase()) { event.preventDefault(); fTitle.focus(); }
+    });
+  }
+
   /* All / Active / Archived filter. */
   function markActiveFilter() {
     if (!filterBar) { return; }
@@ -980,6 +1072,7 @@
   wireReindex();
   wireDrawers();
   wireFilter();
+  wireShortcuts();
   applyCollapsed();
   syncSearchClear();
   // Re-render from the API so the persisted All/Active/Archived filter applies

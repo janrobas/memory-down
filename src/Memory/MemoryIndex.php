@@ -170,7 +170,7 @@ final class MemoryIndex implements SearchEngine
      */
     private function hasAllTags(array $doc, array $tags): bool
     {
-        $docTags = array_map('strtolower', array_map('strval', $doc['tags'] ?? []));
+        $docTags = array_map('mb_strtolower', array_map('strval', $doc['tags'] ?? []));
         foreach ($tags as $tag) {
             if (!in_array($tag, $docTags, true)) {
                 return false;
@@ -355,7 +355,9 @@ final class MemoryIndex implements SearchEngine
 
         $tagClauses = [];
         foreach ($tags as $tag) {
-            foreach (preg_split('/[^a-z0-9]+/', $tag, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+            // Split on runs of non-letter/non-digit characters, Unicode-aware so
+            // tags with non-ASCII letters (e.g. "ŠC Kranj") are not mangled.
+            foreach (preg_split('/[^\p{L}\p{N}]+/u', $tag, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
                 $tagClauses[] = 'tags : "' . str_replace('"', '""', $token) . '"*';
             }
         }

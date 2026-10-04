@@ -127,6 +127,20 @@ check('explicit archived wins', true === $q->archived);
 
 check('empty query reported empty', SearchQuery::parse('   ')->isEmpty());
 
+// Quoted multi-word tags stay one tag; quotes are stripped and case folded.
+$q = SearchQuery::parse('tag:"ŠC Kranj"');
+check('quoted tag: single multi-word tag', ['šc kranj'] === $q->tags, json_encode($q));
+check('quoted tag: no stray free-text term', [] === $q->terms, json_encode($q));
+
+$q = SearchQuery::parse("tag:'x y'");
+check('single-quoted tag', ['x y'] === $q->tags, json_encode($q));
+
+$q = SearchQuery::parse('tag:"a b" cc');
+check('quoted tag plus a free-text term', ['a b'] === $q->tags && ['cc'] === $q->terms, json_encode($q));
+
+$q = SearchQuery::parse('tag:diplome hello');
+check('unquoted single tag still works', ['diplome'] === $q->tags && ['hello'] === $q->terms, json_encode($q));
+
 /* ------------------------------------------------------------------ *
  *  MemoryStore: canonical corpus only
  * ------------------------------------------------------------------ */
@@ -208,6 +222,15 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 
     $r = $index->search('alpha tag:beta-tag');
     check('text AND tag with no overlap is empty', [] === $r, json_encode($r));
+
+    // Multi-word and non-ASCII tags (e.g. "ŠC Kranj") must match end-to-end.
+    $idxStore->create('Mentorstvo diplomske naloge.', 'Mentorstvo', 'projects', ['diplome', 'ŠC Kranj']);
+    $r = $index->search('tag:"ŠC Kranj"');
+    check('quoted multi-word non-ASCII tag matches', 1 === count($r) && 'Mentorstvo' === ($r[0]['title'] ?? ''), json_encode($r));
+    $r = $index->search('tag:"šc kranj"');
+    check('quoted tag is case-insensitive (unicode)', 1 === count($r), json_encode($r));
+    $r = $index->search('tag:"ŠC"');
+    check('quoted tag stays exact (no partial tag)', [] === $r, json_encode($r));
 }
 
 /* ------------------------------------------------------------------ *

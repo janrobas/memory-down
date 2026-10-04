@@ -467,6 +467,13 @@ body.app { overflow: hidden; }
 .mem:hover { background: var(--bg); }
 .mem.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
 
+/* Keyboard cursor: distinct from the "open" active state. */
+.mem.cursor {
+  background: var(--accent-weak);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .mem.archived { color: var(--muted); }
 
 .mem.new { font-weight: 700; }
