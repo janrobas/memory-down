@@ -557,7 +557,7 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   display: block;
   color: var(--muted);
   font-size: .76rem;
-  margin: -0.2rem .5rem .3rem;
+  margin-top: .1rem;
   white-space: normal;
 }
 
@@ -568,15 +568,18 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   padding: 0 .1rem;
 }
 
-/* Search results: text is selectable (title and snippet), unlike the main tree
-   where the whole row is a drag source. Drag-to-move is disabled in JS. */
-.list .cat.results,
-.list .cat.results .mem,
-.list .cat.results .snippet {
-  user-select: text;
-  -webkit-user-select: text;
+/* Search results: the whole entry (title + snippet) sits inside one normal link
+   and is selectable as a single text run. The cursor stays the default link
+   pointer; drag-to-move is off (no draggable attribute). */
+.list .cat.results .mem.has-snippet {
+  display: block;
 }
-.list .cat.results .mem { cursor: text; }
+
+.list .cat.results .mem .mem-head {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
 
 /* Themed text selection everywhere selection is allowed. */
 ::selection { background: var(--accent); color: var(--accent-contrast); }

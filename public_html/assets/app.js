@@ -365,40 +365,48 @@
     a.className = 'mem'
       + (item.archived ? ' archived' : '')
       + (item.new && !item.archived ? ' new' : '')
-      + (item.selectable ? ' selectable' : '');
+      + (item.snippet ? ' has-snippet' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
     a.setAttribute('data-category', item.category);
     a.setAttribute('data-id', item.id);
-    // Search results are selectable text; the main tree remains a drag source.
-    if (!item.selectable) {
+    // Search results keep the whole entry (title + snippet) inside one normal
+    // link so it is selectable as a single text run. The main tree stays a
+    // single-line drag source.
+    if (!item.snippet) {
       a.setAttribute('draggable', 'true');
     }
+
+    var head = document.createElement('span');
+    head.className = 'mem-head';
 
     // Title truncates; badges are siblings so they always stay visible.
     var title = document.createElement('span');
     title.className = 'mem-title';
     title.textContent = item.title || item.id;
-    a.appendChild(title);
+    head.appendChild(title);
 
     if (item.new && !item.archived) {
       var newBadge = document.createElement('span');
       newBadge.className = 'badge-new';
       newBadge.textContent = 'new';
-      a.appendChild(newBadge);
+      head.appendChild(newBadge);
     }
     if (item.archived) {
       var badge = document.createElement('span');
       badge.className = 'badge-archived';
       badge.textContent = 'archived';
-      a.appendChild(badge);
+      head.appendChild(badge);
     }
-    li.appendChild(a);
+    a.appendChild(head);
+
     if (item.snippet) {
       var snippet = document.createElement('span');
       snippet.className = 'snippet';
       appendHighlighted(snippet, item.snippet, item.query);
-      li.appendChild(snippet);
+      a.appendChild(snippet);
     }
+
+    li.appendChild(a);
     return li;
   }
 
@@ -485,7 +493,7 @@
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query, selectable: true }));
+      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query }));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -807,9 +815,6 @@
   list.addEventListener('click', function (event) {
     var link = event.target.closest('.mem');
     if (!link) { return; }
-    // In search results the text is selectable: a click that concludes a text
-    // selection must not open the memory.
-    if (window.getSelection && String(window.getSelection()).length > 0) { return; }
     event.preventDefault();
     var category = link.getAttribute('data-category');
     var id = link.getAttribute('data-id');
@@ -871,7 +876,10 @@
   var dragSource = null;
 
   document.addEventListener('dragstart', function (event) {
-    var link = event.target.closest('.mem');
+    var target = event.target;
+    // A text-selection drag can start on a text node (no closest()); ignore it.
+    if (!target || typeof target.closest !== 'function') { return; }
+    var link = target.closest('.mem');
     if (!link) { return; }
     dragSource = { id: link.getAttribute('data-id'), category: link.getAttribute('data-category') };
     link.classList.add('dragging');
@@ -892,7 +900,7 @@
   });
 
   list.addEventListener('dragover', function (event) {
-    if (!dragSource) { return; }
+    if (!dragSource || typeof event.target.closest !== 'function') { return; }
     var section = event.target.closest('.cat');
     if (!section || !section.getAttribute('data-category')) { return; }
     event.preventDefault();
@@ -902,7 +910,7 @@
   });
 
   list.addEventListener('drop', function (event) {
-    if (!dragSource) { return; }
+    if (!dragSource || typeof event.target.closest !== 'function') { return; }
     var section = event.target.closest('.cat');
     if (!section) { return; }
     event.preventDefault();
