@@ -32,7 +32,10 @@ if (!in_array($selCategory, $categories, true)) {
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="brand">MemoryDown</div>
-      <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
+      <div class="search-wrap">
+        <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
+        <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search" title="Clear search">×</button>
+      </div>
       <div class="filter" id="filter" role="group" aria-label="Show memories">
         <button type="button" class="filter-btn active" data-filter="all">All</button>
         <button type="button" class="filter-btn" data-filter="active">Active</button>
@@ -50,10 +53,10 @@ if (!in_array($selCategory, $categories, true)) {
           <ul>
             <?php foreach ($group['memories'] as $mem): ?>
               <li>
-                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?>"
+                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['new']) ? ' new' : '' ?>"
                    href="/ui?category=<?= rawurlencode((string) $group['name']) ?>&amp;id=<?= rawurlencode((string) $mem['id']) ?>"
                    data-category="<?= WebApp::h($group['name']) ?>"
-                   data-id="<?= WebApp::h($mem['id']) ?>"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?></a>
+                   data-id="<?= WebApp::h($mem['id']) ?>"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?><?php if (!empty($mem['new'])): ?><span class="badge-new">new</span><?php endif; ?></a>
               </li>
             <?php endforeach; ?>
           </ul>

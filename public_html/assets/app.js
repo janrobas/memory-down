@@ -26,6 +26,7 @@
   var csrf = shell.getAttribute('data-csrf') || '';
   var list = document.getElementById('list');
   var search = document.getElementById('search');
+  var searchClear = document.getElementById('search-clear');
   var form = document.getElementById('editor-form');
   var fId = document.getElementById('f-id');
   var fTitle = document.getElementById('f-title');
@@ -356,12 +357,20 @@
   function memLink(item) {
     var li = document.createElement('li');
     var a = document.createElement('a');
-    a.className = 'mem' + (item.archived ? ' archived' : '');
+    a.className = 'mem'
+      + (item.archived ? ' archived' : '')
+      + (item.new && !item.archived ? ' new' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
     a.setAttribute('data-category', item.category);
     a.setAttribute('data-id', item.id);
     a.setAttribute('draggable', 'true');
     a.textContent = item.title || item.id;
+    if (item.new && !item.archived) {
+      var newBadge = document.createElement('span');
+      newBadge.className = 'badge-new';
+      newBadge.textContent = 'new';
+      a.appendChild(newBadge);
+    }
     if (item.archived) {
       var badge = document.createElement('span');
       badge.className = 'badge-archived';
@@ -398,7 +407,7 @@
       section.appendChild(sectionTitle(group.name, visible.length));
       var ul = document.createElement('ul');
       visible.forEach(function (mem) {
-        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived }));
+        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, new: !!mem.new }));
       });
       section.appendChild(ul);
       list.appendChild(section);
@@ -839,7 +848,28 @@
     });
   }, 180);
 
-  search.addEventListener('input', doSearch);
+  function syncSearchClear() {
+    if (searchClear) { searchClear.hidden = '' === search.value; }
+  }
+
+  function clearSearch() {
+    if ('' === search.value) { return; }
+    search.value = '';
+    syncSearchClear();
+    doSearch.cancel();
+    refreshTree();
+    search.focus();
+  }
+
+  if (searchClear) {
+    searchClear.addEventListener('click', clearSearch);
+  }
+  // The native clear affordance (WebKit) fires only a 'search' event.
+  search.addEventListener('input', function () { syncSearchClear(); doSearch(); });
+  search.addEventListener('search', function () { syncSearchClear(); doSearch(); });
+  search.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') { clearSearch(); }
+  });
 
   /* All / Active / Archived filter. */
   function markActiveFilter() {
@@ -951,6 +981,7 @@
   wireDrawers();
   wireFilter();
   applyCollapsed();
+  syncSearchClear();
   // Re-render from the API so the persisted All/Active/Archived filter applies
   // to the server-rendered tree (which otherwise shows everything).
   refreshTree().catch(function () { /* ignore */ });

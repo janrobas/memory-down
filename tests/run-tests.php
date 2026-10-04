@@ -660,8 +660,70 @@ check('admin API create without csrf -> 403', 403 === $r['status'], (string) $r[
 $r = request('GET', '/ui/api/tree');
 check('admin API tree -> lists new memory', str_contains($r['body'], $adminId));
 
+$tree = jsonBody($r['body']);
+$treeNew = null;
+foreach (($tree['categories'] ?? []) as $group) {
+    foreach (($group['memories'] ?? []) as $mem) {
+        if (($mem['id'] ?? '') === $adminId) { $treeNew = $mem['new'] ?? null; }
+    }
+}
+check('admin API tree -> fresh memory flagged new', true === $treeNew, $r['body']);
+
 $r = request('GET', '/ui/api/search?q=two-pane');
 check('admin API search -> finds new memory', str_contains($r['body'], $adminId), $r['body']);
+
+$searchHit = null;
+foreach ((jsonBody($r['body'])['results'] ?? []) as $res) {
+    if (($res['id'] ?? '') === $adminId) { $searchHit = $res['new'] ?? null; }
+}
+check('admin API search -> fresh memory flagged new', true === $searchHit, $r['body']);
+
+// An entry older than the 24h window must not be flagged new.
+@touch($adminFile, time() - 3 * 86400);
+$r = request('GET', '/ui/api/tree');
+$oldFlag = null;
+foreach ((jsonBody($r['body'])['categories'] ?? []) as $group) {
+    foreach (($group['memories'] ?? []) as $mem) {
+        if (($mem['id'] ?? '') === $adminId) { $oldFlag = $mem['new'] ?? null; }
+    }
+}
+check('admin API tree -> memory older than 24h not new', false === $oldFlag, $r['body']);
+
+// New entries sort first within a category, and archived entries are never "new".
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes', 'title' => 'Sort fresh', 'content' => 'fresh sort probe',
+]));
+$sortFreshId = jsonBody($r['body'])['memory']['id'] ?? '';
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes', 'title' => 'Sort old', 'content' => 'old sort probe',
+]));
+$sortOldId = jsonBody($r['body'])['memory']['id'] ?? '';
+@touch($tmp . '/memory/notes/' . $sortOldId . '.md', time() - 3 * 86400);
+
+$r = request('GET', '/ui/api/tree');
+$notesOrder = [];
+foreach ((jsonBody($r['body'])['categories'] ?? []) as $group) {
+    if (($group['name'] ?? '') === 'notes') {
+        foreach (($group['memories'] ?? []) as $mem) { $notesOrder[] = $mem['id'] ?? ''; }
+    }
+}
+$freshPos = array_search($sortFreshId, $notesOrder, true);
+$oldPos = array_search($sortOldId, $notesOrder, true);
+check('tree: new entry sorted before old', false !== $freshPos && false !== $oldPos && $freshPos < $oldPos, json_encode($notesOrder));
+
+// Archiving a fresh entry must clear its "new" flag.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $sortFreshId, 'category' => 'notes', 'title' => 'Sort fresh', 'tags' => '', 'content' => 'fresh sort probe', 'archived' => true,
+]));
+check('admin API archive fresh -> ok', 200 === $r['status'], $r['body']);
+$r = request('GET', '/ui/api/tree');
+$archNew = null;
+foreach ((jsonBody($r['body'])['categories'] ?? []) as $group) {
+    foreach (($group['memories'] ?? []) as $mem) {
+        if (($mem['id'] ?? '') === $sortFreshId) { $archNew = $mem['new'] ?? null; }
+    }
+}
+check('tree: archived entry never flagged new', false === $archNew, $r['body']);
 
 $r = request('GET', '/ui/api/memory?category=preferences&id=' . rawurlencode($adminId));
 check('admin API get -> returns body', str_contains($r['body'], 'two-pane'));

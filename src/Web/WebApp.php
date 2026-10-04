@@ -27,6 +27,9 @@ final class WebApp
 {
     public const ADMIN_HEADER = 'X-MemoryDown-Admin';
 
+    /** An entry is flagged "new" when its Markdown file was modified this recently. */
+    private const NEW_WINDOW_SECONDS = 86400;
+
     private Psr17Factory $factory;
     private WebAuth $auth;
 
@@ -263,13 +266,14 @@ final class WebApp
             self::archivedFilter((string) ($query['archived'] ?? 'all')),
         );
 
-        $light = array_map(static fn (array $r): array => [
+        $light = array_map(fn (array $r): array => [
             'id' => $r['id'],
             'category' => $r['category'],
             'title' => $r['title'],
             'updated' => $r['updated'] ?? '',
             'tags' => $r['tags'] ?? [],
             'archived' => (bool) ($r['archived'] ?? false),
+            'new' => $this->isNew($r),
             'score' => $r['score'] ?? 0,
             'snippet' => $r['snippet'] ?? '',
         ], $results);
@@ -416,7 +420,16 @@ final class WebApp
                 'updated' => $doc['updated'] ?? '',
                 'tags' => $doc['tags'] ?? [],
                 'archived' => (bool) ($doc['archived'] ?? false),
+                'new' => $this->isNew($doc),
             ];
+        }
+
+        // Show freshly modified entries first within each category (stable sort:
+        // non-new entries keep their updated-desc order).
+        foreach ($grouped as $category => $memories) {
+            usort($memories, static fn (array $a, array $b): int
+                => (int) ($b['new'] ?? false) <=> (int) ($a['new'] ?? false));
+            $grouped[$category] = $memories;
         }
 
         sort($categories);
@@ -507,6 +520,29 @@ final class WebApp
         }
 
         return $this->store->categories()[0] ?? 'facts';
+    }
+
+    /**
+     * Whether a memory counts as "new": its .md file was modified within the
+     * last NEW_WINDOW_SECONDS. Uses the file mtime (the frontmatter dates are
+     * only day-granular) and fails closed when the file is unreadable.
+     *
+     * @param array<string, mixed> $doc
+     */
+    private function isNew(array $doc): bool
+    {
+        if (!empty($doc['archived'])) {
+            return false;
+        }
+
+        $path = (string) ($doc['path'] ?? '');
+        if ('' === $path) {
+            return false;
+        }
+
+        $mtime = @filemtime($this->store->paths()->root() . '/' . $path);
+
+        return false !== $mtime && $mtime >= time() - self::NEW_WINDOW_SECONDS;
     }
 
     private function str(mixed $value): string
