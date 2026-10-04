@@ -347,8 +347,9 @@ button:disabled:hover { background: var(--panel-2); color: inherit; }
 body.app { overflow: hidden; }
 
 .app-shell {
+  --sidebar-w: 300px;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: var(--sidebar-w) 1fr;
   /* 100dvh tracks the dynamic viewport (excludes mobile browser chrome such as
      Chrome's toolbar); the 100vh first line is a fallback for older browsers. */
   height: 100vh;
@@ -364,7 +365,28 @@ body.app { overflow: hidden; }
   border-right: 1px solid var(--border);
   background: var(--panel);
   min-height: 0;
+  position: relative;
 }
+
+/* Desktop only: drag the right edge to resize the sidebar. A thin strip over
+   the existing border (no extra visual chrome). */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+  background: transparent;
+  touch-action: none;
+}
+
+.sidebar-resizer:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+/* While dragging: no text selection, keep the col-resize cursor everywhere. */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .sidebar-resizer { background: var(--accent-weak); }
 
 .sidebar-top {
   padding: .9rem;
@@ -463,16 +485,28 @@ body.app { overflow: hidden; }
 .list ul { list-style: none; margin: 0; padding: 0; }
 
 .mem {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
   padding: .45rem .5rem;
   border-radius: 6px;
   text-decoration: none;
   color: var(--text);
   font-size: .9rem;
+}
+
+/* The title takes the available space and truncates; the badge(s) never shrink,
+   so "new"/"archived" stay visible even with a long title. */
+.mem .mem-title {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.mem .badge-new,
+.mem .badge-archived { flex: 0 0 auto; }
 
 .mem:hover { background: var(--bg); }
 .mem.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
@@ -523,7 +557,7 @@ body.app { overflow: hidden; }
   display: block;
   color: var(--muted);
   font-size: .76rem;
-  margin-top: .1rem;
+  margin: -0.2rem .5rem .3rem;
   white-space: normal;
 }
 
@@ -862,6 +896,9 @@ body.dragging .cat.drop-hover .cat-name {
 
 @media (max-width: 820px) {
   .app-shell { grid-template-columns: 1fr; }
+
+  /* The sidebar is a fixed overlay drawer on small screens; no resize handle. */
+  .sidebar-resizer { display: none; }
 
   /* Topbar: show the two summon buttons, drop the desktop right padding. */
   .editor-topbar { padding-right: 0; }

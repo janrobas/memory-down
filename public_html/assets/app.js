@@ -364,7 +364,13 @@
     a.setAttribute('data-category', item.category);
     a.setAttribute('data-id', item.id);
     a.setAttribute('draggable', 'true');
-    a.textContent = item.title || item.id;
+
+    // Title truncates; badges are siblings so they always stay visible.
+    var title = document.createElement('span');
+    title.className = 'mem-title';
+    title.textContent = item.title || item.id;
+    a.appendChild(title);
+
     if (item.new && !item.archived) {
       var newBadge = document.createElement('span');
       newBadge.className = 'badge-new';
@@ -378,6 +384,12 @@
       a.appendChild(badge);
     }
     li.appendChild(a);
+    if (item.snippet) {
+      var snippet = document.createElement('span');
+      snippet.className = 'snippet';
+      snippet.textContent = item.snippet;
+      li.appendChild(snippet);
+    }
     return li;
   }
 
@@ -435,14 +447,7 @@
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      var li = memLink(item);
-      if (item.snippet) {
-        var span = document.createElement('span');
-        span.className = 'snippet';
-        span.textContent = item.snippet;
-        li.firstChild.appendChild(span);
-      }
-      ul.appendChild(li);
+      ul.appendChild(memLink(item));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -1009,6 +1014,77 @@
     });
   }
 
+  /* ------------------------------------------------- sidebar resize */
+
+  var SIDEBAR_KEY = 'memorydown.sidebarWidth';
+  var SIDEBAR_MIN = 180;
+
+  function maxSidebarWidth() {
+    return Math.min(560, Math.round(window.innerWidth * 0.6));
+  }
+
+  function applySidebarWidth(px) {
+    var clamped = Math.max(SIDEBAR_MIN, Math.min(maxSidebarWidth(), Math.round(px)));
+    shell.style.setProperty('--sidebar-w', clamped + 'px');
+    return clamped;
+  }
+
+  function wireSidebarResize() {
+    var handle = document.getElementById('sidebar-resizer');
+    if (!handle) { return; }
+
+    // Restore the saved width (a preference; not reset by the brand click).
+    var saved = parseInt((function () { try { return localStorage.getItem(SIDEBAR_KEY) || ''; } catch (e) { return ''; } })(), 10);
+    if (!isNaN(saved)) { applySidebarWidth(saved); }
+
+    var dragging = false;
+    var startX = 0;
+    var startW = 0;
+
+    function onMove(event) {
+      if (!dragging) { return; }
+      applySidebarWidth(startW + (event.clientX - startX));
+    }
+
+    function onUp() {
+      if (!dragging) { return; }
+      dragging = false;
+      document.body.classList.remove('resizing');
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      try {
+        localStorage.setItem(SIDEBAR_KEY, parseInt(getComputedStyle(shell).getPropertyValue('--sidebar-w'), 10) + '');
+      } catch (e) { /* ignore */ }
+    }
+
+    handle.addEventListener('pointerdown', function (event) {
+      if (isMobile()) { return; }
+      dragging = true;
+      startX = event.clientX;
+      startW = handle.closest('.sidebar').getBoundingClientRect().width;
+      document.body.classList.add('resizing');
+      handle.setPointerCapture && handle.setPointerCapture(event.pointerId);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      event.preventDefault();
+    });
+
+    // Keyboard: the separator is focusable; Left/Right nudge the width.
+    handle.addEventListener('keydown', function (event) {
+      var current = handle.closest('.sidebar').getBoundingClientRect().width;
+      if (event.key === 'ArrowLeft') { applySidebarWidth(current - 16); event.preventDefault(); }
+      else if (event.key === 'ArrowRight') { applySidebarWidth(current + 16); event.preventDefault(); }
+      else { return; }
+      try { localStorage.setItem(SIDEBAR_KEY, parseInt(getComputedStyle(shell).getPropertyValue('--sidebar-w'), 10) + ''); } catch (e) { /* ignore */ }
+    });
+
+    // Keep the width valid when the window shrinks below the saved value.
+    window.addEventListener('resize', function () {
+      if (isMobile()) { return; }
+      applySidebarWidth(parseInt(getComputedStyle(shell).getPropertyValue('--sidebar-w'), 10) || 300);
+    });
+  }
+
   /* Archive toggle: saved immediately (a discrete action, like a move). */
   fArchived.addEventListener('change', function () {
     if (isDirty()) { saveIdle.cancel(); save(); }
@@ -1098,6 +1174,7 @@
   wireDrawers();
   wireFilter();
   wireBrandHome();
+  wireSidebarResize();
   wireShortcuts();
   applyCollapsed();
   syncSearchClear();

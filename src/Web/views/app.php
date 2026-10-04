@@ -56,7 +56,7 @@ if (!in_array($selCategory, $categories, true)) {
                 <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['new']) ? ' new' : '' ?>"
                    href="/ui?category=<?= rawurlencode((string) $group['name']) ?>&amp;id=<?= rawurlencode((string) $mem['id']) ?>"
                    data-category="<?= WebApp::h($group['name']) ?>"
-                   data-id="<?= WebApp::h($mem['id']) ?>"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?><?php if (!empty($mem['new'])): ?><span class="badge-new">new</span><?php endif; ?></a>
+                   data-id="<?= WebApp::h($mem['id']) ?>"><span class="mem-title"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?></span><?php if (!empty($mem['new'])): ?><span class="badge-new">new</span><?php endif; ?></a>
               </li>
             <?php endforeach; ?>
           </ul>
@@ -64,6 +64,7 @@ if (!in_array($selCategory, $categories, true)) {
       <?php endforeach; ?>
       <p class="empty muted" id="list-empty" <?= [] !== $tree ? 'hidden' : '' ?>>No memories yet.</p>
     </nav>
+    <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
   </aside>
 
   <main class="editor">
