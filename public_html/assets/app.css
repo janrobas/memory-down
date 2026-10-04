@@ -209,7 +209,10 @@ body.app { overflow: hidden; }
 .app-shell {
   display: grid;
   grid-template-columns: 300px 1fr;
+  /* 100dvh tracks the dynamic viewport (excludes mobile browser chrome such as
+     Chrome's toolbar); the 100vh first line is a fallback for older browsers. */
   height: 100vh;
+  height: 100dvh;
   position: relative;
 }
 
@@ -693,6 +696,11 @@ body.dragging .cat.drop-hover .cat-name {
     padding-top: calc(.9rem + env(safe-area-inset-top));
     padding-left: calc(1.1rem + env(safe-area-inset-left));
     padding-right: calc(1.1rem + env(safe-area-inset-right));
+  }
+
+  /* Keep the last lines clear of the browser toolbar / home indicator. */
+  .content, .preview {
+    padding-bottom: calc(2rem + env(safe-area-inset-bottom));
   }
 
   /* --- Memories: slide in from the LEFT --- */
