@@ -750,6 +750,11 @@
   // Save before leaving the current memory (e.g. clicking another one).
   function saveBeforeSwitch() {
     if (!isDirty()) { return Promise.resolve(true); }
+    // A new, still-empty memory has nothing to persist: an empty body cannot be
+    // saved, so don't let it block navigating to an existing memory.
+    if ('' === fId.value && '' === fContent.value.trim()) {
+      return Promise.resolve(true);
+    }
     return save();
   }
 
