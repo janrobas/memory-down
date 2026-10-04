@@ -25,11 +25,11 @@ if (!in_array($selCategory, $categories, true)) {
     sort($categories);
 }
 ?>
-<div class="app-shell"
+<div class="app-shell<?= '' === $selId ? ' is-empty' : '' ?>"
      data-csrf="<?= WebApp::h($csrf) ?>"
      data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>">
 
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
       <a class="brand" href="/ui" id="brand-home">MemoryDown</a>
       <div class="search-wrap">

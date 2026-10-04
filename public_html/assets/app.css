@@ -615,6 +615,11 @@ body.dragging .cat.drop-hover .cat-name {
   min-height: 0;
 }
 
+/* Empty state (nothing selected, not creating): desktop hides the whole editor
+   form, exactly as before. On mobile the media query below keeps just the top
+   bar so the drawer buttons stay reachable. */
+.app-shell.is-empty #editor-form { display: none; }
+
 /* Shown when no memory is selected and none is being created. */
 .editor-empty {
   display: flex;
@@ -974,6 +979,22 @@ body.dragging .cat.drop-hover .cat-name {
     padding-left: calc(1.1rem + env(safe-area-inset-left));
     padding-right: calc(1.1rem + env(safe-area-inset-right));
   }
+
+  /* Empty state on mobile: keep the top bar (and its drawer buttons) visible so
+     memories/menu can always be opened; hide the rest of the form. */
+  .app-shell.is-empty #editor-form {
+    display: flex;
+    height: auto;
+    flex: 0 0 auto;
+  }
+  .app-shell.is-empty #editor-form .editor-head {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+  .app-shell.is-empty #editor-form .editor-head > *:not(.editor-topbar) { display: none; }
+  .app-shell.is-empty #editor-form .editor-topbar { margin-bottom: 0; }
+  .app-shell.is-empty #editor-form .breadcrumb { display: none; }
+  .app-shell.is-empty #editor-form .editor-body { display: none; }
 
   /* Keep the last lines clear of the browser toolbar / home indicator. */
   .content, .preview {

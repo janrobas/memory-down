@@ -603,7 +603,9 @@
   function showEditorEmpty(show) {
     if (!editorEmpty) { return; }
     editorEmpty.hidden = !show;
-    if (editorForm) { editorForm.hidden = show; }
+    // Desktop hides the whole editor form while empty via CSS; mobile keeps the
+    // top bar (drawer buttons) visible by class. No direct element hiding here.
+    shell.classList.toggle('is-empty', show);
   }
 
   function clearPreview() {
