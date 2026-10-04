@@ -41,6 +41,7 @@ foreach (array_slice($argv, 1) as $arg) {
 // A unique temp directory per run avoids stale state from a previous (possibly
 // still-running) server colliding with this one.
 $tmp = sys_get_temp_dir() . '/memorydown-e2e-' . getmypid() . '-' . bin2hex(random_bytes(3));
+$GLOBALS['tmp'] = $tmp;
 mkdir($tmp . '/memory', 0775, true);
 mkdir($tmp . '/logs', 0775, true);
 
@@ -48,8 +49,8 @@ $phpBin = PHP_BINARY;
 $host = parse_url($base, PHP_URL_HOST) ?: '127.0.0.1';
 $port = parse_url($base, PHP_URL_PORT) ?: 8123;
 
-// Unless an explicit --base-url was given, always bind a free ephemeral port so
-// a lingering server from a previous run cannot collide with this one.
+// Unless an explicit --base-url was given, bind a free ephemeral port so a
+// lingering server from a previous run cannot collide with this one.
 if (!$keepServer && !$explicitBase) {
     $probe = @stream_socket_server('tcp://' . $host . ':0', $errno, $errstr);
     if (false !== $probe) {
@@ -57,8 +58,33 @@ if (!$keepServer && !$explicitBase) {
         $port = (int) substr((string) $name, strrpos((string) $name, ':') + 1);
         fclose($probe);
         $base = 'http://' . $host . ':' . $port;
+    } else {
+        // Could not reserve a port at all: make this explicit rather than
+        // reusing a possibly-occupied default and producing confusing failures.
+        fwrite(STDERR, "[harness] could not reserve a free port: {$errstr} ({$errno})\n");
+        exit(2);
     }
 }
+
+fwrite(STDERR, sprintf(
+    "[harness] php=%s base=%s tmp=%s\n",
+    PHP_VERSION,
+    $base,
+    $tmp
+));
+
+// If the run fails or dies unexpectedly, surface the server log so a CI failure
+// is diagnosable instead of just an exit code.
+$GLOBALS['harness_ok'] = false;
+register_shutdown_function(static function (): void {
+    if (!empty($GLOBALS['harness_ok'])) {
+        return;
+    }
+    $err = error_get_last();
+    if (null !== $err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        fwrite(STDERR, "[harness] FATAL: {$err['message']} in {$err['file']}:{$err['line']}\n");
+    }
+});
 
 $serverProc = null;
 if (!$keepServer) {
@@ -1083,6 +1109,15 @@ if ([] !== $failures) {
     foreach ($failures as $f) {
         echo "  - {$f}\n";
     }
+    // Show the server's own log so a cascade of failures is diagnosable.
+    $srvErr = $tmp . '/server.err.log';
+    if (is_file($srvErr)) {
+        echo "\n--- server.err.log ---\n" . (string) file_get_contents($srvErr) . "\n";
+    }
+    $srvOut = $tmp . '/server.out.log';
+    if (is_file($srvOut) && '' !== trim((string) file_get_contents($srvOut))) {
+        echo "\n--- server.out.log ---\n" . (string) file_get_contents($srvOut) . "\n";
+    }
 }
 
 if (!$keepServer && is_resource($serverProc)) {
@@ -1093,6 +1128,10 @@ if (!$keepServer && is_resource($serverProc)) {
 // Best-effort cleanup of this run's isolated temp directory.
 if (!$keepServer) {
     @exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($tmp));
+}
+
+if (0 === $failed) {
+    $GLOBALS['harness_ok'] = true;
 }
 
 exit($failed > 0 ? 1 : 0);
