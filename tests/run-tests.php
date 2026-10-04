@@ -56,19 +56,12 @@ if (!$keepServer) {
     putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
 
-    $extArgs = [];
-    $extDir = dirname(PHP_BINARY) . '/ext';
-    if (is_dir($extDir)) {
-        $extArgs[] = '-d';
-        $extArgs[] = 'extension_dir=' . $extDir;
-    }
-    foreach (['curl', 'fileinfo', 'mbstring', 'openssl', 'pdo_sqlite', 'sqlite3'] as $ext) {
-        if (!extension_loaded($ext)) {
-            $extArgs[] = '-d';
-            $extArgs[] = 'extension=' . $ext;
-        }
-    }
-    $cmd = array_merge([$phpBin], $extArgs, ['-S', $host . ':' . $port, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php']);
+    // The child `php -S` server inherits the current PHP configuration (its
+    // php.ini / loaded extensions). We deliberately do NOT add `-d extension=`
+    // flags: on some setups `dirname(PHP_BINARY)/ext` exists but is not the
+    // real extension_dir, which would break the child process. Provide the
+    // required extensions via php.ini instead (the CI setup does this).
+    $cmd = array_merge([$phpBin], ['-S', $host . ':' . $port, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php']);
     // Redirect server output to files (pipes would deadlock once php -S fills the stderr buffer).
     $serverProc = proc_open($cmd, [
         1 => ['file', $tmp . '/server.out.log', 'w'],
@@ -167,7 +160,14 @@ function waitForServer(string $base, int $attempts = 40): void
         }
         usleep(250000);
     }
+
+    // Surface the server's own output so a failed start is diagnosable instead
+    // of cascading into dozens of misleading assertion failures.
+    $log = __DIR__ . '/tmp-run/server.err.log';
     fwrite(STDERR, "Server did not come up at {$base}\n");
+    if (is_file($log)) {
+        fwrite(STDERR, "--- server.err.log ---\n" . (string) file_get_contents($log) . "\n");
+    }
     exit(2);
 }
 
