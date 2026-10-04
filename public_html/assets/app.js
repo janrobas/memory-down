@@ -47,17 +47,23 @@
   var backdrop = document.getElementById('backdrop');
   var openMemoriesBtn = document.getElementById('open-memories');
   var openMenuBtn = document.getElementById('open-menu');
+  var editorForm = document.getElementById('editor-form');
+  var editorEmpty = document.getElementById('editor-empty');
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
 
   var FILTER_KEY = 'memorydown.filter';
+  var TAB_KEY = 'memorydown.tab';
   var filterMode = loadFilter();
 
   function loadFilter() {
-    var value = 'all';
-    try { value = localStorage.getItem(FILTER_KEY) || 'all'; } catch (e) { value = 'all'; }
-    return ['all', 'active', 'archived'].indexOf(value) >= 0 ? value : 'all';
+    // Default to "active" on a first visit; once the user has picked a filter
+    // (including "all"/"archived"), respect that choice.
+    var stored = null;
+    try { stored = localStorage.getItem(FILTER_KEY); } catch (e) { stored = null; }
+    if (null === stored) { return 'active'; }
+    return ['all', 'active', 'archived'].indexOf(stored) >= 0 ? stored : 'active';
   }
 
   function passesFilter(archived) {
@@ -219,7 +225,6 @@
     openMemoriesBtn.setAttribute('aria-expanded', String(side === 'left'));
     openMenuBtn.setAttribute('aria-expanded', String(side === 'right'));
     document.body.classList.add('drawer-open');
-    if (side === 'left' && search) { search.focus(); }
   }
 
   function closeDrawer() {
@@ -387,10 +392,37 @@
     if (item.snippet) {
       var snippet = document.createElement('span');
       snippet.className = 'snippet';
-      snippet.textContent = item.snippet;
+      appendHighlighted(snippet, item.snippet, item.query);
       li.appendChild(snippet);
     }
     return li;
+  }
+
+  // Append text to `el`, wrapping occurrences of the query terms in <mark>.
+  // Builds DOM nodes (never innerHTML) so the snippet text is always escaped.
+  function appendHighlighted(el, text, query) {
+    var terms = (query || '')
+      .split(/\s+/)
+      .map(function (t) { return t.replace(/^tag:/i, '').replace(/^is:/i, '').replace(/^["']|["']$/g, '').toLowerCase(); })
+      .filter(function (t) { return t.length >= 2 && t.indexOf(':') === -1; });
+    if (!terms.length) { el.textContent = text; return; }
+
+    var lower = text.toLowerCase();
+    var i = 0;
+    while (i < text.length) {
+      var hit = -1;
+      var hitLen = 0;
+      for (var n = 0; n < terms.length; n++) {
+        var pos = lower.indexOf(terms[n], i);
+        if (pos !== -1 && (hit === -1 || pos < hit)) { hit = pos; hitLen = terms[n].length; }
+      }
+      if (hit === -1) { el.appendChild(document.createTextNode(text.slice(i))); break; }
+      if (hit > i) { el.appendChild(document.createTextNode(text.slice(i, hit))); }
+      var mark = document.createElement('mark');
+      mark.textContent = text.slice(hit, hit + hitLen);
+      el.appendChild(mark);
+      i = hit + hitLen;
+    }
   }
 
   function sectionTitle(name, count) {
@@ -427,13 +459,15 @@
     var empty = document.getElementById('list-empty');
     if (empty) {
       empty.hidden = total > 0;
-      empty.textContent = filterMode === 'archived' ? 'No archived memories.' : 'No memories yet.';
+      empty.textContent = filterMode === 'archived' ? 'No archived memories.'
+        : filterMode === 'active' ? 'No active memories.'
+        : 'No memories yet.';
     }
     markActive(fId.value ? fCategory.value : '', fId.value);
     applyCollapsed();
   }
 
-  function renderResults(results) {
+  function renderResults(results, query) {
     list.textContent = '';
     if (!results.length) {
       var p = document.createElement('p');
@@ -447,7 +481,7 @@
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      ul.appendChild(memLink(item));
+      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query }));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -505,10 +539,42 @@
   }
 
   function resetTabs() {
+    applyTab('write', { persist: false });
+  }
+
+  // Show a specific editor tab ("write" or "preview").
+  function applyTab(tab, opts) {
+    opts = opts || {};
+    var isPreview = tab === 'preview';
     Array.prototype.forEach.call(tabs, function (t) {
-      t.classList.toggle('active', t.getAttribute('data-tab') === 'write');
+      var on = t.getAttribute('data-tab') === tab;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    hidePreview();
+    if (isPreview) { showPreview(); } else { hidePreview(); }
+    if (opts.persist) {
+      try { localStorage.setItem(TAB_KEY, tab); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function tabPref() {
+    var value = null;
+    try { value = localStorage.getItem(TAB_KEY); } catch (e) { value = null; }
+    return ('preview' === value || 'write' === value) ? value : null;
+  }
+
+  // The tab to show when browsing an existing memory: the user's persisted
+  // preference, or Preview by default.
+  function browseTab() {
+    return tabPref() || 'preview';
+  }
+
+  // The empty editor placeholder is shown when no memory is selected and the
+  // user is not creating one. `editorBody` is the form (write/preview).
+  function showEditorEmpty(show) {
+    if (!editorEmpty) { return; }
+    editorEmpty.hidden = !show;
+    if (editorForm) { editorForm.hidden = show; }
   }
 
   function clearPreview() {
@@ -516,9 +582,9 @@
     previewEl.innerHTML = '';
   }
 
-  function fillEditor(doc) {
+  function fillEditor(doc, tab) {
     // Never let a previous document's preview linger: clear first, always.
-    var wasPreview = previewVisible();
+    showEditorEmpty(false);
     clearPreview();
 
     fId.value = doc.id;
@@ -545,16 +611,16 @@
     });
     setStatus('');
 
-    // If the user was reading in Preview, immediately render the new document
-    // instead of leaving the pane empty.
-    if (wasPreview) { renderPreview(); }
+    // Browsing defaults to Preview (unless the user prefers Write); saving keeps
+    // whatever tab is currently visible.
+    applyTab(tab || browseTab(), { persist: false });
   }
 
   function loadMemory(category, id) {
     return api(endpoint.memory + '?category=' + encodeURIComponent(category) + '&id=' + encodeURIComponent(id))
       .then(function (res) {
         if (res.ok && res.data.memory) {
-          fillEditor(res.data.memory);
+          fillEditor(res.data.memory, browseTab());
         } else {
           setStatus('Could not load that memory.', 'err');
         }
@@ -562,6 +628,7 @@
   }
 
   function startNew(defaultCategory) {
+    showEditorEmpty(false);
     clearPreview();
 
     fId.value = '';
@@ -573,7 +640,7 @@
     deleteBtn.hidden = true;
     newCats.hidden = false;
     moveField.hidden = true;
-    syncCategoryUI(defaultCategory || 'facts');
+    syncCategoryUI(defaultCategory || 'notes');
     updateBreadcrumb('', '');
     markActive('', '');
     history.replaceState(null, '', '/ui');
@@ -588,6 +655,7 @@
     markActive('', '');
     history.replaceState(null, '', '/ui');
     setStatus('');
+    showEditorEmpty(true);
   }
 
   /* --------------------------------------------------------------- saving */
@@ -614,7 +682,7 @@
     setStatus('Saving…');
     return api(endpoint.memory, { method: 'POST', body: payload }).then(function (res) {
       if (res.ok && res.data.memory) {
-        fillEditor(res.data.memory);
+        fillEditor(res.data.memory, previewVisible() ? 'preview' : 'write');
         markSaved(currentPayload());
         refreshTree();
         return true;
@@ -688,7 +756,7 @@
         return api(endpoint.memory, { method: 'POST', body: payload }).then(function (saved) {
           if (saved.ok && saved.data.memory) {
             if (fId.value === id) {
-              fillEditor(saved.data.memory);
+              fillEditor(saved.data.memory, previewVisible() ? 'preview' : 'write');
               markSaved(currentPayload());
             }
             setStatus('Moved to ' + toCategory + '.', 'ok');
@@ -725,7 +793,7 @@
 
   newBtn.addEventListener('click', function () {
     saveBeforeSwitch().then(function () {
-      startNew('facts');
+      startNew('notes');
       if (isMobile()) { closeDrawer(); }
     });
   });
@@ -849,7 +917,7 @@
     if (q.length < 2) { refreshTree(); return; }
     var url = endpoint.search + '?q=' + encodeURIComponent(q) + '&archived=' + encodeURIComponent(filterMode);
     api(url).then(function (res) {
-      if (res.ok) { renderResults(res.data.results || []); }
+      if (res.ok) { renderResults(res.data.results || [], q); }
     });
   }, 180);
 
@@ -963,6 +1031,10 @@
       if ('ArrowDown' === event.key) { event.preventDefault(); moveCursor(1); }
       else if ('ArrowUp' === event.key) { event.preventDefault(); moveCursor(-1); }
       else if ('Enter' === event.key) { event.preventDefault(); openCursor(); }
+      else if ('Delete' === event.key) {
+        // Delete the currently open memory (same confirm + guard as the button).
+        if ('' !== fId.value && !deleteBtn.hidden) { event.preventDefault(); deleteBtn.click(); }
+      }
       else if ('n' === event.key.toLowerCase()) { event.preventDefault(); newBtn.click(); }
       else if ('e' === event.key.toLowerCase()) { event.preventDefault(); fTitle.focus(); }
     });
@@ -972,7 +1044,9 @@
   function markActiveFilter() {
     if (!filterBar) { return; }
     Array.prototype.forEach.call(filterBar.querySelectorAll('.filter-btn'), function (btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-filter') === filterMode);
+      var on = btn.getAttribute('data-filter') === filterMode;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
   }
 
@@ -1002,8 +1076,8 @@
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button === 1) { return; }
       event.preventDefault();
 
-      filterMode = 'all';
-      try { localStorage.setItem(FILTER_KEY, 'all'); } catch (e) { /* ignore */ }
+      filterMode = 'active';
+      try { localStorage.setItem(FILTER_KEY, 'active'); } catch (e) { /* ignore */ }
       search.value = '';
       saveIdle.cancel();
 
@@ -1090,12 +1164,10 @@
     if (isDirty()) { saveIdle.cancel(); save(); }
   });
 
-  /* Write / Preview tabs. */
+  /* Write / Preview tabs. Clicking one remembers the choice as a preference. */
   Array.prototype.forEach.call(tabs, function (tab) {
     tab.addEventListener('click', function () {
-      Array.prototype.forEach.call(tabs, function (t) { t.classList.remove('active'); });
-      tab.classList.add('active');
-      if (tab.getAttribute('data-tab') === 'preview') { showPreview(); } else { hidePreview(); }
+      applyTab(tab.getAttribute('data-tab'), { persist: true });
     });
   });
 
@@ -1178,6 +1250,23 @@
   wireShortcuts();
   applyCollapsed();
   syncSearchClear();
+
+  // Server-rendered state: an existing memory is selected -> open it in the
+  // browse tab; otherwise show the empty placeholder (create via n / button).
+  if ('' !== fId.value) {
+    showEditorEmpty(false);
+    applyTab(browseTab(), { persist: false });
+  } else {
+    showEditorEmpty(true);
+  }
+
+  var emptyNew = document.getElementById('editor-empty-new');
+  if (emptyNew) {
+    emptyNew.addEventListener('click', function () {
+      saveBeforeSwitch().then(function () { startNew('notes'); });
+    });
+  }
+
   // Re-render from the API so the persisted All/Active/Archived filter applies
   // to the server-rendered tree (which otherwise shows everything).
   refreshTree().catch(function () { /* ignore */ });

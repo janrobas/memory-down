@@ -37,9 +37,9 @@ if (!in_array($selCategory, $categories, true)) {
         <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search" title="Clear search">×</button>
       </div>
       <div class="filter" id="filter" role="group" aria-label="Show memories">
-        <button type="button" class="filter-btn active" data-filter="all">All</button>
-        <button type="button" class="filter-btn" data-filter="active">Active</button>
-        <button type="button" class="filter-btn" data-filter="archived">Archived</button>
+        <button type="button" class="filter-btn active" data-filter="active" aria-pressed="true">Active</button>
+        <button type="button" class="filter-btn" data-filter="all" aria-pressed="false">All</button>
+        <button type="button" class="filter-btn" data-filter="archived" aria-pressed="false">Archived</button>
       </div>
       <button id="new-memory" type="button" class="primary block">+ New memory</button>
     </div>
@@ -123,16 +123,21 @@ if (!in_array($selCategory, $categories, true)) {
       </div>
 
       <div class="editor-body">
-        <div class="tabs">
-          <button type="button" class="tab active" data-tab="write">Write</button>
-          <button type="button" class="tab" data-tab="preview">Preview</button>
+        <div class="tabs" role="tablist" aria-label="Editor view">
+          <button type="button" class="tab active" data-tab="write" role="tab" aria-selected="true" aria-controls="f-content" id="tab-write">Write</button>
+          <button type="button" class="tab" data-tab="preview" role="tab" aria-selected="false" aria-controls="preview" id="tab-preview">Preview</button>
           <span class="status" id="status"></span>
         </div>
 
-        <textarea id="f-content" name="content" class="content" spellcheck="false" placeholder="Write Markdown…"><?= WebApp::h($selBody) ?></textarea>
-        <div id="preview" class="preview markdown" hidden></div>
+        <textarea id="f-content" name="content" class="content" spellcheck="false" placeholder="Write Markdown…" role="tabpanel" aria-labelledby="tab-write"><?= WebApp::h($selBody) ?></textarea>
+        <div id="preview" class="preview markdown" hidden role="tabpanel" aria-labelledby="tab-preview"></div>
       </div>
     </form>
+
+    <div class="editor-empty" id="editor-empty"<?= '' !== $selId ? ' hidden' : '' ?>>
+      <p class="muted">Select a memory from the list, or create a new one.</p>
+      <button type="button" class="primary" id="editor-empty-new">+ New memory</button>
+    </div>
   </main>
 
   <aside class="command-drawer" id="command-drawer" aria-label="Menu">

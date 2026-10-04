@@ -561,6 +561,13 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   white-space: normal;
 }
 
+.list .snippet mark {
+  background: var(--accent-weak);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 0 .1rem;
+}
+
 /* Drag-and-drop: highlight category headers as drop targets. */
 body.dragging .cat-name {
   outline: 1px dashed var(--border);
@@ -590,6 +597,20 @@ body.dragging .cat.drop-hover .cat-name {
   height: 100%;
   min-height: 0;
 }
+
+/* Shown when no memory is selected and none is being created. */
+.editor-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  text-align: center;
+  padding: 2rem;
+}
+
+.editor-empty p { margin: 0; }
 
 .editor-head { padding: .9rem 1.1rem; border-bottom: 1px solid var(--border); }
 
