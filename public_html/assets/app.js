@@ -1224,7 +1224,7 @@
 
   /* Editing: schedule autosave, update preview live, flag unsaved. */
   function onEdit() {
-    if (isDirty()) { setStatus('Unsaved…'); } else { setStatus(''); }
+    if (isDirty()) { setStatus('Editing…'); } else { setStatus(''); }
     saveIdle();
     if (previewVisible()) { renderPreview(); }
   }
