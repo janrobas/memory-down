@@ -148,8 +148,19 @@ if (!in_array($selCategory, $categories, true)) {
         <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
         <button type="button" role="menuitem" data-theme-value="dark"><span class="swatch dark"></span>Dark</button>
         <button type="button" role="menuitem" data-theme-value="retro"><span class="swatch retro"></span>Retro orange</button>
-        <button type="button" role="menuitem" data-theme-value="green"><span class="swatch green"></span>Green</button>
         <button type="button" role="menuitem" data-theme-value="blue"><span class="swatch blue"></span>Blue</button>
+        <div class="theme-group" role="presentation">Spring</div>
+        <button type="button" role="menuitem" data-theme-value="spring-light"><span class="swatch spring-light"></span>Spring — light</button>
+        <button type="button" role="menuitem" data-theme-value="spring-dark"><span class="swatch spring-dark"></span>Spring — dark</button>
+        <div class="theme-group" role="presentation">Summer</div>
+        <button type="button" role="menuitem" data-theme-value="summer-light"><span class="swatch summer-light"></span>Summer — light</button>
+        <button type="button" role="menuitem" data-theme-value="summer-dark"><span class="swatch summer-dark"></span>Summer — dark</button>
+        <div class="theme-group" role="presentation">Autumn</div>
+        <button type="button" role="menuitem" data-theme-value="autumn-light"><span class="swatch autumn-light"></span>Autumn — light</button>
+        <button type="button" role="menuitem" data-theme-value="autumn-dark"><span class="swatch autumn-dark"></span>Autumn — dark</button>
+        <div class="theme-group" role="presentation">Winter</div>
+        <button type="button" role="menuitem" data-theme-value="winter-light"><span class="swatch winter-light"></span>Winter — light</button>
+        <button type="button" role="menuitem" data-theme-value="winter-dark"><span class="swatch winter-dark"></span>Winter — dark</button>
       </div>
     </div>
 
