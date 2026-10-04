@@ -371,7 +371,17 @@ body.app { overflow: hidden; }
   border-bottom: 1px solid var(--border);
 }
 
-.brand { font-weight: 700; letter-spacing: .01em; margin-bottom: .6rem; }
+.brand {
+  display: inline-block;
+  font-weight: 700;
+  letter-spacing: .01em;
+  margin-bottom: .6rem;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.brand:hover { color: var(--accent); }
 
 .search-wrap { position: relative; margin-bottom: .2rem; }
 

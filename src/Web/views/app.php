@@ -31,7 +31,7 @@ if (!in_array($selCategory, $categories, true)) {
 
   <aside class="sidebar">
     <div class="sidebar-top">
-      <div class="brand">MemoryDown</div>
+      <a class="brand" href="/ui" id="brand-home">MemoryDown</a>
       <div class="search-wrap">
         <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
         <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search" title="Clear search">×</button>

@@ -984,6 +984,31 @@
     });
   }
 
+  /* Clicking the product name returns to a clean start (the usual logo/home
+     convention): auto-save pending edits, reset the transient view state
+     (search + All/Active/Archived filter), scroll to top, and go to /ui in the
+     "New memory" state. Theme and collapsed categories are preferences and are
+     left untouched. */
+  function wireBrandHome() {
+    var brand = document.getElementById('brand-home');
+    if (!brand) { return; }
+    brand.addEventListener('click', function (event) {
+      // Let modified / middle clicks behave like a normal link.
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button === 1) { return; }
+      event.preventDefault();
+
+      filterMode = 'all';
+      try { localStorage.setItem(FILTER_KEY, 'all'); } catch (e) { /* ignore */ }
+      search.value = '';
+      saveIdle.cancel();
+
+      saveBeforeSwitch().then(function () {
+        window.scrollTo(0, 0);
+        window.location.href = '/ui';
+      });
+    });
+  }
+
   /* Archive toggle: saved immediately (a discrete action, like a move). */
   fArchived.addEventListener('change', function () {
     if (isDirty()) { saveIdle.cancel(); save(); }
@@ -1072,6 +1097,7 @@
   wireReindex();
   wireDrawers();
   wireFilter();
+  wireBrandHome();
   wireShortcuts();
   applyCollapsed();
   syncSearchClear();
