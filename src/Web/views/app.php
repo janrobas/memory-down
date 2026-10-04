@@ -80,8 +80,7 @@ if (!in_array($selCategory, $categories, true)) {
 
           <span class="index-status muted" id="index-status"
                 data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
-                data-indexed="<?= (int) ($engine['indexed'] ?? 0) ?>"
-                title="Search index"><?= WebApp::h(($engine['engine'] ?? 'direct') === 'sqlite-fts5' ? 'Indexed ' . (int) ($engine['indexed'] ?? 0) : 'Direct search') ?></span>
+                title="Search engine"><?= WebApp::h(($engine['engine'] ?? 'direct') === 'sqlite-fts5' ? 'Search: indexed' : 'Search: direct') ?></span>
 
           <button type="button" id="open-menu" class="icon-btn" aria-controls="command-drawer" aria-expanded="false" title="Menu">⋯</button>
         </div>
@@ -154,7 +153,7 @@ if (!in_array($selCategory, $categories, true)) {
       <button type="button" id="close-menu" class="icon-btn" title="Close">✕</button>
     </div>
 
-    <button type="button" id="reindex" title="Rebuild the search index">⟳ Reindex</button>
+    <button type="button" id="reindex" title="Rebuild the search index" aria-live="polite">⟳ Reindex</button>
 
     <div class="theme-picker">
       <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>

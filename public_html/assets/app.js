@@ -161,10 +161,9 @@
     var el = document.getElementById('index-status');
     if (!el || !status) { return; }
     el.setAttribute('data-engine', status.engine || 'direct');
-    el.setAttribute('data-indexed', String(status.indexed || 0));
-    el.textContent = status.engine === 'sqlite-fts5'
-      ? 'Indexed ' + (status.indexed || 0)
-      : 'Direct search';
+    // The entry count is reported on the Reindex button; this indicator only
+    // tells the user which engine search uses.
+    el.textContent = status.engine === 'sqlite-fts5' ? 'Search: indexed' : 'Search: direct';
   }
 
   function wireLogout() {
@@ -181,27 +180,53 @@
     });
   }
 
+  // Label the button shows when there is nothing to report.
+  var REINDEX_IDLE_LABEL = '⟳ Reindex';
+
+  // Re-enable the reindex button (after an edit or memory change) and restore
+  // its idle label. A no-op while a reindex is in flight.
+  function resetReindexButton() {
+    var btn = document.getElementById('reindex');
+    if (!btn || btn.getAttribute('data-busy') === '1') { return; }
+    btn.disabled = false;
+    btn.textContent = REINDEX_IDLE_LABEL;
+    btn.classList.remove('ok', 'err');
+  }
+
   function wireReindex() {
     var btn = document.getElementById('reindex');
     if (!btn) { return; }
     btn.addEventListener('click', function () {
+      if (btn.disabled) { return; }
       btn.disabled = true;
-      setStatus('Reindexing…');
+      btn.setAttribute('data-busy', '1');
+      btn.classList.remove('ok', 'err');
+      btn.textContent = '⟳ Reindexing…';
       api(endpoint.reindex, { method: 'POST' }).then(function (res) {
-        btn.disabled = false;
+        btn.setAttribute('data-busy', '0');
         if (res.ok && res.data.status) {
           renderIndexStatus(res.data.status);
           if (res.data.status.engine === 'sqlite-fts5') {
-            setStatus('Indexed ' + (res.data.status.indexed || 0) + ' entries.', 'ok');
+            // Success: report on the button and leave it disabled until the
+            // next edit or memory change (resetReindexButton).
+            btn.textContent = 'Indexed ' + (res.data.status.indexed || 0);
+            btn.classList.add('ok');
           } else {
-            setStatus('Index unavailable — using direct search.', 'err');
+            // Index unavailable: nothing was indexed; let the user retry.
+            btn.textContent = 'Index unavailable';
+            btn.classList.add('err');
+            btn.disabled = false;
           }
         } else {
-          setStatus(res.data.error || 'Reindex failed.', 'err');
+          btn.textContent = 'Reindex failed';
+          btn.classList.add('err');
+          btn.disabled = false;
         }
       }).catch(function () {
+        btn.setAttribute('data-busy', '0');
+        btn.textContent = 'Reindex failed';
+        btn.classList.add('err');
         btn.disabled = false;
-        setStatus('Network error.', 'err');
       });
     });
   }
@@ -598,6 +623,7 @@
     // Never let a previous document's preview linger: clear first, always.
     showEditorEmpty(false);
     clearPreview();
+    resetReindexButton();
 
     fId.value = doc.id;
     fTitle.value = doc.title || '';
@@ -643,6 +669,7 @@
   function startNew(defaultCategory) {
     showEditorEmpty(false);
     clearPreview();
+    resetReindexButton();
 
     fId.value = '';
     fTitle.value = '';
@@ -1239,6 +1266,7 @@
 
   /* Editing: schedule autosave, update preview live, flag unsaved. */
   function onEdit() {
+    resetReindexButton();
     if (isDirty()) { setStatus('Editing…'); } else { setStatus(''); }
     saveIdle();
     if (previewVisible()) { renderPreview(); }

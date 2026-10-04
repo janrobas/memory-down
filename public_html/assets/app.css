@@ -690,6 +690,12 @@ body.dragging .cat.drop-hover .cat-name {
   font-size: .82rem;
 }
 
+/* The reindex button doubles as a status: reserve width so its label can change
+   ("Reindexing…", "Indexed 28", ...) without shifting the toolbar. */
+#reindex { min-width: 8.5rem; text-align: center; }
+#reindex.ok { color: var(--accent); }
+#reindex.err { color: var(--danger); }
+
 .command-drawer .command-head { display: none; }
 
 /* The topbar row shares its line with the command bar, so reserve its width. */
