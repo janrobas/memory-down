@@ -568,6 +568,20 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   padding: 0 .1rem;
 }
 
+/* Search results: text is selectable (title and snippet), unlike the main tree
+   where the whole row is a drag source. Drag-to-move is disabled in JS. */
+.list .cat.results,
+.list .cat.results .mem,
+.list .cat.results .snippet {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.list .cat.results .mem { cursor: text; }
+
+/* Themed text selection everywhere selection is allowed. */
+::selection { background: var(--accent); color: var(--accent-contrast); }
+::-moz-selection { background: var(--accent); color: var(--accent-contrast); }
+
 /* Drag-and-drop: highlight category headers as drop targets. */
 body.dragging .cat-name {
   outline: 1px dashed var(--border);

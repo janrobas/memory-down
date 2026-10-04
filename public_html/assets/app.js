@@ -364,11 +364,15 @@
     var a = document.createElement('a');
     a.className = 'mem'
       + (item.archived ? ' archived' : '')
-      + (item.new && !item.archived ? ' new' : '');
+      + (item.new && !item.archived ? ' new' : '')
+      + (item.selectable ? ' selectable' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
     a.setAttribute('data-category', item.category);
     a.setAttribute('data-id', item.id);
-    a.setAttribute('draggable', 'true');
+    // Search results are selectable text; the main tree remains a drag source.
+    if (!item.selectable) {
+      a.setAttribute('draggable', 'true');
+    }
 
     // Title truncates; badges are siblings so they always stay visible.
     var title = document.createElement('span');
@@ -477,11 +481,11 @@
       return;
     }
     var section = document.createElement('section');
-    section.className = 'cat';
+    section.className = 'cat results';
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query }));
+      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query, selectable: true }));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -803,6 +807,9 @@
   list.addEventListener('click', function (event) {
     var link = event.target.closest('.mem');
     if (!link) { return; }
+    // In search results the text is selectable: a click that concludes a text
+    // selection must not open the memory.
+    if (window.getSelection && String(window.getSelection()).length > 0) { return; }
     event.preventDefault();
     var category = link.getAttribute('data-category');
     var id = link.getAttribute('data-id');
