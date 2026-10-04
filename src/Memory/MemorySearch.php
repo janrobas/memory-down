@@ -27,7 +27,7 @@ final class MemorySearch implements SearchEngine
      */
     public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null): array
     {
-        $limit = min(max(1, $limit), 50);
+        $limit = min(max(1, $limit), 200);
         $q = SearchQuery::parse($query)->withExplicit($tag, $archived);
         if ($q->isEmpty()) {
             return [];

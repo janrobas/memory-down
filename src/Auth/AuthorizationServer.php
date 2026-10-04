@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MemoryDown\Auth;
 
 use MemoryDown\Config;
+use MemoryDown\Support\RateLimiter;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -35,6 +36,7 @@ final class AuthorizationServer
         private readonly TokenStore $tokens,
         private readonly ClientRegistry $clients,
         private readonly LoggerInterface $logger = new \Psr\Log\NullLogger(),
+        private readonly ?RateLimiter $limiter = null,
     ) {
     }
 
@@ -93,6 +95,10 @@ final class AuthorizationServer
      */
     public function handleAuthorize(ServerRequestInterface $request): ResponseInterface
     {
+        if ('POST' === strtoupper($request->getMethod()) && !$this->withinRateLimit('consent', $request, $this->config->rateLimitConsentMax)) {
+            return $this->tooMany();
+        }
+
         $params = $this->params($request, mergeQuery: true);
         $errors = $this->validateAuthorizeRequest($params);
         $client = $this->paramsClient($params);
@@ -211,6 +217,10 @@ final class AuthorizationServer
 
     public function handleToken(ServerRequestInterface $request): ResponseInterface
     {
+        if (!$this->withinRateLimit('token', $request, $this->config->rateLimitTokenMax)) {
+            return $this->tooMany();
+        }
+
         $params = $this->params($request);
         $grant = (string) ($params['grant_type'] ?? '');
 
@@ -551,6 +561,48 @@ final class AuthorizationServer
         }
 
         return hash_equals($expected, $given);
+    }
+
+    /**
+     * Apply a per-IP fixed-window limit for an endpoint. Returns true when the
+     * request is allowed (including when limiting is disabled/unavailable).
+     */
+    private function withinRateLimit(string $bucket, ServerRequestInterface $request, int $max): bool
+    {
+        if (null === $this->limiter) {
+            return true;
+        }
+
+        if ($this->limiter->allow(
+            $bucket . ':' . $this->clientKey($request),
+            $max,
+            $this->config->rateLimitWindow,
+        )) {
+            return true;
+        }
+
+        $this->logger->warning('oauth.rate_limited', ['endpoint' => $bucket]);
+
+        return false;
+    }
+
+    /**
+     * Client key for rate limiting. Uses the direct peer address only; proxy
+     * forwarding headers are not trusted because clients can forge them.
+     */
+    private function clientKey(ServerRequestInterface $request): string
+    {
+        $params = $request->getServerParams();
+
+        return (string) ($params['REMOTE_ADDR'] ?? 'unknown');
+    }
+
+    private function tooMany(): ResponseInterface
+    {
+        return $this->json([
+            'error' => 'temporarily_unavailable',
+            'error_description' => 'Too many requests. Please try again shortly.',
+        ], 429)->withHeader('Retry-After', (string) max(1, $this->config->rateLimitWindow));
     }
 
     private function appendParams(string $url, array $params): string

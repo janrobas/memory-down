@@ -56,10 +56,17 @@ if (!$keepServer) {
     putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
 
-    $extArgs = ['-d', 'extension_dir=' . dirname(PHP_BINARY) . '/ext'];
-    foreach (['curl', 'fileinfo', 'mbstring', 'openssl', 'pdo_sqlite', 'sqlite3'] as $ext) {
+    $extArgs = [];
+    $extDir = dirname(PHP_BINARY) . '/ext';
+    if (is_dir($extDir)) {
         $extArgs[] = '-d';
-        $extArgs[] = 'extension=' . $ext;
+        $extArgs[] = 'extension_dir=' . $extDir;
+    }
+    foreach (['curl', 'fileinfo', 'mbstring', 'openssl', 'pdo_sqlite', 'sqlite3'] as $ext) {
+        if (!extension_loaded($ext)) {
+            $extArgs[] = '-d';
+            $extArgs[] = 'extension=' . $ext;
+        }
     }
     $cmd = array_merge([$phpBin], $extArgs, ['-S', $host . ':' . $port, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php']);
     // Redirect server output to files (pipes would deadlock once php -S fills the stderr buffer).

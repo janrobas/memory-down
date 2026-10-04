@@ -75,7 +75,7 @@ final class MemoryIndex implements SearchEngine
             return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
         }
 
-        $limit = min(max(1, $limit), 50);
+        $limit = min(max(1, $limit), 200);
         // Fetch a wider window: archived entries are demoted after reading, so
         // they must not crowd active hits out of a tight LIMIT.
         $candidates = min(max($limit * 4, 50), 200);

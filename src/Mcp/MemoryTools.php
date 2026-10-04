@@ -22,6 +22,9 @@ final class MemoryTools
 {
     private const DEFAULT_LIMIT = 10;
 
+    /** Upper bound on a single memory body, to protect shared hosting. */
+    private const MAX_CONTENT_BYTES = 102400;
+
     public function __construct(
         private readonly MemoryStore $store,
         private readonly SearchEngine $search,
@@ -76,6 +79,9 @@ final class MemoryTools
                 if ('' === $content) {
                     return self::fail('content must not be empty.');
                 }
+                if (strlen($content) > self::MAX_CONTENT_BYTES) {
+                    return self::fail('content is too large (max ' . (self::MAX_CONTENT_BYTES / 1024) . ' KB).');
+                }
                 if (!PathValidator::isCategory($category)) {
                     return self::fail('Invalid category. Allowed: preferences, projects, decisions, facts, people, context, notes.');
                 }
@@ -86,7 +92,7 @@ final class MemoryTools
                     $changes = [
                         'content' => $content,
                         'title' => $title !== '' ? $title : $duplicate['title'],
-                        'tags' => array_merge($duplicate['tags'], $tags),
+                        'tags' => array_values(array_unique(array_merge($duplicate['tags'], $tags))),
                     ];
                     if ($archived) {
                         $changes['archived'] = true;
@@ -142,30 +148,33 @@ final class MemoryTools
                 $limit = min(max(1, $limit), 50);
                 $query = trim($query);
                 $archivedFilter = self::archivedFilter($archived);
+                $probe = $limit + 1;
 
                 $docs = '' !== $query
                     ? $this->search->search(
                         $query,
                         '' !== $category ? $category : null,
-                        $limit,
+                        $probe,
                         includeBody: true,
                         tag: '' !== $tag ? $tag : null,
                         archived: $archivedFilter,
                     )
                     : $this->store->list(
                         '' !== $category ? $category : null,
-                        $limit,
+                        $probe,
                         $archivedFilter,
                         '' !== $tag ? $tag : null,
                     );
 
+                [$docs, $returned, $hasMore] = self::page($docs, $limit);
+
                 if ([] === $docs) {
-                    return self::ok(['memories' => [], 'message' => 'No memories found.']);
+                    return self::ok(['memories' => [], 'returned' => 0, 'has_more' => false, 'message' => 'No memories found.']);
                 }
 
                 $public = array_map(self::publicDocument(...), $docs);
 
-                return self::ok(['memories' => $public]);
+                return self::ok(['memories' => $public, 'returned' => $returned, 'has_more' => $hasMore]);
             },
         ];
     }
@@ -206,20 +215,24 @@ final class MemoryTools
                     return self::fail('Invalid category.');
                 }
                 $limit = min(max(1, $limit), 50);
+                $probe = $limit + 1;
 
                 $results = $this->search->search(
                     $query,
                     '' !== $category ? $category : null,
-                    $limit,
+                    $probe,
                     $includeBody,
                     '' !== $tag ? $tag : null,
                     self::archivedFilter($archived),
                 );
+
+                [$results, $returned, $hasMore] = self::page($results, $limit);
+
                 if ([] === $results) {
-                    return self::ok(['results' => [], 'message' => 'No matches.']);
+                    return self::ok(['results' => [], 'returned' => 0, 'has_more' => false, 'message' => 'No matches.']);
                 }
 
-                return self::ok(['results' => $results]);
+                return self::ok(['results' => $results, 'returned' => $returned, 'has_more' => $hasMore]);
             },
         ];
     }
@@ -255,6 +268,9 @@ final class MemoryTools
                 }
                 $changes = [];
                 if ('' !== $content) {
+                    if (strlen($content) > self::MAX_CONTENT_BYTES) {
+                        return self::fail('content is too large (max ' . (self::MAX_CONTENT_BYTES / 1024) . ' KB).');
+                    }
                     $changes['content'] = trim($content);
                 }
                 if ('' !== $title) {
@@ -367,6 +383,7 @@ final class MemoryTools
                 return self::ok([
                     'categories' => $this->store->categories(),
                     'total' => $this->store->count(),
+                    'returned' => count($docs),
                     'memories' => array_map(self::publicDocument(...), $docs),
                 ]);
             },
@@ -376,7 +393,26 @@ final class MemoryTools
     /* ------------------------------------------------------------------ */
 
     /**
-     * Locate the category of an id across all categories (ids are unique).
+     * Split a data set into a single page plus a "more available" flag. The
+     * caller is expected to have fetched one extra item (limit + 1) so that
+     * has_more is exact rather than a guess.
+     *
+     * @param list<array<string, mixed>> $items
+     *
+     * @return array{0: list<array<string, mixed>>, 1: int, 2: bool}
+     */
+    private static function page(array $items, int $limit): array
+    {
+        $hasMore = count($items) > $limit;
+        $page = array_slice($items, 0, max(1, $limit));
+
+        return [$page, count($page), $hasMore];
+    }
+
+    /**
+     * Locate the category of an id across all categories. Memory ids carry a
+     * random suffix and are globally unique across the whole corpus, so at most
+     * one category can contain a given id.
      */
     private function categoryFor(string $id): string
     {

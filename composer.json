@@ -18,6 +18,14 @@
             "MemoryDown\\": "src/"
         }
     },
+    "scripts": {
+        "test": [
+            "@test:unit",
+            "@test:e2e"
+        ],
+        "test:unit": "@php tests/unit-tests.php",
+        "test:e2e": "@php tests/run-tests.php"
+    },
     "config": {
         "optimize-autoloader": true,
         "sort-packages": true,

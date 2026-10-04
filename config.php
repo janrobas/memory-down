@@ -119,4 +119,16 @@ return [
         FILTER_VALIDATE_BOOL
     ),
     'index_path' => rtrim((string) ($_ENV['INDEX_PATH'] ?? getenv('INDEX_PATH') ?: $__dataPath . '/index/memory.sqlite'), '/\\'),
+
+    // -----------------------------------------------------------------------
+    // Lightweight per-IP rate limiting for the OAuth token and consent
+    // endpoints (fixed window, file-backed; no daemon required).
+    // -----------------------------------------------------------------------
+    'rate_limit_enabled' => filter_var(
+        $_ENV['RATE_LIMIT_ENABLED'] ?? getenv('RATE_LIMIT_ENABLED') ?: 'true',
+        FILTER_VALIDATE_BOOL
+    ),
+    'rate_limit_token_max' => (int) ($_ENV['RATE_LIMIT_TOKEN_MAX'] ?? getenv('RATE_LIMIT_TOKEN_MAX') ?: 30),
+    'rate_limit_consent_max' => (int) ($_ENV['RATE_LIMIT_CONSENT_MAX'] ?? getenv('RATE_LIMIT_CONSENT_MAX') ?: 10),
+    'rate_limit_window' => (int) ($_ENV['RATE_LIMIT_WINDOW'] ?? getenv('RATE_LIMIT_WINDOW') ?: 60),
 ];

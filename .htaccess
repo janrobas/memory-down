@@ -8,3 +8,15 @@
     RewriteRule ^$ - [L]
     RewriteRule ^ - [F]
 </IfModule>
+
+# Defence in depth: never serve secrets/config even if mod_rewrite is disabled
+# or this project root is somehow exposed as the document root.
+<FilesMatch "(^\.|\.env($|\.)|\.gitignore$|\.lock$|\.sqlite$)">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

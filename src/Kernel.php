@@ -24,6 +24,7 @@ final class Kernel
     public readonly Auth\TokenStore $tokens;
     public readonly Auth\ClientRegistry $clients;
     public readonly Auth\AuthorizationServer $auth;
+    public readonly Support\RateLimiter $rateLimiter;
 
     private static ?self $instance = null;
 
@@ -91,11 +92,17 @@ final class Kernel
             $this->logger,
         );
 
+        $this->rateLimiter = new Support\RateLimiter(
+            $config->dataPath . '/auth/ratelimit',
+            $config->rateLimitEnabled,
+        );
+
         $this->auth = new Auth\AuthorizationServer(
             $config,
             $this->tokens,
             $this->clients,
             $this->logger,
+            $this->rateLimiter,
         );
     }
 }

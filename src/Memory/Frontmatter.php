@@ -68,10 +68,14 @@ final class Frontmatter
      */
     public static function split(string $raw): array
     {
-        if (str_starts_with($raw, "---\n")) {
-            $end = strpos($raw, "\n---", 4);
+        // Accept both LF ("---\n") and CRLF ("---\r\n") so files edited in
+        // editors that write Windows line endings are still parsed as having
+        // frontmatter (otherwise tags/created/archived would be silently lost).
+        if (preg_match('/^---\r?\n/', $raw, $m)) {
+            $offset = strlen($m[0]);
+            $end = strpos($raw, "\n---", $offset);
             if (false !== $end) {
-                $block = substr($raw, 4, $end - 4);
+                $block = substr($raw, $offset, $end - $offset);
                 $body = substr($raw, $end + 4);
                 $body = ltrim($body, "\r\n");
 

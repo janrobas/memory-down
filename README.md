@@ -105,6 +105,10 @@ in the hosting panel or php.ini win over `.env`.
 | `ADMIN_SETUP_TOKEN` | *(empty)* | Optional extra secret for the first-run `/ui/setup` form |
 | `INDEX_ENABLED` | `true` | Build the SQLite FTS5 search index |
 | `INDEX_PATH` | `./data/index/memory.sqlite` | Location of the disposable search index |
+| `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limiting on the OAuth token + consent endpoints |
+| `RATE_LIMIT_TOKEN_MAX` | `30` | Max token requests per IP per window |
+| `RATE_LIMIT_CONSENT_MAX` | `10` | Max consent submissions per IP per window |
+| `RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds |
 
 ```
 APP_BASE_URL=https://memory.example.com
@@ -181,7 +185,9 @@ built-in memory.
 
 ```bash
 curl -s https://memory.example.com/health
-php tests/run-tests.php   # full chain: health → discovery → 401 → DCR → token → MCP → tools → traversal
+composer test              # unit tests + full protocol chain
+php tests/unit-tests.php   # frontmatter (incl. CRLF), path guards, search query, rate limiter
+php tests/run-tests.php    # chain: health → discovery → 401 → DCR → token → MCP → tools → traversal
 ```
 
 `/health` reports `checks.search_index.engine` as `sqlite-fts5` (indexed) or
@@ -198,6 +204,10 @@ php tests/run-tests.php   # full chain: health → discovery → 401 → DCR →
   CSP, every other route keeps `default-src 'none'`.
 - Set `OAUTH_CONSENT_PASSWORD` (ideally a hash) so the consent page is not
   click-through-only.
+- The OAuth token and consent endpoints are rate-limited per IP (file-backed,
+  no daemon); disable with `RATE_LIMIT_ENABLED=false`.
+- `.env` and other dotfiles/config are denied by the root `.htaccess`, and the
+  preferred deployment keeps them outside `public_html/` entirely.
 
 ## Limitations
 

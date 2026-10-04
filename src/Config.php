@@ -35,6 +35,11 @@ final class Config
     public readonly bool $indexEnabled;
     public readonly string $indexPath;
 
+    public readonly bool $rateLimitEnabled;
+    public readonly int $rateLimitTokenMax;
+    public readonly int $rateLimitConsentMax;
+    public readonly int $rateLimitWindow;
+
     public function __construct(array $c)
     {
         $this->appBaseUrl = (string) $c['app_base_url'];
@@ -58,6 +63,11 @@ final class Config
 
         $this->indexEnabled = (bool) ($c['index_enabled'] ?? true);
         $this->indexPath = (string) ($c['index_path'] ?? $this->dataPath . '/index/memory.sqlite');
+
+        $this->rateLimitEnabled = (bool) ($c['rate_limit_enabled'] ?? true);
+        $this->rateLimitTokenMax = (int) ($c['rate_limit_token_max'] ?? 30);
+        $this->rateLimitConsentMax = (int) ($c['rate_limit_consent_max'] ?? 10);
+        $this->rateLimitWindow = (int) ($c['rate_limit_window'] ?? 60);
     }
 
     public function isProduction(): bool

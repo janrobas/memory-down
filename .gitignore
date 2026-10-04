@@ -13,3 +13,6 @@
 
 # Local test artifacts
 /tests/tmp-run/
+
+# Stray literal "$tmp" directory (e.g. from an unexpanded shell variable)
+/$tmp/

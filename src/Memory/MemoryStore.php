@@ -95,7 +95,7 @@ final class MemoryStore
         $body = self::bodyWithTitle($title, $content);
         $raw = Frontmatter::render($frontmatter) . "\n\n" . $body . "\n";
 
-        if (false === file_put_contents($file, $raw, LOCK_EX)) {
+        if (false === $this->writeFile($file, $raw)) {
             throw new \RuntimeException("Failed to write memory file: {$category}/{$id}.md");
         }
 
@@ -203,7 +203,7 @@ final class MemoryStore
         $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
         if ($nextCategory === $category) {
-            if (false === file_put_contents($file, $raw, LOCK_EX)) {
+            if (false === $this->writeFile($file, $raw)) {
                 throw new \RuntimeException("Failed to write memory file: {$category}/{$id}.md");
             }
         } else {
@@ -214,7 +214,7 @@ final class MemoryStore
             if (!is_dir(dirname($nextFile)) && !mkdir(dirname($nextFile), 0775, true)) {
                 throw new \RuntimeException("Cannot create category directory: {$nextCategory}");
             }
-            if (false === file_put_contents($nextFile, $raw, LOCK_EX)) {
+            if (false === $this->writeFile($nextFile, $raw)) {
                 throw new \RuntimeException("Failed to write memory file: {$nextCategory}/{$id}.md");
             }
             @unlink($file);
@@ -238,6 +238,33 @@ final class MemoryStore
         }
 
         return $ok;
+    }
+
+    /**
+     * Write a file atomically: a temporary file in the same directory is
+     * written first and then renamed over the target, so readers never see a
+     * half-written entry and a crash cannot truncate an existing memory.
+     */
+    private function writeFile(string $file, string $raw): bool
+    {
+        $dir = dirname($file);
+        $tmp = @tempnam($dir, '.md');
+        if (false === $tmp) {
+            return false;
+        }
+        if (false === @file_put_contents($tmp, $raw, LOCK_EX)) {
+            @unlink($tmp);
+
+            return false;
+        }
+        @chmod($tmp, 0664);
+        if (!@rename($tmp, $file)) {
+            @unlink($tmp);
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -280,12 +307,23 @@ final class MemoryStore
     }
 
     /**
+     * Every canonical memory file (`{category}/{id}.md`), newest first.
+     *
+     * Only files that sit exactly one level deep inside a valid category are
+     * returned. Stray files such as a root-level README.md or files nested in
+     * subdirectories are ignored here so that count(), list(), search and the
+     * index all see exactly the same corpus.
+     *
      * @return list<string> absolute paths, newest first
      */
     public function collectFiles(?string $category = null): array
     {
         $root = $this->paths->root();
         $files = [];
+
+        if (null !== $category && !PathValidator::isCategory($category)) {
+            return [];
+        }
 
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)
@@ -296,11 +334,13 @@ final class MemoryStore
                 continue;
             }
             $path = $file->getPathname();
-            if (null !== $category) {
-                $relative = substr($path, strlen($root) + 1);
-                if (!str_starts_with($relative, $category . DIRECTORY_SEPARATOR)) {
-                    continue;
-                }
+            $relative = substr($path, strlen($root) + 1);
+            $parts = explode(DIRECTORY_SEPARATOR, $relative);
+            if (2 !== count($parts) || !PathValidator::isCategory($parts[0])) {
+                continue;
+            }
+            if (null !== $category && $parts[0] !== $category) {
+                continue;
             }
             $files[] = $path;
         }
