@@ -11,7 +11,8 @@
         "league/commonmark": "^2.4",
         "mcp/sdk": "^0.8",
         "nyholm/psr7": "^1.8",
-        "nyholm/psr7-server": "^1.1"
+        "nyholm/psr7-server": "^1.1",
+        "symfony/uid": "^7.3"
     },
     "autoload": {
         "psr-4": {

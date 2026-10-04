@@ -2,7 +2,9 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   test:
@@ -22,11 +24,14 @@ jobs:
           extensions: curl, fileinfo, mbstring, openssl, pdo_sqlite, sqlite3
           coverage: none
 
+      - name: Validate composer.json/lock
+        run: composer validate --no-check-publish
+
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
       - name: Unit tests
-        run: php tests/unit-tests.php
+        run: composer test:unit
 
       - name: End-to-end protocol-chain tests
-        run: php tests/run-tests.php
+        run: composer test:e2e

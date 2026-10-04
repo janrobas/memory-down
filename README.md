@@ -37,8 +37,8 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 
 ## Requirements
 
-- **PHP 8.2+**. Note the bundled `vendor/` needs **8.4.1+**; for an older host,
-  rebuild dependencies pinned to its version (see Install).
+- **PHP 8.2+** (`composer.lock` is pinned to stay installable on 8.2/8.3/8.4;
+  regenerate with a matching PHP if you target another version).
 - Extensions: `fileinfo`, `mbstring`, `openssl` (`curl` recommended).
   Optional but recommended: `pdo_sqlite` (with FTS5) for the fast search index.
 - Composer, used locally before uploading.
