@@ -10,6 +10,7 @@ Layout:
       preferences/   durable user preferences
       projects/      ongoing project context
       decisions/     decisions and their reasoning
+      workflows/     recurring processes, procedures and habits
       facts/         general durable facts
       people/        information about people
       context/       long-term situational context

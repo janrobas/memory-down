@@ -272,6 +272,7 @@ Example:
         preferences/
         projects/
         decisions/
+        workflows/
         facts/
         people/
         context/

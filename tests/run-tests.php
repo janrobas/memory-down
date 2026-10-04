@@ -793,6 +793,21 @@ if ('' !== $noteId) {
     request('DELETE', '/ui/api/memory?category=notes&id=' . rawurlencode($noteId), ['X-CSRF-Token' => $apiCsrf]);
 }
 
+// The "workflows" category is a built-in default and usable.
+check('workflows category dir auto-created', is_dir($tmp . '/memory/workflows'));
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows',
+    'title' => 'Release process',
+    'content' => '1. Bump version\n2. Update changelog\n3. Tag\n4. Push.',
+]));
+$wf = jsonBody($r['body']);
+$wfId = $wf['memory']['id'] ?? '';
+check('admin API workflows category -> created', 'workflows' === ($wf['memory']['category'] ?? ''), $r['body']);
+check('admin API workflows category -> file in workflows/', '' !== $wfId && is_file($tmp . '/memory/workflows/' . $wfId . '.md'));
+if ('' !== $wfId) {
+    request('DELETE', '/ui/api/memory?category=workflows&id=' . rawurlencode($wfId), ['X-CSRF-Token' => $apiCsrf]);
+}
+
 // The admin UI must serve its static assets with sane MIME types, even when
 // the host does not rewrite them (PHP built-in server fallback).
 $r = request('GET', '/assets/app.css');

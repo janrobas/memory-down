@@ -89,8 +89,10 @@ check('isId: rejects traversal', !PathValidator::isId('../secret'));
 check('isId: rejects slash', !PathValidator::isId('a/b'));
 check('isId: rejects empty', !PathValidator::isId(''));
 check('isCategory: normal', PathValidator::isCategory('preferences'));
+check('isCategory: workflows', PathValidator::isCategory('workflows'));
 check('isCategory: rejects slash', !PathValidator::isCategory('a/b'));
 check('isCategory: rejects traversal', !PathValidator::isCategory('..'));
+check('default categories include workflows', in_array('workflows', PathValidator::DEFAULT_CATEGORIES, true));
 
 check('file: valid path stays inside root', null !== $paths->file('facts', 'example-abc123'));
 check('file: traversal id rejected', null === $paths->file('facts', '../secret'));

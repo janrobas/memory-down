@@ -42,6 +42,7 @@ Categories:
 - preferences: durable user preferences and settings
 - projects: ongoing project context and state
 - decisions: decisions and the reasoning behind them
+- workflows: recurring processes, procedures and habits the user follows
 - facts: general durable facts
 - people: information about people
 - context: long-term situational context

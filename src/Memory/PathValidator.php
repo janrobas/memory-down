@@ -25,6 +25,7 @@ final class PathValidator
         'preferences',
         'projects',
         'decisions',
+        'workflows',
         'facts',
         'people',
         'context',

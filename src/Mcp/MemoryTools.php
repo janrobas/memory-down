@@ -67,7 +67,7 @@ final class MemoryTools
                 'properties' => [
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
-                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category).'],
+                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category).'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"].'],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
@@ -83,7 +83,7 @@ final class MemoryTools
                     return self::fail('content is too large (max ' . (self::MAX_CONTENT_BYTES / 1024) . ' KB).');
                 }
                 if (!PathValidator::isCategory($category)) {
-                    return self::fail('Invalid category. Allowed: preferences, projects, decisions, facts, people, context, notes.');
+                    return self::fail('Invalid category. Allowed: preferences, projects, decisions, workflows, facts, people, context, notes.');
                 }
                 $tags = array_values(array_filter(array_map('strval', $tags)));
 
@@ -135,7 +135,7 @@ final class MemoryTools
                 'type' => 'object',
                 'properties' => [
                     'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories. May include "tag:foo" to require a tag.'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, facts, people, context, notes).'],
+                    'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, workflows, facts, people, context, notes).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
                     'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
                     'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
@@ -198,7 +198,7 @@ final class MemoryTools
                 'type' => 'object',
                 'properties' => [
                     'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, facts, people, context, notes).'],
+                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, facts, people, context, notes).'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
                     'include_body' => ['type' => 'boolean', 'description' => 'Include the full body of matching memories (default false; results include a snippet).'],
                     'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
