@@ -78,10 +78,6 @@ if (!in_array($selCategory, $categories, true)) {
           <span class="breadcrumb" id="breadcrumb"><?= '' !== $selId ? WebApp::h($selCategory) . '<span class="sep">/</span>' . WebApp::h($selId) : 'New memory' ?></span>
           <span class="spacer"></span>
 
-          <span class="index-status muted" id="index-status"
-                data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
-                title="Search engine"><?= WebApp::h(($engine['engine'] ?? 'direct') === 'sqlite-fts5' ? 'Search: indexed' : 'Search: direct') ?></span>
-
           <button type="button" id="open-menu" class="icon-btn" aria-controls="command-drawer" aria-expanded="false" title="Menu">⋯</button>
         </div>
 

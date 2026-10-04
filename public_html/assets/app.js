@@ -157,15 +157,6 @@
 
   /* ---------------------------------------------------------- index status */
 
-  function renderIndexStatus(status) {
-    var el = document.getElementById('index-status');
-    if (!el || !status) { return; }
-    el.setAttribute('data-engine', status.engine || 'direct');
-    // The entry count is reported on the Reindex button; this indicator only
-    // tells the user which engine search uses.
-    el.textContent = status.engine === 'sqlite-fts5' ? 'Search: indexed' : 'Search: direct';
-  }
-
   function wireLogout() {
     var btn = document.getElementById('logout');
     if (!btn) { return; }
@@ -205,7 +196,6 @@
       api(endpoint.reindex, { method: 'POST' }).then(function (res) {
         btn.setAttribute('data-busy', '0');
         if (res.ok && res.data.status) {
-          renderIndexStatus(res.data.status);
           if (res.data.status.engine === 'sqlite-fts5') {
             // Success: report on the button and leave it disabled until the
             // next edit or memory change (resetReindexButton).
@@ -537,6 +527,8 @@
       var on = a.getAttribute('data-category') === category && a.getAttribute('data-id') === id;
       a.classList.toggle('active', on);
     });
+    // Keep the keyboard cursor on the open memory so Up/Down continues from it.
+    syncCursorToActive();
   }
 
   function ensureCategoryOption(category) {
@@ -1010,9 +1002,11 @@
   function moveCursor(delta) {
     var items = visibleItems();
     if (!items.length) { return; }
-    var next = cursorIndex < 0
+    // Start from the existing cursor, else from the open memory, else an end.
+    var start = cursorIndex >= 0 ? cursorIndex : activeIndex();
+    var next = start < 0
       ? (delta > 0 ? 0 : items.length - 1)
-      : (cursorIndex + delta + items.length) % items.length; // wrap around
+      : (start + delta + items.length) % items.length; // wrap around
     setCursor(next);
   }
 
@@ -1021,6 +1015,29 @@
     Array.prototype.forEach.call(list.querySelectorAll('.mem.cursor'), function (el) {
       el.classList.remove('cursor');
     });
+  }
+
+  // Index of the currently open memory in the visible list, or -1.
+  function activeIndex() {
+    var items = visibleItems();
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].getAttribute('data-id') === fId.value
+        && items[i].getAttribute('data-category') === fCategory.value) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // Point the keyboard cursor at the open memory so Up/Down continues from a
+  // mouse-selected item.
+  function syncCursorToActive() {
+    var index = activeIndex();
+    if (index >= 0) {
+      setCursor(index);
+    } else {
+      clearCursor();
+    }
   }
 
   function openCursor() {
@@ -1045,8 +1062,11 @@
   }
 
   function wireShortcuts() {
-    // Clear the keyboard cursor when the pointer interacts with the list.
-    list.addEventListener('mousedown', function () { clearCursor(); });
+    // A mouse click moves the keyboard cursor to the opened/selected memory.
+    list.addEventListener('mousedown', function (event) {
+      var link = event.target.closest && event.target.closest('.mem');
+      if (link) { setCursor(visibleItems().indexOf(link)); } else { clearCursor(); }
+    });
 
     search.addEventListener('keydown', function (event) {
       if (event.key === 'ArrowDown') { event.preventDefault(); moveCursor(1); }
