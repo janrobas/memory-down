@@ -115,36 +115,47 @@ final class App
      */
     private function asset(string $path): ResponseInterface
     {
-        $name = substr($path, strlen('/assets/'));
+        $name = ltrim(rawurldecode(substr($path, strlen('/assets/'))), '/');
 
         $types = [
             'css' => 'text/css; charset=utf-8',
             'js' => 'application/javascript; charset=utf-8',
+            'mjs' => 'text/javascript; charset=utf-8',
             'svg' => 'image/svg+xml',
             'png' => 'image/png',
             'ico' => 'image/x-icon',
+            // On-device model assets (Laya): runtime + ONNX weights.
+            'wasm' => 'application/wasm',
+            'json' => 'application/json; charset=utf-8',
+            'onnx' => 'application/octet-stream',
+            'bin' => 'application/octet-stream',
+            'txt' => 'text/plain; charset=utf-8',
         ];
         $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
 
+        // Whitelisted extension, safe path segments, optional nested dirs, and
+        // never any traversal. Segments must start alphanumeric, so "." / ".."
+        // are rejected outright.
         if (!isset($types[$ext])
-            || 1 !== preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*\.(css|js|svg|png|ico)$/', $name)
+            || 1 !== preg_match('#^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\.(css|js|mjs|svg|png|ico|wasm|json|onnx|bin|txt)$#', $name)
             || str_contains($name, '..')
         ) {
             return $this->notFound();
         }
 
-        $file = dirname(__DIR__, 2) . '/public_html/assets/' . $name;
-        if (!is_file($file)) {
+        $assetsDir = dirname(__DIR__, 2) . '/public_html/assets';
+        $file = $assetsDir . '/' . $name;
+
+        // Second line of defence: the resolved real path must stay inside the
+        // assets directory before anything is read.
+        $real = realpath($file);
+        if (false === $real || !is_file($real) || !str_starts_with($real, realpath($assetsDir) . DIRECTORY_SEPARATOR)) {
             return $this->notFound();
         }
 
-        $contents = file_get_contents($file);
-        if (false === $contents) {
-            return $this->notFound();
-        }
-
-        $mtime = (int) @filemtime($file);
-        $etag = '"' . dechex($mtime) . '-' . dechex((int) @filesize($file)) . '"';
+        $mtime = (int) @filemtime($real);
+        $size = (int) @filesize($real);
+        $etag = '"' . dechex($mtime) . '-' . dechex($size) . '"';
 
         // Revalidate on every load so UI updates take effect immediately; a
         // matching validator lets the client reuse its cached copy.
@@ -156,15 +167,23 @@ final class App
             }
         }
 
-        $response = (new Psr17Factory())->createResponse(200)
+        // Stream the file rather than loading it into memory: model weights can
+        // be far larger than memory_limit on the PHP built-in server / fallback.
+        $factory = new Psr17Factory();
+        try {
+            $body = $factory->createStreamFromFile($real, 'rb');
+        } catch (\Throwable) {
+            return $this->notFound();
+        }
+
+        return $factory->createResponse(200)
             ->withHeader('Content-Type', $types[$ext])
+            ->withHeader('Content-Length', (string) $size)
             ->withHeader('Cache-Control', 'no-cache')
             ->withHeader('ETag', $etag)
             ->withHeader('Last-Modified', gmdate('D, d M Y H:i:s', $mtime) . ' GMT')
-            ->withHeader('X-Content-Type-Options', 'nosniff');
-        $response->getBody()->write($contents);
-
-        return $response;
+            ->withHeader('X-Content-Type-Options', 'nosniff')
+            ->withBody($body);
     }
 
     /* ------------------------------------------------------------------ *

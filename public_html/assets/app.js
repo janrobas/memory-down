@@ -51,6 +51,11 @@
   var editorEmpty = document.getElementById('editor-empty');
   var categoriesHead = document.getElementById('categories-head');
   var collapseToggle = document.getElementById('collapse-toggle');
+  var suggestBtn = document.getElementById('suggest-category');
+  var suggestStatus = document.getElementById('suggest-status');
+
+  var categories = [];
+  try { categories = JSON.parse(shell.getAttribute('data-categories') || '[]') || []; } catch (e) { categories = []; }
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
@@ -869,6 +874,38 @@
     if (to === saved.category) { return; }
     moveMemory(saved.category, fId.value, to);
   });
+
+  /* On-device category suggestion (Laya). Loaded lazily; never auto-saves. */
+  if (suggestBtn && typeof WebAssembly !== 'undefined') {
+    suggestBtn.hidden = false;
+    // Keep focus where it is: stealing it from the title/content would trigger
+    // the blur autosave and persist the memory before the guess is applied.
+    suggestBtn.addEventListener('mousedown', function (event) { event.preventDefault(); });
+    suggestBtn.addEventListener('click', function () {
+      var text = (fTitle.value + '\n' + fContent.value).trim();
+      if ('' === text) {
+        suggestStatus.textContent = 'Write a title or content first.';
+        return;
+      }
+      suggestBtn.disabled = true;
+      suggestStatus.textContent = 'Guessing…';
+      import('/assets/laya/laya.js')
+        .then(function (laya) { return laya.suggestCategory(text, categories); })
+        .then(function (best) {
+          if (!best || !best.slug) {
+            suggestStatus.textContent = 'No suggestion.';
+            return;
+          }
+          syncCategoryUI(best.slug);
+          suggestStatus.textContent = 'Suggested: ' + best.slug + ' (' + Number(best.score).toFixed(2) + ')';
+        })
+        .catch(function (err) {
+          console.error('[laya] suggestion failed', err);
+          suggestStatus.textContent = 'Category model unavailable.';
+        })
+        .finally(function () { suggestBtn.disabled = false; });
+    });
+  }
 
   /* Collapsible category groups (state remembered). */
   list.addEventListener('click', function (event) {

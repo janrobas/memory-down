@@ -38,18 +38,7 @@ Memory semantics:
 - When you store something that clearly duplicates existing memory (same topic and same meaning), prefer updating the existing entry instead of creating a duplicate. Use recall/search_memory to check first.
 - Never overwrite unrelated information.
 
-Categories:
-- preferences: durable user preferences and settings
-- projects: ongoing project context and state
-- decisions: decisions and the reasoning behind them
-- workflows: recurring processes, procedures and habits the user follows
-- ideas: thoughts, proposals or possibilities worth keeping
-- references: durable pointers — links, systems, docs, configs
-- goals: things the user wants to achieve
-- facts: general durable facts
-- people: information about people
-- context: long-term situational context
-- notes: catch-all for anything that does not clearly fit the categories above
+{CATEGORIES}
 
 Tags:
 - Optional but recommended: when calling remember or update_memory, add 1-3 short lowercase tags (e.g. "project-x", "meeting-notes") to make memories easier to group and search later.
@@ -78,7 +67,10 @@ TXT;
                 description: 'Persistent Markdown-backed memory for AI agents.',
             )
             ->setLogger($logger)
-            ->setInstructions(self::INSTRUCTIONS . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary())
+            ->setInstructions(
+                str_replace('{CATEGORIES}', \MemoryDown\Memory\Categories::instructionsBlock(), self::INSTRUCTIONS)
+                . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary()
+            )
             ->setCapabilities(new ServerCapabilities(tools: true, resources: false, prompts: false))
             ->setSession(new FileSessionStore(
                 $config->dataPath . '/sessions',

@@ -30,8 +30,10 @@ final class Response
 
         $policy = match (true) {
             // Admin UI: same-origin assets only; no inline scripts, no CDN.
-            $isAdmin => "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                . "img-src 'self' data:; font-src 'self'; connect-src 'self'; "
+            // 'wasm-unsafe-eval' lets the on-device ONNX model compile WASM;
+            // worker-src covers the ONNX runtime if it ever spawns a worker.
+            $isAdmin => "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+                . "img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self' blob:; "
                 . "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
             $isHtml => "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
             default => "default-src 'none'",
@@ -70,11 +72,19 @@ final class Response
 
         if ($body->isSeekable()) {
             $body->rewind();
-            $contents = $body->getContents();
-            if (!$hasContentLength && '' !== $contents) {
-                header('Content-Length: ' . strlen($contents));
+            // Use the reported size when available so large files can rely on
+            // Content-Length without buffering the whole body in memory.
+            if (!$hasContentLength) {
+                $size = $body->getSize();
+                if (null !== $size && $size > 0) {
+                    header('Content-Length: ' . $size);
+                }
             }
-            echo $contents;
+            // Stream in chunks; never getContents() (that loads the whole body
+            // into memory, which fails for model weights larger than the limit).
+            while (!$body->eof()) {
+                echo $body->read(8192);
+            }
 
             return;
         }

@@ -646,6 +646,27 @@ the constraints that follow. The rest of the list still stands.
 Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
 (one instance per person instead), teams, billing, background jobs/queues.
 
+### Amendment: on-device category suggester (opt-in, in scope)
+
+A single, narrowly scoped exception to "no embeddings" is allowed: the admin UI
+may offer a **Suggest category** button backed by a small **browser-side**
+embedding model (transformers.js + ONNX Runtime WebAssembly) that runs entirely
+on the user's device.
+
+Constraints:
+
+- **Opt-in and uncommitted.** Assets are fetched locally with
+  `tools/fetch-laya.php` and are git-ignored. Without them the button does not
+  appear and nothing changes.
+- **Suggest-only.** It fills the category field; it never saves automatically.
+- **No data leaves the device.** No memory content is sent to a server, and no
+  CDN is used — everything is self-hosted under `public_html/assets/laya/`.
+- The admin Content-Security-Policy may add `'wasm-unsafe-eval'` (and
+  `worker-src 'self' blob:`) solely so WASM can compile. Every other route keeps
+  its stricter policy.
+- This is **not** permission for server-side embeddings, a vector database, or
+  semantic search over the corpus. Those remain out of scope.
+
 The first goal is:
 
     ChatGPT

@@ -32,6 +32,10 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Search:** a disposable SQLite FTS5 index (BM25), rebuilt from the Markdown
   on demand, with automatic fallback to a direct file scan. Archived memories
   stay indexed and searchable but rank after active ones.
+- **On-device category suggestion:** the admin UI can guess the best category
+  for a memory with a small multilingual model (transformers.js + ONNX) that
+  runs entirely in the browser — nothing is sent to a server. Opt-in: fetch the
+  assets with `php tools/fetch-laya.php`.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
 
@@ -49,6 +53,7 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 
 ```bash
 composer install
+php tools/fetch-laya.php   # optional: on-device category-suggester assets
 php -S 127.0.0.1:8080 -t public_html public_html/index.php
 ```
 
@@ -57,14 +62,18 @@ Open http://127.0.0.1:8080/health.
 ### Deploy (shared hosting, FTP)
 
 1. `composer install --no-dev --optimize-autoloader` locally.
-2. Upload the project via FTP (including `vendor/`).
-3. Point the domain/subdomain **document root at `public_html/`**.
-4. Make `data/` writable by PHP (`data/memory`, `data/auth`, `data/sessions`,
+2. Optional category suggester: `php tools/fetch-laya.php` downloads the
+   browser runtime and the multilingual model into `public_html/assets/laya/`
+   (~120 MB). Skip it to deploy without the feature.
+3. Upload the project via FTP (including `vendor/`, and `public_html/assets/laya/`
+   if you fetched it).
+4. Point the domain/subdomain **document root at `public_html/`**.
+5. Make `data/` writable by PHP (`data/memory`, `data/auth`, `data/sessions`,
    `data/logs`, `data/index` are created/used there).
-5. Copy `.env.example` to `.env`, fill it in, and upload it (see Configuration).
-6. Open `https://your-domain/health` and confirm `{"status":"ok",...}`.
-7. Set the admin password and open `/ui` (see Admin UI).
-8. Connect ChatGPT (see below).
+6. Copy `.env.example` to `.env`, fill it in, and upload it (see Configuration).
+7. Open `https://your-domain/health` and confirm `{"status":"ok",...}`.
+8. Set the admin password and open `/ui` (see Admin UI).
+9. Connect ChatGPT (see below).
 
 If you cannot change the document root, the root `.htaccess` denies everything
 except `public_html/`; point the domain at the project root instead.
@@ -132,6 +141,10 @@ separate from the MCP/OAuth layer.
   `Ctrl/Cmd+S` forces a save. Drag a memory onto a category to move it. Themes
   (white/dark/retro/green/blue) are remembered in `localStorage`.
 - **Delete** appears next to the title for existing memories.
+- **Suggest category:** after `php tools/fetch-laya.php`, a **Suggest category**
+  button appears in the editor. It runs a small multilingual model in your
+  browser, fills in the best-matching category, and never saves on its own. The
+  model is loaded lazily on first use and cached by the browser afterwards.
 
 The UI will not open until an admin password exists:
 
