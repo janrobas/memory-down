@@ -683,7 +683,7 @@ check('admin CSP allows self-hosted scripts', str_contains($r['headers']['conten
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
 $apiCsrf = $m[1] ?? '';
 check('admin shell exposes csrf token', '' !== $apiCsrf);
-check('admin shell has category suggester', str_contains($r['body'], 'id="suggest-category"') && str_contains($r['body'], 'id="suggest-status"'));
+check('admin shell has category suggester', str_contains($r['body'], 'id="suggest-category"'));
 check('admin shell embeds category prototypes', str_contains($r['body'], 'data-categories=') && str_contains($r['body'], 'references'));
 
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([

@@ -798,18 +798,8 @@ body.dragging .cat.drop-hover .cat-name {
 
 .editor-meta .actions { display: flex; gap: .5rem; align-self: flex-end; }
 
-/* On-device category suggestion (Laya). */
-.cat-suggest {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  min-height: 2.1rem;
-}
-
-.cat-suggest .suggest-status {
-  font-size: .76rem;
-  white-space: nowrap;
-}
+/* On-device category suggestion (Laya): the button carries the result. */
+.cat-suggest-wrap button { white-space: nowrap; }
 
 /* Creating a memory: compact category chips. */
 .new-cats {

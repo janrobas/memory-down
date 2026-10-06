@@ -110,10 +110,7 @@ if (!in_array($selCategory, $categories, true)) {
           </label>
           <div class="field cat-suggest-wrap">
             <span class="field-label">Guess</span>
-            <div class="cat-suggest">
-              <button type="button" id="suggest-category" hidden title="Suggest the best category using the on-device model">Suggest category</button>
-              <span class="suggest-status muted" id="suggest-status" aria-live="polite"></span>
-            </div>
+            <button type="button" id="suggest-category" hidden title="Suggest the best category using the on-device model">Suggest category</button>
           </div>
           <label class="field grow">
             <span class="field-label">Tags</span>
