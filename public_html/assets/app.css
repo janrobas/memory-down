@@ -495,6 +495,16 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   font-size: .9rem;
 }
 
+/* The head is a truncating flex row in every context (not just search results),
+   so the title stays on one line and the badge(s) never wrap to a second line. */
+.mem .mem-head {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+
 /* The title takes the available space and truncates; the badge(s) never shrink,
    so "new"/"archived" stay visible even with a long title. */
 .mem .mem-title {
