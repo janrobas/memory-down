@@ -11,6 +11,9 @@ Layout:
       projects/      ongoing project context
       decisions/     decisions and their reasoning
       workflows/     recurring processes, procedures and habits
+      ideas/         thoughts, proposals or possibilities
+      references/    durable pointers to links, systems, docs, configs
+      goals/         things the user wants to achieve
       facts/         general durable facts
       people/        information about people
       context/       long-term situational context

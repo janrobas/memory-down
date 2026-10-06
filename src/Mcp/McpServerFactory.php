@@ -43,6 +43,9 @@ Categories:
 - projects: ongoing project context and state
 - decisions: decisions and the reasoning behind them
 - workflows: recurring processes, procedures and habits the user follows
+- ideas: thoughts, proposals or possibilities worth keeping
+- references: durable pointers — links, systems, docs, configs
+- goals: things the user wants to achieve
 - facts: general durable facts
 - people: information about people
 - context: long-term situational context

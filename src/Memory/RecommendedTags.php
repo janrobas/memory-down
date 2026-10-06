@@ -17,9 +17,9 @@ final class RecommendedTags
     /** @var list<string> */
     public const LIST = [
         'task',
-        'idea',
-        'reference',
         'followup',
+        'question',
+        'snippet',
     ];
 
     /**
@@ -29,9 +29,9 @@ final class RecommendedTags
      */
     public const DESCRIPTIONS = [
         'task' => 'an actionable item or thing to do',
-        'idea' => 'a thought, proposal or possibility',
-        'reference' => 'a durable pointer (link, system, doc, config)',
         'followup' => 'something to revisit or check back on',
+        'question' => 'an open question to answer',
+        'snippet' => 'a reusable code, config or command fragment',
     ];
 
     /**

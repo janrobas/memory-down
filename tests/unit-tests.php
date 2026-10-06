@@ -20,6 +20,7 @@ use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
+use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
 use MemoryDown\Support\RateLimiter;
 
@@ -93,6 +94,14 @@ check('isCategory: workflows', PathValidator::isCategory('workflows'));
 check('isCategory: rejects slash', !PathValidator::isCategory('a/b'));
 check('isCategory: rejects traversal', !PathValidator::isCategory('..'));
 check('default categories include workflows', in_array('workflows', PathValidator::DEFAULT_CATEGORIES, true));
+check('default categories include ideas', in_array('ideas', PathValidator::DEFAULT_CATEGORIES, true));
+check('default categories include references', in_array('references', PathValidator::DEFAULT_CATEGORIES, true));
+check('default categories include goals', in_array('goals', PathValidator::DEFAULT_CATEGORIES, true));
+
+check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
+check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
+check('recommended tags drop idea', !in_array('idea', RecommendedTags::LIST, true));
+check('recommended tags drop reference', !in_array('reference', RecommendedTags::LIST, true));
 
 check('file: valid path stays inside root', null !== $paths->file('facts', 'example-abc123'));
 check('file: traversal id rejected', null === $paths->file('facts', '../secret'));

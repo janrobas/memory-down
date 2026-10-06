@@ -273,6 +273,9 @@ Example:
         projects/
         decisions/
         workflows/
+        ideas/
+        references/
+        goals/
         facts/
         people/
         context/
@@ -393,9 +396,9 @@ recommended to users (admin UI chips) and to AI agents (MCP instructions and the
 `remember`/`update_memory` tool descriptions):
 
 - `task` — an actionable item or thing to do
-- `idea` — a thought, proposal or possibility
-- `reference` — a durable pointer (link, system, doc, config)
 - `followup` — something to revisit or check back on
+- `question` — an open question to answer
+- `snippet` — a reusable code, config or command fragment
 
 They are a convention, not a schema: nothing enforces them, they are never a
 status, and custom tags are always allowed.
