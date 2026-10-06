@@ -49,6 +49,8 @@
   var openMenuBtn = document.getElementById('open-menu');
   var editorForm = document.getElementById('editor-form');
   var editorEmpty = document.getElementById('editor-empty');
+  var categoriesHead = document.getElementById('categories-head');
+  var collapseToggle = document.getElementById('collapse-toggle');
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
@@ -496,6 +498,9 @@
 
   function renderResults(results, query) {
     list.textContent = '';
+    // While search results are shown there is one flat group; hide the
+    // collapse-all control (it only applies to the category tree).
+    if (categoriesHead) { categoriesHead.hidden = true; }
     if (!results.length) {
       var p = document.createElement('p');
       p.className = 'empty muted';
@@ -879,21 +884,62 @@
     try { return JSON.parse(localStorage.getItem('memorydown.collapsed') || '{}') || {}; } catch (e) { return {}; }
   }
 
+  // Real category groups only, never the single search-results section.
+  function catSections() {
+    return list.querySelectorAll('.cat[data-category]');
+  }
+
   function rememberCollapsed() {
     var state = {};
-    Array.prototype.forEach.call(list.querySelectorAll('.cat'), function (section) {
+    Array.prototype.forEach.call(catSections(), function (section) {
       if (section.classList.contains('collapsed')) {
         state[section.getAttribute('data-category')] = 1;
       }
     });
     try { localStorage.setItem('memorydown.collapsed', JSON.stringify(state)); } catch (e) { /* ignore */ }
+    updateCollapseToggle();
   }
 
   function applyCollapsed() {
     var state = collapsedState();
-    Array.prototype.forEach.call(list.querySelectorAll('.cat'), function (section) {
+    Array.prototype.forEach.call(catSections(), function (section) {
       if (state[section.getAttribute('data-category')]) {
         section.classList.add('collapsed');
+      }
+    });
+    updateCollapseToggle();
+  }
+
+  // Keep the "Categories" toggle in sync: it collapses every group when any is
+  // open, otherwise expands them all. Hidden when there is nothing to toggle.
+  function updateCollapseToggle() {
+    if (!collapseToggle) { return; }
+    var sections = catSections();
+    var anyExpanded = Array.prototype.some.call(sections, function (section) {
+      return !section.classList.contains('collapsed');
+    });
+    if (categoriesHead) { categoriesHead.hidden = sections.length === 0; }
+    var label = anyExpanded ? 'Collapse all categories' : 'Expand all categories';
+    collapseToggle.textContent = anyExpanded ? '⊟' : '⊞';
+    collapseToggle.title = label;
+    collapseToggle.setAttribute('aria-label', label);
+  }
+
+  if (collapseToggle) {
+    collapseToggle.addEventListener('click', function () {
+      var sections = catSections();
+      var anyExpanded = Array.prototype.some.call(sections, function (section) {
+        return !section.classList.contains('collapsed');
+      });
+      Array.prototype.forEach.call(sections, function (section) {
+        section.classList.toggle('collapsed', anyExpanded);
+      });
+      if (anyExpanded) {
+        rememberCollapsed();
+      } else {
+        // Nothing collapsed: forget the state so groups come back expanded.
+        try { localStorage.removeItem('memorydown.collapsed'); } catch (e) { /* ignore */ }
+        updateCollapseToggle();
       }
     });
   }

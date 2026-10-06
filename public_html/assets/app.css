@@ -72,6 +72,7 @@
 
 :root[data-theme="retro"] .brand,
 :root[data-theme="retro"] .cat-name,
+:root[data-theme="retro"] .categories-label,
 :root[data-theme="retro"] .title-input {
   text-transform: uppercase;
   letter-spacing: .06em;
@@ -404,6 +405,26 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 }
 
 .brand:hover { color: var(--accent); }
+
+/* "Categories" header above the list, with a collapse-all / expand-all toggle. */
+.categories-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: .7rem;
+}
+
+.categories-label {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+
+.categories-head .icon-btn { padding: .2rem .5rem; font-size: .85rem; }
+
+/* `display:flex` above would otherwise defeat the UA [hidden] rule. */
+.categories-head[hidden] { display: none; }
 
 .search-wrap { position: relative; margin-bottom: .2rem; }
 

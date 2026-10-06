@@ -42,6 +42,10 @@ if (!in_array($selCategory, $categories, true)) {
         <button type="button" class="filter-btn" data-filter="archived" aria-pressed="false">Archived</button>
       </div>
       <button id="new-memory" type="button" class="primary block">+ New memory</button>
+      <div class="categories-head" id="categories-head">
+        <span class="categories-label">Categories</span>
+        <button type="button" id="collapse-toggle" class="icon-btn" title="Collapse all categories" aria-label="Collapse all categories">⊟</button>
+      </div>
     </div>
     <nav id="list" class="list" aria-label="Memories">
       <?php foreach ($tree as $group): ?>
