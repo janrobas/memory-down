@@ -51,10 +51,6 @@
   var editorEmpty = document.getElementById('editor-empty');
   var categoriesHead = document.getElementById('categories-head');
   var collapseToggle = document.getElementById('collapse-toggle');
-  var suggestBtn = document.getElementById('suggest-category');
-
-  var categories = [];
-  try { categories = JSON.parse(shell.getAttribute('data-categories') || '[]') || []; } catch (e) { categories = []; }
 
   var AUTOSAVE_MS = 20000;
   var PREVIEW_MS = 200;
@@ -656,7 +652,6 @@
     // Browsing defaults to Preview (unless the user prefers Write); saving keeps
     // whatever tab is currently visible.
     applyTab(tab || browseTab(), { persist: false });
-    resetSuggestButton();
   }
 
   function loadMemory(category, id) {
@@ -692,7 +687,6 @@
     resetTabs();
     snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, content: '' });
     setStatus('');
-    resetSuggestButton();
     fTitle.focus();
   }
 
@@ -875,50 +869,6 @@
     if (to === saved.category) { return; }
     moveMemory(saved.category, fId.value, to);
   });
-
-  /* On-device category suggestion (Laya). Loaded lazily; never auto-saves.
-     On a new memory it selects the suggestion; on an existing memory it only
-     reports it (moving a memory is destructive and must be explicit). */
-  if (suggestBtn && typeof WebAssembly !== 'undefined') {
-    suggestBtn.hidden = false;
-    // Keep focus where it is: stealing it from the title/content would trigger
-    // the blur autosave and persist the memory before the guess is applied.
-    suggestBtn.addEventListener('mousedown', function (event) { event.preventDefault(); });
-    suggestBtn.addEventListener('click', function () {
-      var text = (fTitle.value + '\n' + fContent.value).trim();
-      if ('' === text) {
-        suggestBtn.textContent = 'Add a title or content first';
-        return;
-      }
-      var isNew = '' === fId.value;
-      suggestBtn.disabled = true;
-      suggestBtn.textContent = 'Guessing…';
-      import('/assets/laya/laya.js')
-        .then(function (laya) { return laya.suggestCategory(text, categories); })
-        .then(function (best) {
-          if (!best || !best.slug) {
-            suggestBtn.textContent = 'No suggestion';
-            return;
-          }
-          if (isNew) { syncCategoryUI(best.slug); }
-          suggestBtn.textContent = 'Suggested: ' + best.slug + ' (' + Number(best.score).toFixed(2) + ')';
-          suggestBtn.title = isNew
-            ? 'Suggested category applied'
-            : 'Suggestion only — use "Move to" to apply it';
-        })
-        .catch(function (err) {
-          console.error('[laya] suggestion failed', err);
-          suggestBtn.textContent = 'Category model unavailable';
-        })
-        .finally(function () { suggestBtn.disabled = false; });
-    });
-  }
-
-  function resetSuggestButton() {
-    if (!suggestBtn) { return; }
-    suggestBtn.textContent = 'Suggest category';
-    suggestBtn.title = 'Suggest the best category using the on-device model';
-  }
 
   /* Collapsible category groups (state remembered). */
   list.addEventListener('click', function (event) {

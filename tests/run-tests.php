@@ -683,8 +683,6 @@ check('admin CSP allows self-hosted scripts', str_contains($r['headers']['conten
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
 $apiCsrf = $m[1] ?? '';
 check('admin shell exposes csrf token', '' !== $apiCsrf);
-check('admin shell has category suggester', str_contains($r['body'], 'id="suggest-category"'));
-check('admin shell embeds category prototypes', str_contains($r['body'], 'data-categories=') && str_contains($r['body'], 'references'));
 
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'preferences',
@@ -863,14 +861,6 @@ check('assets: favicon.svg served as image/svg+xml', 200 === $r['status'] && str
 check('assets: favicon.svg has content', 200 === $r['status'] && str_contains($r['body'], '<svg'));
 $r = request('GET', '/assets/../config.php');
 check('assets: path traversal blocked', 404 === $r['status'], (string) $r['status']);
-$r = request('GET', '/assets/laya/laya.js');
-check('assets: nested file served as javascript', 200 === $r['status'] && str_contains($r['headers']['content-type'] ?? '', 'javascript'), (string) $r['status']);
-$r = request('GET', '/assets/laya/../../config.php');
-check('assets: nested traversal blocked', 404 === $r['status'], (string) $r['status']);
-$r = request('GET', '/assets/laya/secret.php');
-check('assets: non-whitelisted extension blocked', 404 === $r['status'], (string) $r['status']);
-$r = request('GET', '/assets/laya/');
-check('assets: directory listing blocked', 404 === $r['status'], (string) $r['status']);
 
 // Content that already starts with an H1 must not get a duplicated title
 // heading when written through the store.

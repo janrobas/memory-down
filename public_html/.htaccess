@@ -3,14 +3,6 @@
 
 Options -Indexes
 
-# Correct MIME types for the on-device model assets (Laya): WASM must be served
-# as application/wasm for streaming compilation.
-<IfModule mod_mime.c>
-    AddType application/wasm .wasm
-    AddType text/javascript .mjs
-    AddType application/octet-stream .onnx
-</IfModule>
-
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /

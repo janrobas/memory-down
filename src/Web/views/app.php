@@ -27,8 +27,7 @@ if (!in_array($selCategory, $categories, true)) {
 ?>
 <div class="app-shell<?= '' === $selId ? ' is-empty' : '' ?>"
      data-csrf="<?= WebApp::h($csrf) ?>"
-     data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
-     data-categories="<?= WebApp::h(json_encode(\MemoryDown\Memory\Categories::all())) ?>">
+     data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>">
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
@@ -108,10 +107,6 @@ if (!in_array($selCategory, $categories, true)) {
               <?php endforeach; ?>
             </select>
           </label>
-          <div class="field cat-suggest-wrap">
-            <span class="field-label">Guess</span>
-            <button type="button" id="suggest-category" hidden title="Suggest the best category using the on-device model">Suggest category</button>
-          </div>
           <label class="field grow">
             <span class="field-label">Tags</span>
             <input id="f-tags" name="tags" placeholder="comma, separated" value="<?= WebApp::h($selTags) ?>">

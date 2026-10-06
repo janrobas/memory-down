@@ -8,10 +8,6 @@
 # Disposable full-text search index (rebuilt from the Markdown files)
 /data/index/
 
-# On-device category-suggester assets (fetch locally: php tools/fetch-laya.php)
-/public_html/assets/laya/runtime/
-/public_html/assets/laya/models/
-
 # Local configuration/secrets
 /.env
 

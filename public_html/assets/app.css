@@ -798,9 +798,6 @@ body.dragging .cat.drop-hover .cat-name {
 
 .editor-meta .actions { display: flex; gap: .5rem; align-self: flex-end; }
 
-/* On-device category suggestion (Laya): the button carries the result. */
-.cat-suggest-wrap button { white-space: nowrap; }
-
 /* Creating a memory: compact category chips. */
 .new-cats {
   display: flex;
