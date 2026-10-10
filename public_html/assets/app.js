@@ -621,6 +621,15 @@
     previewEl.innerHTML = '';
   }
 
+  // Assign a value to an input/textarea only when it actually changes. Writing
+  // `.value` moves the caret to the end even when the text is identical, so the
+  // equality guard is what keeps the cursor from jumping on an otherwise no-op
+  // refresh (e.g. after autosave).
+  function setValuePreservingCaret(el, value) {
+    if (el.value === value) { return; }
+    el.value = value;
+  }
+
   function fillEditor(doc, tab) {
     // Never let a previous document's preview linger: clear first, always.
     showEditorEmpty(false);
@@ -628,12 +637,12 @@
     resetReindexButton();
 
     fId.value = doc.id;
-    fTitle.value = doc.title || '';
-    fTags.value = (doc.tags || []).join(', ');
+    setValuePreservingCaret(fTitle, doc.title || '');
+    setValuePreservingCaret(fTags, (doc.tags || []).join(', '));
     syncTagChips();
     fArchived.checked = !!doc.archived;
     fPublic.checked = !!doc.public;
-    fContent.value = doc.body || '';
+    setValuePreservingCaret(fContent, doc.body || '');
     syncCategoryUI(doc.category);
     deleteBtn.disabled = false;
     deleteBtn.hidden = false;
@@ -657,6 +666,22 @@
     // Browsing defaults to Preview (unless the user prefers Write); saving keeps
     // whatever tab is currently visible.
     applyTab(tab || browseTab(), { persist: false });
+  }
+
+  // After the first save of a brand-new memory the store assigns an id. Adopt it
+  // and the resulting view state WITHOUT rewriting the fields the user is
+  // editing, so in-progress text and the caret are left alone (a full
+  // fillEditor() here would move the caret to the end of the textarea).
+  function adoptCreatedMemory(doc) {
+    fId.value = doc.id;
+    syncCategoryUI(doc.category);
+    deleteBtn.disabled = false;
+    deleteBtn.hidden = false;
+    newCats.hidden = true;
+    moveField.hidden = false;
+    updateBreadcrumb(doc.category, doc.id);
+    markActive(doc.category, doc.id);
+    history.replaceState(null, '', '/ui?category=' + encodeURIComponent(doc.category) + '&id=' + encodeURIComponent(doc.id));
   }
 
   function loadMemory(category, id) {
@@ -728,7 +753,12 @@
     setStatus('Saving…');
     return api(endpoint.memory, { method: 'POST', body: payload }).then(function (res) {
       if (res.ok && res.data.memory) {
-        fillEditor(res.data.memory, previewVisible() ? 'preview' : 'write');
+        // On an update, keep the editor exactly as the user left it (adopting
+        // the server's normalised copy here would rewrite the text under the
+        // caret). Only a brand-new memory needs the assigned id folded in.
+        if ('' === payload.id) {
+          adoptCreatedMemory(res.data.memory);
+        }
         markSaved(currentPayload());
         refreshTree();
         return true;
