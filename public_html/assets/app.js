@@ -384,9 +384,11 @@
   function memLink(item) {
     var li = document.createElement('li');
     var a = document.createElement('a');
+    // A single status badge, by priority: archived > public > new.
+    var kind = item.archived ? 'archived' : (item.public ? 'public' : (item.new ? 'new' : ''));
     a.className = 'mem'
       + (item.archived ? ' archived' : '')
-      + (item.new && !item.archived ? ' new' : '')
+      + ('new' === kind ? ' new' : '')
       + (item.snippet ? ' has-snippet' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
     a.setAttribute('data-category', item.category);
@@ -407,16 +409,10 @@
     title.textContent = item.title || item.id;
     head.appendChild(title);
 
-    if (item.new && !item.archived) {
-      var newBadge = document.createElement('span');
-      newBadge.className = 'badge-new';
-      newBadge.textContent = 'new';
-      head.appendChild(newBadge);
-    }
-    if (item.archived) {
+    if ('' !== kind) {
       var badge = document.createElement('span');
-      badge.className = 'badge-archived';
-      badge.textContent = 'archived';
+      badge.className = 'badge-' + kind;
+      badge.textContent = kind;
       head.appendChild(badge);
     }
     a.appendChild(head);
@@ -485,7 +481,7 @@
       section.appendChild(sectionTitle(group.name, visible.length));
       var ul = document.createElement('ul');
       visible.forEach(function (mem) {
-        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, new: !!mem.new }));
+        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, public: !!mem.public, new: !!mem.new }));
       });
       section.appendChild(ul);
       list.appendChild(section);
@@ -518,7 +514,7 @@
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, new: !!item.new, snippet: item.snippet, query: query }));
+      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, public: !!item.public, new: !!item.new, snippet: item.snippet, query: query }));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -653,6 +649,7 @@
       category: doc.category,
       tags: fTags.value,
       archived: fArchived.checked,
+      public: fPublic.checked,
       content: fContent.value
     });
     setStatus('');
@@ -694,7 +691,7 @@
     markActive('', '');
     history.replaceState(null, '', '/ui');
     resetTabs();
-    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, content: '' });
+    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, public: false, content: '' });
     setStatus('');
     fTitle.focus();
   }

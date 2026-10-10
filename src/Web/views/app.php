@@ -57,11 +57,12 @@ if (!in_array($selCategory, $categories, true)) {
           </div>
           <ul>
             <?php foreach ($group['memories'] as $mem): ?>
+              <?php $memKind = !empty($mem['archived']) ? 'archived' : (!empty($mem['public']) ? 'public' : (!empty($mem['new']) ? 'new' : '')); ?>
               <li>
-                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['new']) ? ' new' : '' ?>"
+                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['archived']) ? ' archived' : '' ?><?= 'new' === $memKind ? ' new' : '' ?>"
                    href="/ui?category=<?= rawurlencode((string) $group['name']) ?>&amp;id=<?= rawurlencode((string) $mem['id']) ?>"
                    data-category="<?= WebApp::h($group['name']) ?>"
-                   data-id="<?= WebApp::h($mem['id']) ?>"><span class="mem-title"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?></span><?php if (!empty($mem['new'])): ?><span class="badge-new">new</span><?php endif; ?></a>
+                   data-id="<?= WebApp::h($mem['id']) ?>"><span class="mem-title"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?></span><?php if ('' !== $memKind): ?><span class="badge-<?= $memKind ?>"><?= $memKind ?></span><?php endif; ?></a>
               </li>
             <?php endforeach; ?>
           </ul>

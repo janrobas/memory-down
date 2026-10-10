@@ -273,6 +273,7 @@ final class WebApp
             'updated' => $r['updated'] ?? '',
             'tags' => $r['tags'] ?? [],
             'archived' => (bool) ($r['archived'] ?? false),
+            'public' => (bool) ($r['public'] ?? false),
             'new' => $this->isNew($r),
             'score' => $r['score'] ?? 0,
             'snippet' => $r['snippet'] ?? '',
@@ -427,6 +428,7 @@ final class WebApp
                 'updated' => $doc['updated'] ?? '',
                 'tags' => $doc['tags'] ?? [],
                 'archived' => (bool) ($doc['archived'] ?? false),
+                'public' => (bool) ($doc['public'] ?? false),
                 'new' => $this->isNew($doc),
             ];
         }

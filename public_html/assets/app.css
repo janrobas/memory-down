@@ -537,7 +537,8 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 }
 
 .mem .badge-new,
-.mem .badge-archived { flex: 0 0 auto; }
+.mem .badge-archived,
+.mem .badge-public { flex: 0 0 auto; }
 
 .mem:hover { background: var(--bg); }
 .mem.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
@@ -579,6 +580,23 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--muted);
+  vertical-align: middle;
+}
+
+/* Filled pill so "public" reads as a stronger, distinct state from the
+   outline "new" badge, in every theme. */
+.mem .badge-public {
+  display: inline-block;
+  margin-left: .4rem;
+  padding: 0 .35rem;
+  font-size: .62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--accent-contrast);
   vertical-align: middle;
 }
 

@@ -1174,6 +1174,26 @@ $r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
 check('public API still serves archived-but-public',
     200 === $r['status'] && true === (jsonBody($r['body'])['writing']['archived'] ?? null), $r['body']);
 
+// The sidebar tree exposes the publish flag so the UI can badge it.
+$r = request('GET', '/ui/api/tree');
+$treePub = null;
+foreach ((jsonBody($r['body'])['categories'] ?? []) as $group) {
+    foreach (($group['memories'] ?? []) as $mem) {
+        if (($mem['id'] ?? '') === $pubId) { $treePub = $mem['public'] ?? null; }
+    }
+}
+check('tree -> exposes public flag', true === $treePub, $r['body']);
+
+// Unpublishing (public:false) must actually persist and drop the flag.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $pubId, 'category' => 'writings', 'title' => 'Public post', 'tags' => ['blog'], 'content' => 'Hello **world**.', 'public' => false,
+]));
+check('admin API -> writing unpublished', 200 === $r['status'] && false === (jsonBody($r['body'])['memory']['public'] ?? true), $r['body']);
+$pubRaw = is_file($tmp . '/memory/writings/' . $pubId . '.md') ? (string) file_get_contents($tmp . '/memory/writings/' . $pubId . '.md') : '';
+check('unpublish -> public frontmatter removed', !str_contains($pubRaw, 'public:'), $pubRaw);
+$r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
+check('unpublish -> no longer served', 404 === $r['status'], (string) $r['status']);
+
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
 $r = request('GET', '/ui');
