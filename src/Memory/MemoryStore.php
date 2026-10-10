@@ -80,12 +80,12 @@ final class MemoryStore
             throw new \RuntimeException("Memory entry already exists: {$category}/{$id}.md");
         }
 
-        $today = gmdate('Y-m-d');
+        $now = self::nowTimestamp();
         $frontmatter = [
             'type' => $category,
             'tags' => array_values(array_unique(array_filter($tags))),
-            'created' => $today,
-            'updated' => $today,
+            'created' => $now,
+            'updated' => $now,
             'source' => self::SOURCE,
             'id' => $id,
         ];
@@ -192,8 +192,8 @@ final class MemoryStore
         $frontmatter = [
             'type' => $nextCategory,
             'tags' => $nextTags,
-            'created' => (string) ($current['created'] ?? gmdate('Y-m-d')),
-            'updated' => gmdate('Y-m-d'),
+            'created' => (string) ($current['created'] ?? self::nowTimestamp()),
+            'updated' => self::nowTimestamp(),
             'source' => (string) ($current['source'] ?? self::SOURCE),
             'id' => $id,
         ];
@@ -300,7 +300,7 @@ final class MemoryStore
 
         usort($docs, static function (array $a, array $b): int {
             return ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
-                ?: strcmp((string) ($b['updated'] ?? ''), (string) ($a['updated'] ?? ''));
+                ?: ((int) ($b['updated_ts'] ?? 0) <=> (int) ($a['updated_ts'] ?? 0));
         });
 
         return array_slice($docs, 0, max(1, $limit));
@@ -428,6 +428,36 @@ final class MemoryStore
         return $category;
     }
 
+    /**
+     * The current time as an ISO-8601 UTC timestamp (e.g. 2026-08-27T14:32:05Z).
+     * Written to the frontmatter created/updated fields so ordering is exact
+     * and portable, rather than a date with no time component.
+     */
+    private static function nowTimestamp(): string
+    {
+        return gmdate('Y-m-d\TH:i:s\Z');
+    }
+
+    /**
+     * Parse a frontmatter created/updated value into a Unix timestamp. Accepts
+     * the ISO-8601 UTC timestamps this store writes and the plain "YYYY-MM-DD"
+     * dates other tools may write (treated as 00:00 UTC). Returns null when the
+     * value is empty or cannot be parsed.
+     */
+    private static function parseTimestamp(string $value): ?int
+    {
+        $value = trim($value);
+        if ('' === $value) {
+            return null;
+        }
+        if (1 === preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            $value .= 'T00:00:00Z';
+        }
+        $ts = strtotime($value);
+
+        return false === $ts ? null : $ts;
+    }
+
     private function newId(string $title): string
     {
         $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9]+/', '-', $title) ?? '') ?: 'memory');
@@ -464,7 +494,21 @@ final class MemoryStore
 
         $date = gmdate('Y-m-d');
         $created = isset($fm['created']) && is_string($fm['created']) ? $fm['created'] : $date;
-        $updated = isset($fm['updated']) && is_string($fm['updated']) ? $fm['updated'] : $date;
+        $updatedRaw = isset($fm['updated']) && is_string($fm['updated']) ? $fm['updated'] : '';
+        $updated = '' !== $updatedRaw ? $updatedRaw : $date;
+
+        // Precise last-modified time, used for ordering and the "new" badge.
+        // Our own files carry an ISO-8601 UTC timestamp; a file written by
+        // another tool may hold only a date (or nothing), so fall back to the
+        // file's mtime to keep ordering meaningful.
+        $updatedTs = self::parseTimestamp($updatedRaw);
+        if (null === $updatedTs) {
+            $file = $this->paths->file($category, $id);
+            $mtime = null !== $file ? @filemtime($file) : false;
+            if (false !== $mtime) {
+                $updatedTs = $mtime;
+            }
+        }
 
         $path = $category . '/' . $id . '.md';
 
@@ -476,6 +520,7 @@ final class MemoryStore
             'tags' => array_values(array_map('strval', $tags)),
             'created' => $created,
             'updated' => $updated,
+            'updated_ts' => $updatedTs,
             'source' => isset($fm['source']) && is_string($fm['source']) ? $fm['source'] : 'unknown',
             'archived' => filter_var($fm['archived'] ?? false, FILTER_VALIDATE_BOOL),
             'body' => $body,

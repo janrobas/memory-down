@@ -54,7 +54,13 @@ final class Frontmatter
 
     private static function escapeScalar(string $value): string
     {
-        if ('' === $value || preg_match('/[:#\[\]\{\},&*!|>\'"%@`]/', $value)) {
+        // Quote only when empty or when the value holds a character that could
+        // confuse the parser. ISO-8601 UTC timestamps contain ':' but are
+        // unambiguous as plain scalars, so they stay unquoted (cleaner in
+        // Obsidian, VS Code and git diffs).
+        if ('' === $value
+            || (preg_match('/[:#\[\]\{\},&*!|>\'"%@`]/', $value)
+                && 1 !== preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $value))) {
             return '"' . str_replace('"', '\\"', $value) . '"';
         }
 

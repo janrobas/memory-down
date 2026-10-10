@@ -523,9 +523,10 @@ final class WebApp
     }
 
     /**
-     * Whether a memory counts as "new": its .md file was modified within the
-     * last NEW_WINDOW_SECONDS. Uses the file mtime (the frontmatter dates are
-     * only day-granular) and fails closed when the file is unreadable.
+     * Whether a memory counts as "new": it was written within the last
+     * NEW_WINDOW_SECONDS, according to the stored ISO-8601 timestamp
+     * (`updated_ts`, derived from the frontmatter `updated` field, falling back
+     * to the file mtime for files without one). Archived entries are never new.
      *
      * @param array<string, mixed> $doc
      */
@@ -535,14 +536,9 @@ final class WebApp
             return false;
         }
 
-        $path = (string) ($doc['path'] ?? '');
-        if ('' === $path) {
-            return false;
-        }
+        $ts = (int) ($doc['updated_ts'] ?? 0);
 
-        $mtime = @filemtime($this->store->paths()->root() . '/' . $path);
-
-        return false !== $mtime && $mtime >= time() - self::NEW_WINDOW_SECONDS;
+        return $ts > 0 && $ts >= time() - self::NEW_WINDOW_SECONDS;
     }
 
     private function str(mixed $value): string

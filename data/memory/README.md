@@ -25,8 +25,8 @@ Each entry is `{category}/{slug-id}.md` with simple frontmatter:
     type: facts
     tags:
       - example
-    created: 2026-08-27
-    updated: 2026-08-27
+    created: 2026-08-27T09:15:00Z
+    updated: 2026-08-27T14:32:05Z
     source: chatgpt
     id: example-abc123
     ---

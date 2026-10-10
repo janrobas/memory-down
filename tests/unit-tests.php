@@ -76,6 +76,12 @@ $roundTrip = Frontmatter::parse(substr($rendered, 4, -4));
 check('render/parse round trip: tags', ['a', 'b'] === ($roundTrip['tags'] ?? null));
 check('render/parse round trip: bool', true === ($roundTrip['archived'] ?? null));
 
+// ISO-8601 timestamps contain ':' but must stay valid, unquoted YAML scalars.
+$tsRendered = Frontmatter::render(['created' => '2026-08-27T09:15:00Z', 'updated' => '2026-08-27T14:32:05Z']);
+check('render: ISO timestamp stays unquoted', str_contains($tsRendered, 'updated: 2026-08-27T14:32:05Z'), $tsRendered);
+$tsRoundTrip = Frontmatter::parse(substr($tsRendered, 4, -4));
+check('render/parse round trip: ISO timestamp', '2026-08-27T14:32:05Z' === ($tsRoundTrip['updated'] ?? null), json_encode($tsRoundTrip));
+
 /* ------------------------------------------------------------------ *
  *  PathValidator
  * ------------------------------------------------------------------ */
@@ -169,6 +175,20 @@ check('count only counts canonical entries', 1 === $store->count(), (string) $st
 check('collectFiles ignores root + nested .md', 1 === count($store->collectFiles()));
 check('collectFiles(category) finds the entry', 1 === count($store->collectFiles('facts')));
 check('collectFiles(bogus category) is empty', [] === $store->collectFiles('not-a-real'));
+
+// B1: created/updated are full ISO-8601 UTC timestamps, and the parsed doc
+// exposes a numeric updated_ts used for ordering and the UI "new" badge.
+$tsDoc = $store->create('Timestamped body.', 'Timestamped', 'facts');
+check('create writes an ISO-8601 updated timestamp',
+    (bool) preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) ($tsDoc['updated'] ?? '')),
+    json_encode($tsDoc['updated'] ?? null));
+check('parsed doc exposes a numeric updated_ts', is_int($tsDoc['updated_ts'] ?? null), json_encode($tsDoc['updated_ts'] ?? null));
+
+// A file written by another tool with a date-only (or missing) timestamp still
+// yields an updated_ts so ordering never breaks.
+@file_put_contents($memRoot . '/facts/legacy-one.md', "---\ntype: facts\nid: legacy-one\ncreated: 2020-01-02\nupdated: 2020-01-03\n---\n\n# Legacy\n\nBody.\n");
+$legacyDoc = $store->read('facts', 'legacy-one');
+check('legacy date-only updated parses to a timestamp', is_int($legacyDoc['updated_ts'] ?? null), json_encode($legacyDoc['updated_ts'] ?? null));
 
 /* ------------------------------------------------------------------ *
  *  RateLimiter

@@ -192,6 +192,19 @@ function jsonBody(string $body): array
     return json_decode($body, true) ?? [];
 }
 
+/**
+ * Rewrite a memory file's frontmatter `updated` timestamp to $secondsAgo in the
+ * past. The "new" badge and ordering are driven by the stored timestamp, not
+ * the file mtime, so tests age an entry by backdating its frontmatter.
+ */
+function backdateMemory(string $file, int $secondsAgo): void
+{
+    $raw = (string) file_get_contents($file);
+    $when = gmdate('Y-m-d\TH:i:s\Z', time() - $secondsAgo);
+    $raw = (string) preg_replace('/^updated:.*$/m', 'updated: ' . $when, $raw, 1);
+    file_put_contents($file, $raw);
+}
+
 function waitForServer(string $base, int $attempts = 80): void
 {
     global $tmp;
@@ -721,7 +734,7 @@ foreach ((jsonBody($r['body'])['results'] ?? []) as $res) {
 check('admin API search -> fresh memory flagged new', true === $searchHit, $r['body']);
 
 // An entry older than the 24h window must not be flagged new.
-@touch($adminFile, time() - 3 * 86400);
+backdateMemory($adminFile, 3 * 86400);
 $r = request('GET', '/ui/api/tree');
 $oldFlag = null;
 foreach ((jsonBody($r['body'])['categories'] ?? []) as $group) {
@@ -740,7 +753,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'category' => 'notes', 'title' => 'Sort old', 'content' => 'old sort probe',
 ]));
 $sortOldId = jsonBody($r['body'])['memory']['id'] ?? '';
-@touch($tmp . '/memory/notes/' . $sortOldId . '.md', time() - 3 * 86400);
+backdateMemory($tmp . '/memory/notes/' . $sortOldId . '.md', 3 * 86400);
 
 $r = request('GET', '/ui/api/tree');
 $notesOrder = [];
