@@ -188,6 +188,33 @@ through MCP, so an agent cannot publish on your behalf. Enabled without a
 `PUBLIC_API_TOKEN` the API fails closed with `503`; disabled, the routes return
 `404`.
 
+### Example
+
+```bash
+# List published writings (newest first)
+curl -s https://memory.example.com/public/writings \
+  -H "Authorization: Bearer a-long-random-secret"
+
+# Fetch one writing as Markdown
+curl -s https://memory.example.com/public/writings/my-post-a1b2c3 \
+  -H "Authorization: Bearer a-long-random-secret"
+```
+
+Consuming it from your site's PHP backend:
+
+```php
+$opts = ['http' => [
+    'header' => 'Authorization: Bearer ' . getenv('MEMORYDOWN_TOKEN') . "\r\n",
+    'ignore_errors' => true,
+]];
+$ctx  = stream_context_create($opts);
+$list = json_decode((string) @file_get_contents('https://memory.example.com/public/writings', false, $ctx), true);
+
+foreach ($list['writings'] ?? [] as $w) {
+    // $w['id'], $w['title'], $w['tags'], $w['created'], $w['archived']
+}
+```
+
 ## Search index
 
 Search uses a **disposable SQLite FTS5 index** (`INDEX_PATH`). Markdown stays the
