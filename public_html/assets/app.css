@@ -998,7 +998,7 @@ body.dragging .cat.drop-hover .cat-name {
 @media (max-width: 820px) {
   /* Full height of the pinned top toolbar (content + safe-area inset),
      reserved by .editor-head below so the two always line up. */
-  :root { --mobile-topbar-h: calc(2.1rem + env(safe-area-inset-top)); }
+  :root { --mobile-topbar-h: calc(3.4rem + env(safe-area-inset-top)); }
 
   /* Let the document scroll: the editor header (title, meta, tabs) scrolls
      away instead of being pinned to the viewport, so the whole page is
@@ -1016,9 +1016,18 @@ body.dragging .cat.drop-hover .cat-name {
   /* The sidebar is a fixed overlay drawer on small screens; no resize handle. */
   .sidebar-resizer { display: none; }
 
-  /* Topbar: show the two summon buttons, drop the desktop right padding. */
+  /* Topbar: show the two summon buttons (☰ / ⋯) and keep them a comfortable,
+     thumb-friendly size on touch screens. */
   .editor-topbar { padding-right: 0; }
-  .editor-topbar .icon-btn { display: inline-flex; }
+  .editor-topbar .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    padding: .5rem .75rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
 
   .editor-head {
     /* Leave room for the fixed top toolbar pinned above. */
@@ -1040,9 +1049,9 @@ body.dragging .cat.drop-hover .cat-name {
     margin: 0;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
-    padding: env(safe-area-inset-top)
+    padding: calc(.3rem + env(safe-area-inset-top))
              calc(1rem + env(safe-area-inset-right))
-             0
+             .3rem
              calc(1rem + env(safe-area-inset-left));
   }
 
@@ -1053,6 +1062,7 @@ body.dragging .cat.drop-hover .cat-name {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    font-size: .8rem;
   }
 
   /* Natural flow: the header scrolls, the editor grows with its content. */
