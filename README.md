@@ -32,6 +32,9 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Search:** a disposable SQLite FTS5 index (BM25), rebuilt from the Markdown
   on demand, with automatic fallback to a direct file scan. Archived memories
   stay indexed and searchable but rank after active ones.
+- **Read-only public writings API** at `/public/writings`: publish entries in the
+  `writings` category (`public: true`) as Markdown over a token-gated GET API, for
+  a personal website to consume. Disabled by default.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
 
@@ -105,6 +108,8 @@ in the hosting panel or php.ini win over `.env`.
 | `ADMIN_SETUP_TOKEN` | *(empty)* | Optional extra secret for the first-run `/ui/setup` form |
 | `INDEX_ENABLED` | `true` | Build the SQLite FTS5 search index |
 | `INDEX_PATH` | `./data/index/memory.sqlite` | Location of the disposable search index |
+| `PUBLIC_API_ENABLED` | `false` | Serve published writings read-only at `/public/writings` |
+| `PUBLIC_API_TOKEN` | *(empty)* | Bearer token required by the public writings API (required when enabled) |
 | `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limiting on the OAuth token + consent endpoints |
 | `RATE_LIMIT_TOKEN_MAX` | `30` | Max token requests per IP per window |
 | `RATE_LIMIT_CONSENT_MAX` | `10` | Max consent submissions per IP per window |
@@ -146,6 +151,42 @@ Or open `/ui` on a fresh install and use the one-time `/ui/setup` page
 
 Sessions live in `data/sessions/`; the cookie is `HttpOnly` + `SameSite=Lax`
 (`Secure` in production). All state-changing requests require a CSRF token.
+
+## Public writings API (`/public/writings`)
+
+An optional, read-only, token-gated JSON API for publishing a subset of your
+memory to another site (e.g. a personal blog). It only ever reads entries in the
+`writings` category that carry `public: true` — nothing else in your memory is
+reachable through it. It is disabled by default.
+
+Enable it in `.env`:
+
+```
+PUBLIC_API_ENABLED=true
+PUBLIC_API_TOKEN=a-long-random-secret
+```
+
+Your site's backend then sends the token on every request:
+
+```
+Authorization: Bearer a-long-random-secret
+```
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /public/writings?limit=50&offset=0` | `{ writings: [{ id, title, archived, tags, created, updated }], count, total, has_more }`, newest-**created** first (an edit never bumps a post) |
+| `GET /public/writings/{id}` | `{ writing: { id, title, archived, tags, created, updated, markdown } }` |
+
+The body is Markdown (render it on your site). Responses carry an `ETag` and
+`Cache-Control: private`, and answer `If-None-Match` with `304`. An entry can be
+both **public and archived** — it stays served, with `archived: true` in the
+payload — so you can drop a post from listings without unpublishing it.
+
+To publish: move the entry into the **writings** category and tick **Public** in
+the admin UI. The flag is only shown for that category, and is never settable
+through MCP, so an agent cannot publish on your behalf. Enabled without a
+`PUBLIC_API_TOKEN` the API fails closed with `503`; disabled, the routes return
+`404`.
 
 ## Search index
 

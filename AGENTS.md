@@ -643,6 +643,14 @@ the constraints that follow. The rest of the list still stands.
   application must fall back to direct file search when `pdo_sqlite` is absent.
   Deleting the index must lose nothing.
 
+- **A read-only public writings API** (`/public/writings`) is in scope, but only
+  as a narrowly-scoped publishing surface: it serves entries in the `writings`
+  category that carry `public: true`, as Markdown, over a token-gated GET API. It
+  must never read or expose anything outside `writings/`, must never write, and
+  is disabled by default. Publishing (`public`) is set only in the admin UI, not
+  via MCP, so an agent cannot publish on the user's behalf. No rendering, no
+  comments, no multi-user: the consuming website owns display.
+
 Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
 (one instance per person instead), teams, billing, background jobs/queues.
 

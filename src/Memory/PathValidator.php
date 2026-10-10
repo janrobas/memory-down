@@ -33,6 +33,9 @@ final class PathValidator
         'people',
         'context',
         'notes',
+        // Reserved for entries a human chooses to publish read-only through the
+        // public writings API (see MemoryDown\Publish\Publications).
+        'writings',
     ];
 
     private string $root;

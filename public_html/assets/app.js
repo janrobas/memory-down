@@ -33,6 +33,8 @@
   var fCategory = document.getElementById('f-category');
   var fTags = document.getElementById('f-tags');
   var fArchived = document.getElementById('f-archived');
+  var fPublic = document.getElementById('f-public');
+  var publicField = document.getElementById('public-field');
   var fContent = document.getElementById('f-content');
   var deleteBtn = document.getElementById('delete');
   var newBtn = document.getElementById('new-memory');
@@ -333,7 +335,7 @@
   /* ------------------------------------------------------- editor state */
 
   // Snapshot of what's currently persisted, used to detect unsaved changes.
-  var saved = { id: '', title: '', category: '', tags: '', archived: false, content: '' };
+  var saved = { id: '', title: '', category: '', tags: '', archived: false, public: false, content: '' };
   var saving = false;
   var queuedSave = null;
 
@@ -344,6 +346,7 @@
       category: fCategory.value,
       tags: fTags.value,
       archived: !!fArchived.checked,
+      public: !!fPublic.checked,
       content: fContent.value
     };
   }
@@ -355,6 +358,7 @@
       || p.category !== saved.category
       || p.tags !== saved.tags
       || p.archived !== saved.archived
+      || p.public !== saved.public
       || p.content !== saved.content;
   }
 
@@ -365,6 +369,7 @@
       category: payload.category,
       tags: payload.tags,
       archived: !!payload.archived,
+      public: !!payload.public,
       content: payload.content
     };
   }
@@ -556,6 +561,8 @@
     Array.prototype.forEach.call(newCats.querySelectorAll('.chip'), function (chip) {
       chip.classList.toggle('active', chip.getAttribute('data-cat') === category);
     });
+    // The "Public" flag only means something for the writings category.
+    if (publicField) { publicField.hidden = category !== 'writings'; }
   }
 
   function updateBreadcrumb(category, id) {
@@ -629,6 +636,7 @@
     fTags.value = (doc.tags || []).join(', ');
     syncTagChips();
     fArchived.checked = !!doc.archived;
+    fPublic.checked = !!doc.public;
     fContent.value = doc.body || '';
     syncCategoryUI(doc.category);
     deleteBtn.disabled = false;
@@ -675,6 +683,7 @@
     fTags.value = '';
     syncTagChips();
     fArchived.checked = false;
+    fPublic.checked = false;
     fContent.value = '';
     deleteBtn.disabled = true;
     deleteBtn.hidden = true;
@@ -1338,8 +1347,11 @@
     });
   }
 
-  /* Archive toggle: saved immediately (a discrete action, like a move). */
+  /* Archive / publish toggles: saved immediately (discrete actions). */
   fArchived.addEventListener('change', function () {
+    if (isDirty()) { saveIdle.cancel(); save(); }
+  });
+  fPublic.addEventListener('change', function () {
     if (isDirty()) { saveIdle.cancel(); save(); }
   });
 

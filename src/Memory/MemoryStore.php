@@ -61,6 +61,7 @@ final class MemoryStore
         array $tags = [],
         string $id = '',
         bool $archived = false,
+        bool $public = false,
     ): array {
         $category = self::normalizeCategory($category);
         $dir = $this->paths->categoryDir($category);
@@ -91,6 +92,9 @@ final class MemoryStore
         ];
         if ($archived) {
             $frontmatter['archived'] = true;
+        }
+        if ($public) {
+            $frontmatter['public'] = true;
         }
         $body = self::bodyWithTitle($title, $content);
         $raw = Frontmatter::render($frontmatter) . "\n\n" . $body . "\n";
@@ -175,6 +179,11 @@ final class MemoryStore
         $nextArchived = array_key_exists('archived', $changes)
             ? (bool) $changes['archived']
             : (bool) ($current['archived'] ?? false);
+        // Publishing is preserved unless the caller explicitly changes it, so an
+        // agent edit (which never sends `public`) cannot unpublish a writing.
+        $nextPublic = array_key_exists('public', $changes)
+            ? (bool) $changes['public']
+            : (bool) ($current['public'] ?? false);
 
         $dir = $this->paths->categoryDir($nextCategory);
         if (null === $dir) {
@@ -199,6 +208,9 @@ final class MemoryStore
         ];
         if ($nextArchived) {
             $frontmatter['archived'] = true;
+        }
+        if ($nextPublic) {
+            $frontmatter['public'] = true;
         }
         $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
@@ -273,7 +285,7 @@ final class MemoryStore
      *
      * @return list<array<string, mixed>>
      */
-    public function list(?string $category = null, int $limit = 50, ?bool $archived = null, ?string $tag = null): array
+    public function list(?string $category = null, int $limit = 50, ?bool $archived = null, ?string $tag = null, ?bool $public = null): array
     {
         $tag = null !== $tag ? strtolower(trim($tag)) : null;
         $docs = [];
@@ -290,6 +302,9 @@ final class MemoryStore
                 continue;
             }
             if (null !== $archived && (bool) $doc['archived'] !== $archived) {
+                continue;
+            }
+            if (null !== $public && (bool) ($doc['public'] ?? false) !== $public) {
                 continue;
             }
             if (null !== $tag && '' !== $tag && !in_array($tag, array_map('strtolower', $doc['tags']), true)) {
@@ -493,14 +508,15 @@ final class MemoryStore
         $body = self::stripLeadingHeadings($body);
 
         $date = gmdate('Y-m-d');
-        $created = isset($fm['created']) && is_string($fm['created']) ? $fm['created'] : $date;
+        $createdRaw = isset($fm['created']) && is_string($fm['created']) ? $fm['created'] : '';
+        $created = '' !== $createdRaw ? $createdRaw : $date;
         $updatedRaw = isset($fm['updated']) && is_string($fm['updated']) ? $fm['updated'] : '';
         $updated = '' !== $updatedRaw ? $updatedRaw : $date;
 
-        // Precise last-modified time, used for ordering and the "new" badge.
-        // Our own files carry an ISO-8601 UTC timestamp; a file written by
-        // another tool may hold only a date (or nothing), so fall back to the
-        // file's mtime to keep ordering meaningful.
+        // Precise timestamps, used for ordering (and the "new" badge). Our own
+        // files carry an ISO-8601 UTC timestamp; a file written by another tool
+        // may hold only a date (or nothing), so fall back to the file's mtime to
+        // keep ordering meaningful.
         $updatedTs = self::parseTimestamp($updatedRaw);
         if (null === $updatedTs) {
             $file = $this->paths->file($category, $id);
@@ -508,6 +524,10 @@ final class MemoryStore
             if (false !== $mtime) {
                 $updatedTs = $mtime;
             }
+        }
+        $createdTs = self::parseTimestamp($createdRaw);
+        if (null === $createdTs) {
+            $createdTs = $updatedTs;
         }
 
         $path = $category . '/' . $id . '.md';
@@ -520,9 +540,11 @@ final class MemoryStore
             'tags' => array_values(array_map('strval', $tags)),
             'created' => $created,
             'updated' => $updated,
+            'created_ts' => $createdTs,
             'updated_ts' => $updatedTs,
             'source' => isset($fm['source']) && is_string($fm['source']) ? $fm['source'] : 'unknown',
             'archived' => filter_var($fm['archived'] ?? false, FILTER_VALIDATE_BOOL),
+            'public' => filter_var($fm['public'] ?? false, FILTER_VALIDATE_BOOL),
             'body' => $body,
         ];
     }

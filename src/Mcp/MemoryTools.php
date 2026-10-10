@@ -448,7 +448,7 @@ final class MemoryTools
     {
         $public = $doc;
         $public['path'] = $doc['category'] . '/' . $doc['id'] . '.md';
-        unset($public['source'], $public['updated_ts']);
+        unset($public['source'], $public['updated_ts'], $public['created_ts']);
 
         return $public;
     }

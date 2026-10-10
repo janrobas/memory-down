@@ -314,6 +314,7 @@ final class WebApp
         $content = (string) ($data['content'] ?? '');
         $tags = $this->normalizeTags($data['tags'] ?? []);
         $archived = filter_var($data['archived'] ?? false, FILTER_VALIDATE_BOOL);
+        $public = filter_var($data['public'] ?? false, FILTER_VALIDATE_BOOL);
 
         if (!PathValidator::isCategory($category)) {
             return $this->json(['error' => 'Invalid category.'], 400);
@@ -324,18 +325,24 @@ final class WebApp
 
         try {
             if ('' === $id) {
-                $doc = $this->store->create($content, $title, $category, $tags, archived: $archived);
+                $doc = $this->store->create($content, $title, $category, $tags, archived: $archived, public: $public);
             } else {
                 if (!PathValidator::isId($id)) {
                     return $this->json(['error' => 'Invalid id.'], 400);
                 }
-                $doc = $this->store->update($this->categoryFor($id), $id, [
+                $changes = [
                     'title' => $title,
                     'content' => $content,
                     'tags' => $tags,
                     'category' => $category,
                     'archived' => $archived,
-                ]);
+                ];
+                // Only touch the publish flag when the client sent it, so an
+                // older client can never accidentally unpublish a writing.
+                if (array_key_exists('public', $data)) {
+                    $changes['public'] = $public;
+                }
+                $doc = $this->store->update($this->categoryFor($id), $id, $changes);
             }
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], 400);

@@ -28,6 +28,7 @@ use Psr\Log\LoggerInterface;
  *   POST /mcp, GET /mcp, DELETE /mcp                  MCP (Streamable HTTP)
  *   POST /, GET /                                     MCP at the base URL too
  *   GET  /                                             landing page for humans
+ *   GET  /public/writings[/{id}]                       published writings (bearer)
  *
  * ChatGPT may probe the base URL instead of /mcp, so the MCP endpoint is
  * mounted at both paths.
@@ -87,6 +88,7 @@ final class App
                 '/' === $path && 'POST' === $method => McpServerFactory::run($request),
                 '/' === $path && 'GET' === $method && $this->wantsEventStream($request) => McpServerFactory::run($request),
                 '/' === $path && 'GET' === $method => $this->landingPage(),
+                ('/public/writings' === $path || str_starts_with($path, '/public/writings/')) && 'GET' === $method => $this->publicWritings($request, $path),
                 default => $this->notFound(),
             };
         } catch (\Throwable $e) {
@@ -262,6 +264,89 @@ final class App
             ],
             'consent_password_enabled' => '' !== $this->config->oauthConsentPassword,
         ];
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  Public writings API (read-only, token-gated)
+     * ------------------------------------------------------------------ */
+
+    private function publicWritings(ServerRequestInterface $request, string $path): ResponseInterface
+    {
+        if (!$this->config->publicApiEnabled) {
+            return $this->notFound();
+        }
+
+        $token = $this->config->publicApiToken;
+        if ('' === $token) {
+            // Enabled but no token: fail closed rather than serving openly.
+            $this->logger->error('public_api.misconfigured', ['reason' => 'empty_token']);
+
+            return $this->json(['error' => 'not_configured'], 503);
+        }
+        if (!$this->bearerMatches($request, $token)) {
+            return $this->json(['error' => 'unauthorized'], 401)
+                ->withHeader('WWW-Authenticate', 'Bearer realm="MemoryDown writings"');
+        }
+
+        $publications = new \MemoryDown\Publish\Publications(Kernel::get()->memory);
+
+        if ('/public/writings' === $path) {
+            $query = $request->getQueryParams();
+
+            return $this->publicJson($request, $publications->list(
+                (int) ($query['limit'] ?? 50),
+                (int) ($query['offset'] ?? 0),
+            ));
+        }
+
+        $writing = $publications->get(substr($path, strlen('/public/writings/')));
+        if (null === $writing) {
+            return $this->json(['error' => 'not_found'], 404);
+        }
+
+        return $this->publicJson($request, ['writing' => $writing]);
+    }
+
+    /**
+     * Constant-time check of the "Authorization: Bearer <token>" header.
+     */
+    private function bearerMatches(ServerRequestInterface $request, string $expected): bool
+    {
+        if (1 !== preg_match('/^Bearer\s+(.+)$/i', trim($request->getHeaderLine('Authorization')), $m)) {
+            return false;
+        }
+
+        return hash_equals($expected, trim($m[1]));
+    }
+
+    /**
+     * JSON reply for the public API with cache revalidation: an ETag over the
+     * exact body, a "private" cache directive (the token is per-client), and a
+     * 304 when the caller already holds this representation.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function publicJson(ServerRequestInterface $request, array $data): ResponseInterface
+    {
+        $body = (string) json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        $etag = '"' . md5($body) . '"';
+        $factory = new Psr17Factory();
+
+        if (trim($request->getHeaderLine('If-None-Match')) === $etag) {
+            return $factory->createResponse(304)
+                ->withHeader('ETag', $etag)
+                ->withHeader('Cache-Control', 'private, max-age=60')
+                ->withHeader('Vary', 'Authorization');
+        }
+
+        $response = $factory->createResponse(200)
+            ->withHeader('Content-Type', 'application/json; charset=utf-8')
+            ->withHeader('Cache-Control', 'private, max-age=60')
+            ->withHeader('Vary', 'Authorization')
+            ->withHeader('ETag', $etag);
+        $response->getBody()->write($body);
+
+        return $response;
     }
 
     /* ------------------------------------------------------------------ *

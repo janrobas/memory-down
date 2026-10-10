@@ -121,6 +121,18 @@ return [
     'index_path' => rtrim((string) ($_ENV['INDEX_PATH'] ?? getenv('INDEX_PATH') ?: $__dataPath . '/index/memory.sqlite'), '/\\'),
 
     // -----------------------------------------------------------------------
+    // Public writings API (read-only): serves entries in the "writings"
+    // category that carry `public: true`, as Markdown over HTTP. Disabled by
+    // default. When enabled, PUBLIC_API_TOKEN must be set; requests must send
+    // "Authorization: Bearer <token>".
+    // -----------------------------------------------------------------------
+    'public_api_enabled' => filter_var(
+        $_ENV['PUBLIC_API_ENABLED'] ?? getenv('PUBLIC_API_ENABLED') ?: 'false',
+        FILTER_VALIDATE_BOOL
+    ),
+    'public_api_token' => (string) ($_ENV['PUBLIC_API_TOKEN'] ?? getenv('PUBLIC_API_TOKEN') ?: ''),
+
+    // -----------------------------------------------------------------------
     // Lightweight per-IP rate limiting for the OAuth token and consent
     // endpoints (fixed window, file-backed; no daemon required).
     // -----------------------------------------------------------------------

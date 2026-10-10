@@ -22,6 +22,7 @@ use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
+use MemoryDown\Publish\Publications;
 use MemoryDown\Support\RateLimiter;
 
 $passed = 0;
@@ -103,6 +104,7 @@ check('default categories include workflows', in_array('workflows', PathValidato
 check('default categories include ideas', in_array('ideas', PathValidator::DEFAULT_CATEGORIES, true));
 check('default categories include references', in_array('references', PathValidator::DEFAULT_CATEGORIES, true));
 check('default categories include goals', in_array('goals', PathValidator::DEFAULT_CATEGORIES, true));
+check('default categories include writings', in_array('writings', PathValidator::DEFAULT_CATEGORIES, true));
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
@@ -189,6 +191,49 @@ check('parsed doc exposes a numeric updated_ts', is_int($tsDoc['updated_ts'] ?? 
 @file_put_contents($memRoot . '/facts/legacy-one.md', "---\ntype: facts\nid: legacy-one\ncreated: 2020-01-02\nupdated: 2020-01-03\n---\n\n# Legacy\n\nBody.\n");
 $legacyDoc = $store->read('facts', 'legacy-one');
 check('legacy date-only updated parses to a timestamp', is_int($legacyDoc['updated_ts'] ?? null), json_encode($legacyDoc['updated_ts'] ?? null));
+
+// The `public` flag mirrors `archived`: absent by default, preserved on update
+// unless explicitly changed (so an agent edit cannot unpublish a writing).
+$pubDoc = $store->create('Public body.', 'Pub', 'writings', public: true);
+check('create stores public flag', true === ($pubDoc['public'] ?? null), json_encode($pubDoc['public'] ?? null));
+check('create defaults public to false', false === ($store->create('Plain body.', 'Plain', 'notes')['public'] ?? null));
+$keptPublic = $store->update('writings', $pubDoc['id'], ['title' => 'Pub renamed']);
+check('update preserves public when not provided', true === ($keptPublic['public'] ?? null), json_encode($keptPublic['public'] ?? null));
+$unpub = $store->update('writings', $pubDoc['id'], ['public' => false]);
+check('update can clear public', false === ($unpub['public'] ?? null), json_encode($unpub['public'] ?? null));
+check('list filters by public=true', [] === $store->list('writings', 50, null, null, true));
+
+/* ------------------------------------------------------------------ *
+ *  Publications (public writings API)
+ * ------------------------------------------------------------------ */
+
+section('Publications');
+
+$pubRoot = $root . '/pub-memory';
+$pubStore = new MemoryStore($pubRoot, $root . '/pub-auth');
+$w1 = $pubStore->create('First public writing.', 'First', 'writings', ['blog'], public: true);
+$w2 = $pubStore->create('Second public writing.', 'Second', 'writings', ['blog'], public: true);
+$draft = $pubStore->create('A private draft.', 'Draft', 'writings');
+$fact = $pubStore->create('A private fact.', 'Fact', 'facts', public: true);
+
+$pubs = new Publications($pubStore);
+$listing = $pubs->list();
+
+check('publications total counts only public writings', 2 === $listing['total'], json_encode($listing));
+$titles = array_column($listing['writings'], 'title');
+check('publications list includes both public writings', in_array('First', $titles, true) && in_array('Second', $titles, true), json_encode($titles));
+check('publications list hides drafts and other categories', !in_array('Draft', $titles, true) && !in_array('Fact', $titles, true), json_encode($titles));
+check('publications summary omits the body', !array_key_exists('body', $listing['writings'][0] ?? []), json_encode($listing['writings'][0] ?? null));
+check('publications summary carries metadata', false === ($listing['writings'][0]['archived'] ?? null) && isset($listing['writings'][0]['tags']), json_encode($listing['writings'][0] ?? null));
+
+check('publications get returns the Markdown body', 'First public writing.' === rtrim((string) ($pubs->get($w1['id'])['markdown'] ?? '')), json_encode($pubs->get($w1['id'])));
+check('publications get hides a draft', null === $pubs->get($draft['id']));
+check('publications get hides other categories', null === $pubs->get($fact['id']));
+check('publications get rejects traversal ids', null === $pubs->get('../secret'));
+
+// Pagination.
+check('publications pages with limit/offset', 1 === $pubs->list(1, 0)['count'] && true === $pubs->list(1, 0)['has_more']);
+check('publications reports no more past the end', false === $pubs->list(10, 5)['has_more'] && 0 === $pubs->list(10, 5)['count']);
 
 /* ------------------------------------------------------------------ *
  *  RateLimiter

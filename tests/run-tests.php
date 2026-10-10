@@ -96,6 +96,8 @@ if (!$keepServer) {
     putenv('OAUTH_USERNAME=test-user');
     putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
+    putenv('PUBLIC_API_ENABLED=true');
+    putenv('PUBLIC_API_TOKEN=test-public-token');
 
     // The child `php -S` server inherits the current PHP configuration (its
     // php.ini / loaded extensions). We deliberately do NOT add `-d extension=`
@@ -1105,6 +1107,72 @@ request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 24, 'method' => 'tools/call',
     'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $mcpArchId, 'category' => 'facts']],
 ]));
+
+section('Public writings API');
+
+// Publish a writing plus a draft (needs the admin API; MCP never sets `public`).
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'writings', 'title' => 'Public post', 'tags' => ['blog'], 'content' => 'Hello **world**.', 'public' => true,
+]));
+$pubId = jsonBody($r['body'])['memory']['id'] ?? '';
+check('admin API -> writing published', 200 === $r['status'] && '' !== $pubId, $r['body']);
+
+$r = request('GET', '/ui/api/memory?category=writings&id=' . rawurlencode($pubId));
+check('admin API -> returns public flag', true === (jsonBody($r['body'])['memory']['public'] ?? null), $r['body']);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'writings', 'title' => 'Draft post', 'content' => 'Not ready.', 'public' => false,
+]));
+$draftId = jsonBody($r['body'])['memory']['id'] ?? '';
+
+// A `public` flag on a non-writings memory must never be served.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Public fact', 'content' => 'Secret fact.', 'public' => true,
+]));
+$factId = jsonBody($r['body'])['memory']['id'] ?? '';
+
+$auth = ['Authorization' => 'Bearer test-public-token'];
+
+$r = request('GET', '/public/writings', $auth);
+$pubList = jsonBody($r['body']);
+check('public API list -> 200', 200 === $r['status'], (string) $r['status']);
+check('public API list -> only the published writing', 1 === ($pubList['total'] ?? -1) && $pubId === ($pubList['writings'][0]['id'] ?? ''), $r['body']);
+check('public API list -> draft and other category hidden',
+    !in_array($draftId, array_column($pubList['writings'] ?? [], 'id'), true)
+    && !in_array($factId, array_column($pubList['writings'] ?? [], 'id'), true), $r['body']);
+check('public API list -> metadata present',
+    'Public post' === ($pubList['writings'][0]['title'] ?? '')
+    && isset($pubList['writings'][0]['archived']) && isset($pubList['writings'][0]['tags']), $r['body']);
+
+$etag = $r['headers']['etag'] ?? '';
+check('public API list -> ETag present', '' !== $etag);
+$r = request('GET', '/public/writings', $auth + ['If-None-Match' => $etag]);
+check('public API list -> 304 on matching ETag', 304 === $r['status'], (string) $r['status']);
+
+$r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
+check('public API get -> 200 with Markdown body',
+    200 === $r['status'] && str_contains((string) (jsonBody($r['body'])['writing']['markdown'] ?? ''), 'Hello **world**.'), $r['body']);
+
+$r = request('GET', '/public/writings/' . rawurlencode($draftId), $auth);
+check('public API get draft -> 404', 404 === $r['status'], (string) $r['status']);
+$r = request('GET', '/public/writings/' . rawurlencode($factId), $auth);
+check('public API get other category -> 404', 404 === $r['status'], (string) $r['status']);
+$r = request('GET', '/public/writings/does-not-exist', $auth);
+check('public API get missing -> 404', 404 === $r['status'], (string) $r['status']);
+
+$r = request('GET', '/public/writings');
+check('public API without token -> 401', 401 === $r['status'], (string) $r['status']);
+$r = request('GET', '/public/writings', ['Authorization' => 'Bearer wrong-token']);
+check('public API wrong token -> 401', 401 === $r['status'], (string) $r['status']);
+
+// Archived-but-public is still served, and the flag is exposed.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $pubId, 'category' => 'writings', 'title' => 'Public post', 'tags' => ['blog'], 'content' => 'Hello **world**.', 'public' => true, 'archived' => true,
+]));
+check('admin API -> writing archived', 200 === $r['status'], $r['body']);
+$r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
+check('public API still serves archived-but-public',
+    200 === $r['status'] && true === (jsonBody($r['body'])['writing']['archived'] ?? null), $r['body']);
 
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);

@@ -19,6 +19,7 @@ $selId = $selected['id'] ?? '';
 $selTitle = $selected['title'] ?? '';
 $selTags = $selected ? implode(', ', $selected['tags'] ?? []) : '';
 $selArchived = (bool) ($selected['archived'] ?? false);
+$selPublic = (bool) ($selected['public'] ?? false);
 $selBody = $selected['body'] ?? '';
 if (!in_array($selCategory, $categories, true)) {
     $categories[] = $selCategory;
@@ -124,6 +125,13 @@ if (!in_array($selCategory, $categories, true)) {
             <label class="check-label">
               <input type="checkbox" id="f-archived" name="archived" value="1"<?= $selArchived ? ' checked' : '' ?>>
               <span>Archived</span>
+            </label>
+          </div>
+          <div class="field check" id="public-field"<?= 'writings' !== $selCategory ? ' hidden' : '' ?>>
+            <span class="field-label">Public</span>
+            <label class="check-label">
+              <input type="checkbox" id="f-public" name="public" value="1"<?= $selPublic ? ' checked' : '' ?>>
+              <span>Public</span>
             </label>
           </div>
         </div>
