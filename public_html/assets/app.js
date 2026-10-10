@@ -766,8 +766,21 @@
   /* -------------------------------------------------------------- preview */
 
   function previewVisible() { return !previewEl.hidden; }
-  function hidePreview() { previewEl.hidden = true; fContent.hidden = false; }
+  function hidePreview() { previewEl.hidden = true; fContent.hidden = false; autosizeContent(); }
   function showPreview() { previewEl.hidden = false; fContent.hidden = true; renderPreview(); }
+
+  // Mobile only: grow the textarea to fit its content so the whole page scrolls
+  // (the header scrolls away and the editor gets the full screen). On desktop the
+  // editor keeps its fixed height with an internal scrollbar, so the inline
+  // height is cleared.
+  function autosizeContent() {
+    if (!isMobile() || fContent.hidden) {
+      fContent.style.height = '';
+      return;
+    }
+    fContent.style.height = 'auto';
+    fContent.style.height = fContent.scrollHeight + 'px';
+  }
 
   var renderPreview = debounce(function () {
     var body = fContent.value;
@@ -1342,6 +1355,7 @@
     resetReindexButton();
     if (isDirty()) { setStatus('Editing…'); } else { setStatus(''); }
     saveIdle();
+    autosizeContent();
     if (previewVisible()) { renderPreview(); }
   }
 
@@ -1399,6 +1413,10 @@
       manualSave();
     }
   });
+
+  // Re-evaluate the textarea sizing when the viewport changes (e.g. rotating the
+  // device or crossing the mobile/desktop breakpoint).
+  window.addEventListener('resize', autosizeContent);
 
 
   /* ----------------------------------------------------------------- init */
