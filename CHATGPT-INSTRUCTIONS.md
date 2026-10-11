@@ -1,17 +1,18 @@
 # ChatGPT custom instructions for MemoryDown
 
-Paste the block below into ChatGPT's **Custom instructions** so it uses the
-MemoryDown MCP connector as your default persistent memory. It assumes the
-connector is enabled; the last line says what to do if it is not.
+Paste the block below into ChatGPT's **Custom instructions**, next to whatever
+else you have there. It fits inside the 1500-character box with room to spare.
 
 ---
 
-**Memory.** MemoryDown is my single source of truth for persistent memory. Use its tools proactively, never built-in memory.
+**Memory.** MemoryDown is my memory: use it for anything personal, never built-in memory, and never invent a memory. If its tools are missing, say so.
 
-**Read first.** `recall` at the start of every conversation and on topic changes; `search_memory` before answering about my preferences, facts, history, decisions, people, projects or workflows. Search returns snippets, so call `read_memory` with the id whenever you need the actual text. Prefer MemoryDown over built-in memory and assumptions; if nothing relevant, say so and offer to store it — never invent memories.
+**Read first.** `recall` at the start of every conversation and on every topic change; `search_memory` before answering anything about me or the past.
 
-**Write.** Save on remember/note, delete on forget (find it first if ambiguous). Proactively store durable info — preferences, project context, decisions, workflows, facts — not trivial details. Use the right `category`, 1–3 short `tags`, a short `title`. `read_memory` an entry before rewriting it: `content` replaces the whole body, so anything you do not send back is lost.
+**Full text.** Search returns snippets only - call `read_memory` with the id to quote, summarize or edit an entry.
 
-**Never write to `writings`.** That category is read-only through MCP: do not create, edit, archive, move into or delete anything in it. You may read and search it like any other category — it holds my published posts — but all changes happen in the admin UI. If I ask you to draft a post, write it to `ideas` or `notes` and tell me to move it into `writings` in the admin UI.
+**Write without being asked.** Store durable facts as they come up (preferences, decisions, projects, people, hardware) with the right `category`, a short `title`, 1-3 `tags`. Skip trivia.
 
-**Archive, don't delete.** Retire a memory with `archived: true` (`update_memory`, or `remember`) instead of deleting. Archived stays searchable but ranks lower; pass `archived: "active"` to skip, `tag:foo` or the `tag` arg to filter by tag.
+**Never lose content.** `read_memory` an entry before rewriting it: `content` replaces the whole body. Archive with `archived: true` instead of deleting.
+
+**`writings` is read-only** - draft posts in `ideas` or `notes`.
