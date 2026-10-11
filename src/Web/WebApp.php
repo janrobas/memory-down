@@ -10,6 +10,7 @@ use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\SearchEngine;
+use MemoryDown\Support\ZipWriter;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -29,6 +30,49 @@ final class WebApp
 
     /** An entry is flagged "new" when its Markdown file was modified this recently. */
     private const NEW_WINDOW_SECONDS = 86400;
+
+    /**
+     * Flash messages for the trash page, keyed by a short code passed in the
+     * query string. A fixed vocabulary means nothing the user typed — or a link
+     * someone else crafted — is ever echoed back into the page.
+     */
+    private const NOTICES = [
+        'restored' => 'Memory restored to its original category.',
+        'purged' => 'Trashed entry deleted permanently.',
+        'emptied' => 'Trash emptied. Those entries are gone for good.',
+        'invalid' => 'That entry is no longer in the trash.',
+        'restore_failed' => 'Could not restore that entry: a memory with the same id exists again, or the file could not be moved. Reload and check.',
+    ];
+
+    /** Shipped inside every backup zip so it explains itself later. */
+    private const RESTORE_NOTES = <<<'TXT'
+    MemoryDown backup
+    =================
+
+    This archive contains every file of the memory store under memory/, exactly as
+    it sits on disk. The Markdown files are the source of truth; nothing here is a
+    database dump and nothing needs importing.
+
+    To restore
+    ----------
+
+    1. Unzip this archive anywhere.
+    2. Upload the memory/ folder so that its contents land in MEMORY_PATH
+       (by default data/memory), keeping the category subfolders.
+    3. Done. The search index rebuilds itself from the files on the next search
+       (or press Reindex in the admin UI).
+
+    Notes
+    -----
+
+    - Only memory/ is included. Restoring it brings back every memory; it does not
+      restore OAuth clients or tokens (data/auth) or your .env, so after a full
+      rebuild you will re-enter those and reconnect your MCP clients.
+    - index/, sessions/ and logs/ are deliberately absent: the index is disposable,
+      the rest is regenerable.
+    - The .trash folder inside memory/ holds entries deleted before this backup was
+      taken. Restore them from the admin UI if you want them back.
+    TXT;
 
     private Psr17Factory $factory;
     private WebAuth $auth;
@@ -73,6 +117,11 @@ final class WebApp
                 '/ui/setup' === $path && 'GET' === $method => $this->setupPage(),
                 '/ui/setup' === $path && 'POST' === $method => $this->setupSubmit($request),
                 '/ui/reindex' === $path && 'POST' === $method => $this->reindex($request),
+                '/ui/backup' === $path && 'GET' === $method => $this->backup(),
+                '/ui/trash' === $path && 'GET' === $method => $this->trashPage($request),
+                '/ui/trash/restore' === $path && 'POST' === $method => $this->trashRestore($request),
+                '/ui/trash/purge' === $path && 'POST' === $method => $this->trashPurge($request),
+                '/ui/trash/empty' === $path && 'POST' === $method => $this->trashEmpty($request),
                 '/ui/api/tree' === $path && 'GET' === $method => $this->apiTree(),
                 '/ui/api/search' === $path && 'GET' === $method => $this->apiSearch($request),
                 '/ui/api/memory' === $path && 'GET' === $method => $this->apiGet($request),
@@ -116,6 +165,7 @@ final class WebApp
             'categories' => $this->store->categories(),
             'tree' => $this->tree(),
             'selected' => $selected,
+            'trashCount' => $this->store->trashCount(),
             'engine' => $this->search instanceof MemoryIndex ? $this->search->status() : ['engine' => 'direct'],
         ]));
     }
@@ -381,6 +431,170 @@ final class WebApp
         return $this->json(['html' => Markdown::toHtml((string) ($data['markdown'] ?? ''))]);
     }
 
+    /* ------------------------------------------------------------------ *
+     *  Trash & backup
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Show the trash: everything deleted, newest first, with the original
+     * category and id read back from the filename.
+     */
+    private function trashPage(ServerRequestInterface $request): ResponseInterface
+    {
+        $this->auth->start();
+        if (!$this->auth->isConfigured()) {
+            return $this->redirect('/ui/setup');
+        }
+        if (!$this->auth->loggedIn()) {
+            return $this->redirect('/ui/login');
+        }
+
+        $query = $request->getQueryParams();
+        $entries = $this->store->trashed();
+        $bytes = 0;
+        foreach ($entries as $entry) {
+            $bytes += $entry['bytes'];
+        }
+
+        return $this->html($this->view('trash', [
+            'title' => 'MemoryDown — Trash',
+            'bodyClass' => 'trash',
+            'csrf' => $this->auth->csrfToken(),
+            'entries' => $entries,
+            'bytes' => $bytes,
+            'notice' => self::NOTICES[$this->str($query['notice'] ?? null)] ?? '',
+            'error' => self::NOTICES[$this->str($query['error'] ?? null)] ?? '',
+        ]));
+    }
+
+    private function trashRestore(ServerRequestInterface $request): ResponseInterface
+    {
+        if (!$this->guardMutation($request)) {
+            return $this->json(['error' => 'forbidden'], 403);
+        }
+
+        $name = $this->str($this->input($request)['name'] ?? null);
+        if (null === $this->store->paths()->trashFile($name)) {
+            return $this->redirect('/ui/trash?error=invalid');
+        }
+
+        try {
+            $this->store->restore($name);
+        } catch (\Throwable $e) {
+            // The reason is logged, never echoed: the page shows a fixed
+            // message so a crafted link cannot put words in the admin's mouth.
+            $this->logger->warning('admin.trash_restore_failed', ['message' => $e->getMessage()]);
+
+            return $this->redirect('/ui/trash?error=restore_failed');
+        }
+
+        return $this->redirect('/ui/trash?notice=restored');
+    }
+
+    private function trashPurge(ServerRequestInterface $request): ResponseInterface
+    {
+        if (!$this->guardMutation($request)) {
+            return $this->json(['error' => 'forbidden'], 403);
+        }
+
+        $name = $this->str($this->input($request)['name'] ?? null);
+
+        return $this->redirect('/ui/trash?' . ($this->store->purge($name) ? 'notice=purged' : 'error=invalid'));
+    }
+
+    private function trashEmpty(ServerRequestInterface $request): ResponseInterface
+    {
+        if (!$this->guardMutation($request)) {
+            return $this->json(['error' => 'forbidden'], 403);
+        }
+
+        $this->store->purgeTrash();
+
+        return $this->redirect('/ui/trash?notice=emptied');
+    }
+
+    /**
+     * Download every Markdown file in the memory store as a zip.
+     *
+     * Deliberately memory only: no auth state and no .env, so the archive can
+     * never leak credentials — restoring it rebuilds the whole corpus from the
+     * canonical files, and the search index rebuilds itself on the next search.
+     *
+     * A plain GET (no CSRF token): it changes nothing, and although a hostile
+     * page could make the browser start this download, it cannot read the
+     * response — the bytes land on the user's own disk.
+     */
+    private function backup(): ResponseInterface
+    {
+        $this->auth->start();
+        if (!$this->auth->isConfigured()) {
+            return $this->redirect('/ui/setup');
+        }
+        if (!$this->auth->loggedIn()) {
+            return $this->redirect('/ui/login');
+        }
+
+        $files = $this->memoryFiles();
+        $zip = new ZipWriter();
+
+        foreach ($files as $relative => $absolute) {
+            $contents = @file_get_contents($absolute);
+            if (false === $contents) {
+                continue;
+            }
+            $zip->add('memory/' . $relative, $contents, (int) @filemtime($absolute));
+        }
+
+        $zip->add('MANIFEST.json', json_encode([
+            'application' => $this->config->appName,
+            'version' => $this->config->appVersion,
+            'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'php' => PHP_VERSION,
+            'memories' => $this->store->count(),
+            'files' => count($files),
+            'contents' => 'memory/** plus this manifest and RESTORE.txt',
+            'excluded' => 'data/index (disposable, rebuilds itself), data/sessions, data/logs, data/auth and .env',
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+        $zip->add('RESTORE.txt', self::RESTORE_NOTES);
+
+        return $this->download(
+            'memorydown-backup-' . gmdate('Y-m-d-Hi') . '.zip',
+            'application/zip',
+            $zip->finish()
+        );
+    }
+
+    /**
+     * Every file under the memory root, relative path => absolute path. Includes
+     * the trash and the root README: a backup should be a faithful copy of the
+     * directory, not just the parts the app happens to show.
+     *
+     * @return array<string, string>
+     */
+    private function memoryFiles(): array
+    {
+        $root = $this->store->paths()->root();
+        $files = [];
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)
+        );
+        /** @var \SplFileInfo $file */
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $path = $file->getPathname();
+            $relative = str_replace('\\', '/', substr($path, strlen($root) + 1));
+            $files[$relative] = $path;
+        }
+
+        ksort($files);
+
+        return $files;
+    }
+
+
     private function reindex(ServerRequestInterface $request): ResponseInterface
     {
         $this->auth->start();
@@ -594,6 +808,17 @@ final class WebApp
     private function html(string $html, int $status = 200): ResponseInterface
     {
         return $this->respond($status, 'text/html; charset=utf-8', $html);
+    }
+
+    /**
+     * A response the browser saves to disk instead of rendering. Never cached:
+     * the body is a complete copy of the user's memory.
+     */
+    private function download(string $filename, string $contentType, string $body): ResponseInterface
+    {
+        return $this->respond(200, $contentType, $body)
+            ->withHeader('Content-Disposition', 'attachment; filename="' . $filename . '"')
+            ->withHeader('Content-Length', (string) strlen($body));
     }
 
     private function respond(int $status, string $contentType, string $body): ResponseInterface

@@ -221,6 +221,63 @@ function mdCount(string $dir): int
     return count(array_filter(scandir($dir) ?: [], static fn (string $f): bool => str_ends_with($f, '.md')));
 }
 
+/**
+ * The `.md` file names directly inside a directory (see mdCount for why glob()
+ * is avoided on Windows paths).
+ *
+ * @return list<string>
+ */
+function mdList(string $dir): array
+{
+    if (!is_dir($dir)) {
+        return [];
+    }
+
+    return array_values(array_filter(scandir($dir) ?: [], static fn (string $f): bool => str_ends_with($f, '.md')));
+}
+
+/**
+ * Minimal ZIP reader for assertions: name => contents. Understands the stored
+ * and deflate methods ZipWriter emits; not a general-purpose unzip (no Zip64,
+ * no encryption), and only used by the tests.
+ *
+ * @return array<string, string>
+ */
+function zipEntries(string $bytes): array
+{
+    $eocd = strrpos($bytes, "PK\x05\x06");
+    if (false === $eocd) {
+        return [];
+    }
+
+    $count = (int) unpack('v', substr($bytes, $eocd + 10, 2))[1];
+    $offset = (int) unpack('V', substr($bytes, $eocd + 16, 4))[1];
+
+    $entries = [];
+    for ($i = 0; $i < $count; ++$i) {
+        if ("PK\x01\x02" !== substr($bytes, $offset, 4)) {
+            break;
+        }
+        $method = (int) unpack('v', substr($bytes, $offset + 10, 2))[1];
+        $nameLength = (int) unpack('v', substr($bytes, $offset + 28, 2))[1];
+        $extraLength = (int) unpack('v', substr($bytes, $offset + 30, 2))[1];
+        $commentLength = (int) unpack('v', substr($bytes, $offset + 32, 2))[1];
+        $localOffset = (int) unpack('V', substr($bytes, $offset + 42, 4))[1];
+        $name = substr($bytes, $offset + 46, $nameLength);
+
+        $localNameLength = (int) unpack('v', substr($bytes, $localOffset + 26, 2))[1];
+        $localExtraLength = (int) unpack('v', substr($bytes, $localOffset + 28, 2))[1];
+        $packed = (int) unpack('V', substr($bytes, $localOffset + 18, 4))[1];
+        $data = substr($bytes, $localOffset + 30 + $localNameLength + $localExtraLength, $packed);
+
+        $entries[$name] = 8 === $method ? (string) gzinflate($data) : $data;
+
+        $offset += 46 + $nameLength + $extraLength + $commentLength;
+    }
+
+    return $entries;
+}
+
 function waitForServer(string $base, int $attempts = 80): void
 {
     global $tmp;
@@ -751,6 +808,11 @@ check('admin login -> 302 to /ui', 302 === $r['status'] && str_contains($r['head
 
 $r = request('GET', '/ui');
 check('GET /ui authenticated -> 200 shell', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
+check(
+    'GET /ui shell -> offers backup and trash',
+    str_contains($r['body'], 'href="/ui/backup"') && str_contains($r['body'], 'href="/ui/trash"'),
+    ''
+);
 check('serial: mobile drawers present', str_contains($r['body'], 'id="open-memories"') && str_contains($r['body'], 'id="open-menu"') && str_contains($r['body'], 'id="command-drawer"') && str_contains($r['body'], 'id="backdrop"'), (string) $r['status']);
 check('admin CSP allows self-hosted scripts', str_contains($r['headers']['content-security-policy'] ?? '', "script-src 'self'"));
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
@@ -1658,6 +1720,193 @@ check(
     && 45 === ($bareRead['body_chars'] ?? -1),
     $r['body']
 );
+
+section('Admin UI: trash');
+
+$trashDir = $tmp . '/memory/.trash';
+$trashBefore = mdCount($trashDir);
+check('trash: earlier MCP deletes already went to the trash', $trashBefore > 0, (string) $trashBefore);
+
+// Deleting through the admin API moves the file out of its category.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Doomed fact', 'content' => 'This one gets deleted and restored.',
+]));
+$doomedId = (string) (jsonBody($r['body'])['memory']['id'] ?? '');
+$doomedFile = $tmp . '/memory/facts/' . $doomedId . '.md';
+check('trash: entry created for deletion', '' !== $doomedId && is_file($doomedFile), $r['body']);
+
+$r = request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($doomedId), ['X-CSRF-Token' => $apiCsrf]);
+check('trash: admin delete -> 200', 200 === $r['status'], $r['body']);
+// The server runs in another process, so this process must drop its stat cache
+// before believing anything about the file's existence.
+clearstatcache();
+check('trash: the file left its category', !is_file($doomedFile));
+check('trash: the file landed in the trash', $trashBefore + 1 === mdCount($trashDir), (string) mdCount($trashDir));
+$trashedNames = array_values(array_filter(
+    mdList($trashDir),
+    static fn (string $f): bool => str_contains($f, '__facts__' . $doomedId . '.md')
+));
+check('trash: the trash name encodes the original location', 1 === count($trashedNames), json_encode($trashedNames));
+
+// It is out of the corpus, the index and MCP search...
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 70, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'deleted and restored']],
+]));
+check('trash: a deleted entry is gone from MCP search', [] === (toolResult(jsonBody($r['body']))['results'] ?? []), $r['body']);
+
+// ... and the trash page lists it.
+$r = request('GET', '/ui/trash');
+check('trash: the page renders', 200 === $r['status'] && str_contains($r['body'], 'Trash'), (string) $r['status']);
+check('trash: the deleted entry is listed', str_contains($r['body'], $doomedId), $r['body']);
+check(
+    'trash: the page offers restore, purge and empty',
+    str_contains($r['body'], '/ui/trash/restore')
+    && str_contains($r['body'], '/ui/trash/purge')
+    && str_contains($r['body'], '/ui/trash/empty'),
+    ''
+);
+check('trash: the page links back to the memories', str_contains($r['body'], 'href="/ui"'), '');
+
+$trashName = $trashedNames[0];
+
+// Restoring puts it back and it becomes searchable again.
+$r = request('POST', '/ui/trash/restore', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf, 'name' => $trashName]));
+check('trash: restore -> 302 back to the trash page', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/trash'), $r['headers']['location'] ?? '');
+clearstatcache();
+check('trash: the file is back in facts/', is_file($doomedFile));
+check('trash: the trash entry is gone', !is_file($trashDir . '/' . $trashName));
+$r = request('GET', '/ui/trash?notice=restored');
+check('trash: restore shows a confirmation', str_contains($r['body'], 'Memory restored'), '');
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 71, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'deleted and restored']],
+]));
+check('trash: a restored entry is searchable again', $doomedId === (toolResult(jsonBody($r['body']))['results'][0]['id'] ?? ''), $r['body']);
+
+// A hostile entry name is refused, not resolved.
+$r = request('POST', '/ui/trash/restore', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf, 'name' => '../../config.php']));
+check('trash: a traversal name is refused', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', 'error=invalid'), $r['headers']['location'] ?? '');
+check('trash: the refusal echoed no path', !str_contains($r['headers']['location'] ?? '', 'config.php'), $r['headers']['location'] ?? '');
+
+// Deleting without a CSRF token is refused.
+$r = request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($doomedId));
+check('trash: delete without CSRF -> 403', 403 === $r['status'], (string) $r['status']);
+check('trash: the entry survived the refused delete', is_file($doomedFile));
+
+// Purge really removes one entry.
+request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($doomedId), ['X-CSRF-Token' => $apiCsrf]);
+$again = array_values(array_filter(mdList($trashDir), static fn (string $f): bool => str_contains($f, '__facts__' . $doomedId . '.md')));
+check('trash: the second deletion is trashed too', 1 === count($again), json_encode($again));
+$r = request('POST', '/ui/trash/purge', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf, 'name' => $again[0]]));
+check('trash: purge -> 302', 302 === $r['status'], (string) $r['status']);
+clearstatcache();
+check('trash: purge removes the file for good', !is_file($trashDir . '/' . $again[0]));
+
+// An MCP delete is just as recoverable.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 72, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => ['content' => 'MCP delete probe.', 'title' => 'MCP trash probe', 'category' => 'facts']],
+]));
+$mcpTrashId = (string) (toolResult(jsonBody($r['body']))['memory']['id'] ?? '');
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 73, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $mcpTrashId, 'category' => 'facts']],
+]));
+$mcpForget = toolResult(jsonBody($r['body']));
+check('trash: mcp forget_memory -> ok', false === ((jsonBody($r['body']))['result']['isError'] ?? true), $r['body']);
+check('trash: mcp forget_memory says it is recoverable', str_contains((string) ($mcpForget['message'] ?? ''), 'restored in the admin UI'), json_encode($mcpForget));
+check('trash: the mcp-deleted file is in the trash', [] !== array_filter(mdList($trashDir), static fn (string $f): bool => str_contains($f, '__facts__' . $mcpTrashId . '.md')), json_encode(mdList($trashDir)));
+clearstatcache();
+check('trash: the mcp-deleted file left its category', !is_file($tmp . '/memory/facts/' . $mcpTrashId . '.md'));
+
+// Emptying the trash clears everything, including entries left over from the
+// MCP deletion tests earlier in this run.
+$expectedEmptied = mdCount($trashDir);
+check('trash: there is something to empty', $expectedEmptied > 1, (string) $expectedEmptied);
+$r = request('POST', '/ui/trash/empty', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
+check('trash: empty -> 302 back to the trash page', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/trash'), (string) $r['status']);
+check('trash: the trash is now empty', 0 === mdCount($trashDir), (string) mdCount($trashDir));
+$r = request('GET', '/ui/trash');
+check('trash: the empty trash page says so', str_contains($r['body'], 'Nothing has been deleted'), '');
+
+/* ------------------------------------------------------------------ */
+
+section('Admin UI: backup download');
+
+// A file at the memory root that is not a category entry: a faithful copy of the
+// directory must include it.
+@file_put_contents($tmp . '/memory/README.md', "# Memory directory\n\nHuman readable, travels with the backup.\n");
+
+// Leave one entry in the trash, so the archive can be shown to carry it.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'facts', 'title' => 'Trashed at backup time', 'content' => 'In the trash when the zip was built.',
+]));
+$backupVictim = (string) (jsonBody($r['body'])['memory']['id'] ?? '');
+request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($backupVictim), ['X-CSRF-Token' => $apiCsrf]);
+clearstatcache();
+check('backup: there is a trashed entry to carry', [] !== array_filter(mdList($trashDir), static fn (string $f): bool => str_contains($f, '__facts__' . $backupVictim . '.md')), json_encode(mdList($trashDir)));
+
+$r = request('GET', '/ui/backup');
+check('backup: 200', 200 === $r['status'], (string) $r['status']);
+check('backup: served as a zip', str_contains(strtolower($r['headers']['content-type'] ?? ''), 'application/zip'), $r['headers']['content-type'] ?? '');
+check(
+    'backup: attachment with a dated filename',
+    (bool) preg_match('/^attachment; filename="memorydown-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip"$/', $r['headers']['content-disposition'] ?? ''),
+    $r['headers']['content-disposition'] ?? ''
+);
+check('backup: never cached', 'no-store' === ($r['headers']['cache-control'] ?? ''), $r['headers']['cache-control'] ?? '');
+check('backup: body is a zip', str_starts_with($r['body'], "PK\x03\x04"), bin2hex(substr($r['body'], 0, 4)));
+
+$archive = zipEntries($r['body']);
+$names = array_keys($archive);
+check('backup: the archive parses', count($archive) > 2, count($archive) . ' entries');
+check('backup: carries the memory tree', [] !== array_filter($names, static fn (string $n): bool => str_starts_with($n, 'memory/facts/')), json_encode(array_slice($names, 0, 6)));
+check('backup: includes the human index files', in_array('memory/README.md', $names, true) && in_array('MANIFEST.json', $names, true) && in_array('RESTORE.txt', $names, true), json_encode($names));
+
+// The live memories in the archive must match what the app reports. Only
+// {category}/{id}.md counts — the root README and the trash are not entries.
+$r = request('GET', '/health');
+$health = jsonBody($r['body']);
+$liveMemories = (int) ($health['checks']['memory_entries'] ?? -1);
+$memoriesInZip = array_filter(
+    $names,
+    static fn (string $n): bool => 1 === preg_match('#^memory/[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*\.md$#', $n)
+);
+check('backup: holds every live memory', $liveMemories === count($memoriesInZip), count($memoriesInZip) . ' in the zip vs ' . $liveMemories . ' live');
+check(
+    'backup: the trash travels with the archive',
+    [] !== array_filter($names, static fn (string $n): bool => str_contains($n, 'memory/.trash/') && str_contains($n, '__facts__' . $backupVictim . '.md')),
+    json_encode(array_slice($names, 0, 8))
+);
+check('backup: manifest agrees with the app', (int) (json_decode($archive['MANIFEST.json'] ?? '{}', true)['memories'] ?? -1) === $liveMemories, $archive['MANIFEST.json'] ?? '');
+
+// A real entry, byte for byte — compared against the file on disk.
+$liveNames = array_values(array_filter(
+    $names,
+    static fn (string $n): bool => 1 === preg_match('#^memory/[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*\.md$#', $n)
+));
+check('backup: found a live entry to compare', [] !== $liveNames, json_encode(array_slice($names, 0, 6)));
+if ([] !== $liveNames) {
+    $pick = $liveNames[0];
+    check(
+        'backup: a memory is copied byte for byte',
+        ($archive[$pick] ?? null) === (string) @file_get_contents($tmp . '/' . $pick),
+        $pick
+    );
+}
+
+// Never anything but memory. This is the promise the README makes.
+check('backup: never contains credentials', !in_array('.env', $names, true) && [] === array_filter($names, static fn (string $n): bool => str_contains($n, 'auth') || str_contains($n, '.env')), json_encode($names));
+check(
+    'backup: no index, sessions or logs',
+    [] === array_filter($names, static fn (string $n): bool => str_starts_with($n, 'index/') || str_starts_with($n, 'logs/') || str_starts_with($n, 'sessions/')),
+    json_encode($names)
+);
+
+check('health: reports the trash size', array_key_exists('memory_trashed', $health['checks'] ?? []), json_encode($health['checks'] ?? []));
+check('health: reports the archive method', in_array($health['checks']['backup_zip'] ?? '', ['deflate', 'store'], true), json_encode($health['checks']['backup_zip'] ?? null));
+check('health: reports the trash writable', true === ($health['checks']['trash_writable'] ?? null), json_encode($health['checks']['trash_writable'] ?? null));
 
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);

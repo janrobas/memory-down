@@ -280,6 +280,8 @@ Example:
         people/
         context/
         notes/
+        writings/
+        .trash/          deleted entries, restorable from the admin UI
 
 Example:
 
@@ -379,7 +381,11 @@ Update a specific memory safely.
 
 Delete a specific memory.
 
-Deletion is destructive and should be explicit.
+Deletion is explicit, but not final: the entry is moved into the write-protected
+trash folder (`.trash/`, a dot-prefixed name that can never be a category, so it
+is invisible to the corpus, search, the index and every other tool) and the user
+can restore it from the admin UI until the trash is emptied. If the trash cannot
+be written, the delete must fail with an explanation rather than unlink the file.
 
 ### list_memory
 
@@ -669,6 +675,14 @@ the constraints that follow. The rest of the list still stands.
   is disabled by default. Publishing (`public`) is set only in the admin UI, not
   via MCP, so an agent cannot publish on the user's behalf. No rendering, no
   comments, no multi-user: the consuming website owns display.
+
+- **A recoverable trash and a backup download** are in scope, under the same
+  constraint that Markdown stays canonical. A delete moves the file to
+  `memory/.trash/` (restorable in the admin UI, purgeable there, never part of
+  the corpus) instead of unlinking it, and `/ui/backup` streams a zip of the
+  memory directory only — never `data/auth/` or `.env`, so a download can never
+  leak a credential. Both are admin-session-only, and neither introduces a
+  scheduler: taking backups is the user's call, on their own schedule.
 
 Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
 (one instance per person instead), teams, billing, background jobs/queues.

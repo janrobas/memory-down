@@ -45,6 +45,11 @@ final class MemoryStore
                 @mkdir($dir, 0775, true);
             }
         }
+
+        $trash = $this->paths->trashDir();
+        if (null !== $trash && !is_dir($trash)) {
+            @mkdir($trash, 0775, true);
+        }
     }
 
     /**
@@ -315,12 +320,190 @@ final class MemoryStore
             return false;
         }
 
-        $ok = unlink($file);
+        $target = $this->trashTarget($category, $id);
+
+        if (!@rename($file, $target)) {
+            // Never fall back to unlinking: the whole point of the trash is that
+            // a delete stays reversible, so a broken trash must fail loudly
+            // rather than destroy the entry.
+            throw new \RuntimeException(
+                'Could not move the entry to the trash directory (' . self::TRASH_DIR . '): '
+                . 'check that ' . $this->paths->root() . ' is writable. Nothing was deleted.'
+            );
+        }
+
+        $this->logger->info('memory.trashed', ['id' => $id, 'category' => $category]);
+
+        return true;
+    }
+
+    /**
+     * Entries currently in the trash, newest first. Names that do not look like
+     * trash entries (a stray file dropped in the folder) are ignored rather than
+     * guessed at.
+     *
+     * @return list<array{name: string, category: string, id: string, deleted_at: string, bytes: int}>
+     */
+    public function trashed(): array
+    {
+        $dir = $this->paths->trashDir();
+        if (null === $dir || !is_dir($dir)) {
+            return [];
+        }
+
+        $entries = [];
+        foreach (scandir($dir) ?: [] as $name) {
+            $file = $this->paths->trashFile($name);
+            if (null === $file || !is_file($file)) {
+                continue;
+            }
+            [$category, $id] = self::parseTrashName($name);
+            if (null === $category || null === $id) {
+                continue;
+            }
+            $stamp = substr($name, 0, (int) strpos($name, '__'));
+            $when = \DateTimeImmutable::createFromFormat('Ymd\THis\Z', $stamp, new \DateTimeZone('UTC'));
+
+            $entries[] = [
+                'name' => $name,
+                'category' => $category,
+                'id' => $id,
+                'deleted_at' => false !== $when ? $when->format('Y-m-d\TH:i:s\Z') : gmdate('Y-m-d\TH:i:s\Z', (int) @filemtime($file)),
+                'bytes' => (int) @filesize($file),
+            ];
+        }
+
+        usort($entries, static fn (array $a, array $b): int => strcmp($b['name'], $a['name']));
+
+        return $entries;
+    }
+
+    public function trashCount(): int
+    {
+        return count($this->trashed());
+    }
+
+    /**
+     * Put a trashed entry back where it came from. Refuses to overwrite a live
+     * entry of the same id, so a restore can never destroy newer content.
+     *
+     * @return string the restored "category/id"
+     */
+    public function restore(string $name): string
+    {
+        $file = $this->paths->trashFile($name);
+        if (null === $file || !is_file($file)) {
+            throw new \InvalidArgumentException('That entry is no longer in the trash.');
+        }
+
+        [$category, $id] = self::parseTrashName($name);
+        if (null === $category || null === $id) {
+            throw new \InvalidArgumentException('That is not a trashed memory entry.');
+        }
+
+        $target = $this->paths->file($category, $id);
+        if (null === $target) {
+            throw new \InvalidArgumentException('That entry cannot be restored to a valid location.');
+        }
+        if (is_file($target)) {
+            throw new \InvalidArgumentException(
+                "Cannot restore: {$category}/{$id}.md exists again. Rename or delete it first."
+            );
+        }
+
+        $dir = dirname($target);
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new \RuntimeException('Cannot recreate the category directory for ' . $category . '.');
+        }
+        if (!@rename($file, $target)) {
+            throw new \RuntimeException('Could not restore the entry.');
+        }
+
+        $this->logger->info('memory.restored', ['id' => $id, 'category' => $category]);
+
+        return $category . '/' . $id;
+    }
+
+    public function purge(string $name): bool
+    {
+        $file = $this->paths->trashFile($name);
+        if (null === $file || !is_file($file)) {
+            return false;
+        }
+
+        $ok = @unlink($file);
         if ($ok) {
-            $this->logger->info('memory.deleted', ['id' => $id, 'category' => $category]);
+            $this->logger->info('memory.purged', ['entry' => $name]);
         }
 
         return $ok;
+    }
+
+    /**
+     * Empty the trash. This is the only operation that really destroys data.
+     *
+     * @return int number of entries removed
+     */
+    public function purgeTrash(): int
+    {
+        $removed = 0;
+        foreach ($this->trashed() as $entry) {
+            if ($this->purge($entry['name'])) {
+                ++$removed;
+            }
+        }
+
+        if ($removed > 0) {
+            $this->logger->info('memory.trash_emptied', ['entries' => $removed]);
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Where a deletion for this entry should land. Adds "-2", "-3", ... to the
+     * timestamp when a previous trash entry still holds that name, so a second
+     * deletion can never overwrite an earlier copy.
+     */
+    private function trashTarget(string $category, string $id): string
+    {
+        $dir = $this->paths->trashDir();
+        if (null === $dir || (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir))) {
+            throw new \RuntimeException(
+                'Cannot create the trash directory (' . self::TRASH_DIR . ') inside ' . $this->paths->root() . '.'
+            );
+        }
+
+        $stamp = gmdate('Ymd\THis\Z');
+        $category = self::normalizeCategory($category);
+        $candidate = $stamp . '__' . $category . '__' . $id . '.md';
+        for ($n = 2; is_file($dir . DIRECTORY_SEPARATOR . $candidate); ++$n) {
+            $candidate = $stamp . '-' . $n . '__' . $category . '__' . $id . '.md';
+        }
+
+        return $dir . DIRECTORY_SEPARATOR . $candidate;
+    }
+
+    /**
+     * Split a trash filename back into its original category and id, or
+     * [null, null] when the name is not one of ours.
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    private static function parseTrashName(string $name): array
+    {
+        $parts = explode('__', $name, 3);
+        if (3 !== count($parts) || !str_ends_with($parts[2], '.md')) {
+            return [null, null];
+        }
+
+        $category = $parts[1];
+        $id = substr($parts[2], 0, -3);
+        if (!PathValidator::isCategory($category) || !PathValidator::isId($id)) {
+            return [null, null];
+        }
+
+        return [$category, $id];
     }
 
     /**

@@ -10,6 +10,7 @@
  * @var list<array<string, mixed>>      $tree
  * @var array<string, mixed>|null       $selected
  * @var array<string, mixed>            $engine
+ * @var int                             $trashCount
  */
 use MemoryDown\Web\WebApp;
 
@@ -163,6 +164,10 @@ if (!in_array($selCategory, $categories, true)) {
     </div>
 
     <button type="button" id="reindex" title="Rebuild the search index" aria-live="polite">⟳ Reindex</button>
+
+    <!-- Plain links: no JavaScript, and the backup is a normal file download. -->
+    <a class="drawer-link" href="/ui/backup" download title="Download every memory as a zip">⭳ Backup</a>
+    <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<?= (int) ($trashCount ?? 0) > 0 ? ' (' . (int) $trashCount . ')' : '' ?></a>
 
     <div class="theme-picker">
       <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>

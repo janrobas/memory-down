@@ -47,6 +47,26 @@ final class PathValidator
      */
     public const WRITE_PROTECTED_CATEGORIES = ['writings'];
 
+    /**
+     * Where deletions go instead of being unlinked, relative to the memory root.
+     *
+     * The leading dot is load-bearing: {@see isCategory()} rejects it, so the
+     * trash is invisible to collectFiles(), categories(), count(), the index
+     * signature, the admin tree, search and the MCP tools for free. A bare
+     * "trash" directory would be a perfectly valid category.
+     */
+    public const TRASH_DIR = '.trash';
+
+    /**
+     * Trashed entries are named "{stamp}[_n]__{category}__{id}.md", so the
+     * original location is recoverable from the filename alone. The stamp is the
+     * deletion time in UTC ("20261011T1830Z") plus an optional "-2" when a name
+     * would otherwise collide; the id comes last and is split off with
+     * explode('__', $name, 3), which is unambiguous because neither the stamp
+     * nor a category can contain an underscore.
+     */
+    public const TRASH_ENTRY_PATTERN = '/^[0-9]{8}T[0-9]{6}Z(?:-[0-9]{1,3})?__[a-z0-9][a-z0-9-]{0,63}__[a-z0-9][a-z0-9._-]{0,127}\.md$/';
+
     private string $root;
 
     public function __construct(string $memoryRoot)
@@ -101,6 +121,38 @@ final class PathValidator
         }
 
         $path = $this->root . DIRECTORY_SEPARATOR . $category . DIRECTORY_SEPARATOR . $id . '.md';
+
+        return $this->insideRoot($path) ? $path : null;
+    }
+
+    /**
+     * Absolute path for the trash directory, or null if it cannot be resolved.
+     */
+    public function trashDir(): ?string
+    {
+        $path = $this->root . DIRECTORY_SEPARATOR . self::TRASH_DIR;
+
+        return $this->insideRoot($path) ? $path : null;
+    }
+
+    /**
+     * Absolute path for a trashed entry, or null when the name is not a plain,
+     * well-formed trash filename. Trash names come from the admin UI, so they
+     * get the same treatment as any other path: a strict pattern plus
+     * containment, never trust.
+     */
+    public function trashFile(string $name): ?string
+    {
+        if (1 !== preg_match(self::TRASH_ENTRY_PATTERN, $name)) {
+            return null;
+        }
+
+        $dir = $this->trashDir();
+        if (null === $dir) {
+            return null;
+        }
+
+        $path = $dir . DIRECTORY_SEPARATOR . $name;
 
         return $this->insideRoot($path) ? $path : null;
     }

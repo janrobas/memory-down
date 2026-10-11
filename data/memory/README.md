@@ -19,6 +19,8 @@ Layout:
       context/       long-term situational context
       notes/         catch-all for anything else
       writings/      published posts — read-only through MCP, edited in the admin UI
+      .trash/        deleted entries — restorable from the admin UI, ignored by
+                     search and every tool; safe to empty by hand
 
 Each entry is `{category}/{slug-id}.md` with simple frontmatter:
 

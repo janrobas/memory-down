@@ -343,6 +343,67 @@ button:disabled:hover { background: var(--panel-2); color: inherit; }
   font-size: .85rem;
 }
 
+.alert.ok {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------- trash / backup */
+
+/* The trash is its own page: like the auth shell, but top-aligned and scrollable
+   because it can list many entries. Deliberately not body.auth — the login and
+   setup cards stay vertically centred. */
+body.trash {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem;
+  overflow: auto;
+}
+
+.trash-card {
+  width: 100%;
+  max-width: 46rem;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 2rem;
+}
+
+.trash-card h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
+.trash-card > p { margin: 0 0 1.25rem; }
+
+.trash-list { list-style: none; margin: 0 0 1.25rem; padding: 0; }
+
+.trash-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .7rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.trash-meta { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.trash-title { font-weight: 600; overflow-wrap: anywhere; }
+.trash-actions { display: flex; gap: .4rem; flex: 0 0 auto; }
+.trash-actions form { margin: 0; }
+.trash-empty { margin: 0 0 1.25rem; }
+.trash-back { margin: 0; }
+.trash-back a { color: var(--accent); }
+
+/* Links that sit alongside the drawer buttons (Backup, Trash). */
+.drawer-link {
+  display: block;
+  padding: .5rem .7rem;
+  border-radius: var(--radius);
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+.drawer-link:hover { background: var(--accent-weak); color: var(--accent); }
+
 /* -------------------------------------------------------------- app shell */
 
 body.app { overflow: hidden; }

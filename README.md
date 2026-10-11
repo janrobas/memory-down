@@ -36,6 +36,11 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Read-only public writings API** at `/public/writings`: publish entries in the
   `writings` category (`public: true`) as Markdown over a token-gated GET API, for
   a personal website to consume. Disabled by default.
+- **Deletes are recoverable:** anything deleted — in the UI or by an agent — goes
+  to a `.trash/` folder instead of vanishing, and can be restored until you empty
+  it.
+- **One-click backup** at `/ui/backup`: every Markdown file as a zip, with no
+  credentials in it.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
 
@@ -137,7 +142,10 @@ separate from the MCP/OAuth layer.
   deleted). **Autosave** (on switching memories, on blur, and after ~20s idle);
   `Ctrl/Cmd+S` forces a save. Drag a memory onto a category to move it. Themes
   (white/dark/retro/green/blue) are remembered in `localStorage`.
-- **Delete** appears next to the title for existing memories.
+- **Delete** appears next to the title for existing memories. It moves the entry
+  to the trash (see below) rather than destroying it.
+- **Menu:** *Reindex*, *Backup* (download a zip of your memory) and *Trash*
+  (restore or purge deleted entries), plus the theme picker and sign-out.
 
 The UI will not open until an admin password exists:
 
@@ -235,6 +243,47 @@ results carry a ranked **snippet** taken from the index; the `read_memory` MCP
 tool and the admin editor read the file itself, which is where the complete body
 comes from.
 
+## Backup, trash & restore
+
+### Download a backup
+
+In the admin UI, **Backup** (or `GET /ui/backup`) downloads a zip of every file in
+your memory directory, named `memorydown-backup-YYYY-MM-DD-HHMM.zip`. It contains:
+
+| In the zip | Not in the zip |
+| --- | --- |
+| `memory/**` — every `.md`, the root files, and `.trash/` | `data/index/` (disposable, rebuilds itself) |
+| `MANIFEST.json` — when it was made, from which version, how many memories | `data/sessions/`, `data/logs/` |
+| `RESTORE.txt` — the instructions, so the zip explains itself later | `data/auth/` and `.env` — **never included**, so a download can never leak a credential |
+
+**Restore:** unzip it and upload the `memory/` folder so its contents land in
+`MEMORY_PATH` (default `data/memory`), keeping the category subfolders. That is
+the whole procedure: the Markdown files are the source of truth, and the search
+index rebuilds itself on the next search or `POST /ui/reindex`.
+
+Restoring `memory/` alone is always enough to bring your memories back. It does
+not bring back `data/auth/` (so your MCP clients re-authorize) or `.env` (which
+you re-enter by hand) — worth knowing before you need it.
+
+A download is a point-in-time copy, and nothing schedules it for you: take one
+whenever you are about to do something you might regret. `data/memory` is also
+just a directory, so copying it over FTP or your host's file manager is
+equivalent.
+
+### Deletes are recoverable
+
+Deleting a memory — the **Delete** button, or an agent calling `forget_memory` —
+moves the file to `data/memory/.trash/` instead of deleting it. The trash lives
+at `/ui/trash`, where each entry shows where it came from and can be **Restored**
+to its original category or **Deleted forever**. **Empty the trash** clears the
+whole thing; that is the only operation in MemoryDown that really destroys data.
+
+Trashed entries are invisible everywhere else — the editor, search, `recall`,
+`list_memory` and the public writings API all ignore `.trash/`, because a
+dot-prefixed name can never be a category. If the trash directory cannot be
+written, a delete **fails with an explanation instead of destroying the entry**,
+which is the point of having one.
+
 ## OAuth & connecting ChatGPT
 
 MemoryDown is its own single-user OAuth 2.1 authorization server.
@@ -278,6 +327,13 @@ php tests/run-tests.php    # chain: health → discovery → 401 → DCR → tok
   containment); traversal and deletion outside the memory root are rejected.
 - `writings` is read-only through MCP: the write tools refuse to create, edit,
   move into or delete entries in that category.
+- Deletes are soft: entries move to `memory/.trash/` and are restorable until the
+  trash is emptied, and a broken trash directory fails the delete rather than
+  silently unlinking the file.
+- The backup download is session-guarded and contains **only** `memory/**` — no
+  auth state, no `.env`, no tokens. It is a plain `GET`, so a hostile page could
+  make your browser start that download, but it cannot read the response; the
+  bytes land on your own disk.
 - Access tokens are audience-bound to the requested `resource`; tokens and codes
   are stored only as SHA-256 hashes.
 - Secrets are never logged; error messages are scrubbed of the consent password.

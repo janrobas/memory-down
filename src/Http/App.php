@@ -191,6 +191,12 @@ final class App
                 'memory_path' => $memoryPath,
                 'memory_writable' => is_writable($memoryPath),
                 'memory_entries' => Kernel::get()->memory->count(),
+                'memory_trashed' => Kernel::get()->memory->trashCount(),
+                // The trash and the backup download live inside the memory root,
+                // so report that it is actually writable — a read-only memory
+                // directory would make every delete fail by design.
+                'trash_writable' => is_writable($memoryPath . '/' . \MemoryDown\Memory\PathValidator::TRASH_DIR),
+                'backup_zip' => function_exists('gzdeflate') ? 'deflate' : 'store',
                 'data_writable' => is_writable($dataPath),
                 'sessions_writable' => is_writable($dataPath . '/sessions'),
                 'log_writable' => is_writable($this->config->logPath),

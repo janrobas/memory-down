@@ -427,11 +427,11 @@ final class MemoryTools
     {
         return [
             'name' => 'forget_memory',
-            'description' => 'Permanently delete a memory entry by its id. '
-                . 'DELETION IS DESTRUCTIVE AND CANNOT BE UNDONE — only call this when the user explicitly asks '
-                . 'to remove or forget a memory (read_memory it first if the target is ambiguous). The '
-                . 'corresponding .md file is deleted. Entries in the "writings" category are read-only through '
-                . 'MCP and cannot be deleted here.',
+            'description' => 'Delete a memory entry by its id. '
+                . 'It is moved to the trash, where the user can still restore it in the admin UI — but treat it as '
+                . 'gone: only call this when the user explicitly asks to remove or forget a memory, and read_memory '
+                . 'it first if the target is ambiguous. The entry disappears from memory, search and recall. '
+                . 'Entries in the "writings" category are read-only through MCP and cannot be deleted here.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: true,
@@ -462,12 +462,22 @@ final class MemoryTools
                     return self::failWriteProtected($currentCategory, 'this memory cannot be deleted here.');
                 }
 
-                $deleted = $this->store->delete($currentCategory, $id);
+                try {
+                    $deleted = $this->store->delete($currentCategory, $id);
+                } catch (\RuntimeException $e) {
+                    // The trash is unwritable: refuse rather than destroy the
+                    // entry, and say why so it is not mistaken for a protocol bug.
+                    return self::fail($e->getMessage());
+                }
                 if (!$deleted) {
                     return self::fail("No memory entry found with id {$id}.");
                 }
 
-                return self::ok(['action' => 'deleted', 'message' => "Memory entry {$id} deleted.", 'id' => $id]);
+                return self::ok([
+                    'action' => 'deleted',
+                    'message' => "Memory entry {$id} deleted. It is in the trash and can still be restored in the admin UI.",
+                    'id' => $id,
+                ]);
             },
         ];
     }

@@ -231,6 +231,93 @@ check('raw: null for a missing entry', null === $store->raw('notes', 'does-not-e
 check('raw: null for an invalid id', null === $store->raw('notes', '../secret'));
 check('raw: null for an invalid category', null === $store->raw('a/b', 'x'));
 
+/* ------------------------------------------------------------------ *
+ *  MemoryStore: the trash
+ * ------------------------------------------------------------------ */
+
+section('MemoryStore: trash');
+
+$trashRoot = $root . '/trash-store';
+$trashStore = new MemoryStore($trashRoot, $root . '/trash-auth');
+$trashPaths = $trashStore->paths();
+
+check('trash: the trash directory is created at boot', is_dir($trashRoot . '/' . PathValidator::TRASH_DIR));
+// The leading dot is what keeps the trash out of the corpus: a bare "trash"
+// folder WOULD be a valid category.
+check('trash: ".trash" is not a category', !PathValidator::isCategory(PathValidator::TRASH_DIR));
+check('trash: a bare "trash" WOULD be a category', PathValidator::isCategory('trash'));
+
+$keeper = $trashStore->create('Keep me.', 'Keeper', 'facts');
+$doomed = $trashStore->create('Delete me.', 'Doomed', 'facts', ['gone']);
+$doomedFile = $trashRoot . '/facts/' . $doomed['id'] . '.md';
+check('trash: entry exists before deleting', is_file($doomedFile));
+
+check('trash: delete reports success', $trashStore->delete('facts', (string) $doomed['id']));
+check('trash: the file left its category', !is_file($doomedFile));
+check('trash: the entry is out of the corpus', 1 === $trashStore->count(), (string) $trashStore->count());
+check('trash: the trash directory is not a category', !in_array(PathValidator::TRASH_DIR, $trashStore->categories(), true), json_encode($trashStore->categories()));
+check('trash: collectFiles ignores the trash', 1 === count($trashStore->collectFiles()));
+check('trash: deleting again is a no-op, not an error', !$trashStore->delete('facts', (string) $doomed['id']));
+check('trash: deleting an unknown id is a no-op', !$trashStore->delete('facts', 'never-existed'));
+
+$entries = $trashStore->trashed();
+check('trash: the entry is listed', 1 === count($entries), json_encode($entries));
+check('trash: original category and id are recoverable from the name',
+    'facts' === ($entries[0]['category'] ?? '') && $doomed['id'] === ($entries[0]['id'] ?? ''),
+    json_encode($entries[0] ?? null));
+check('trash: deleted_at is an ISO-8601 UTC stamp',
+    (bool) preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) ($entries[0]['deleted_at'] ?? '')),
+    (string) ($entries[0]['deleted_at'] ?? ''));
+check('trash: size is reported', ($entries[0]['bytes'] ?? 0) > 0, json_encode($entries[0] ?? null));
+check('trash: trashCount agrees with trashed()', 1 === $trashStore->trashCount());
+
+// Trash names come from the UI, so they must survive a hostile one.
+foreach (['../secret', '../../etc/passwd', '/etc/passwd', 'a/b.md', '', 'notes-abc.md', '20261011T1830Z__FACTS__x.md', "20261011T1830Z__facts__x.md\0"] as $badName) {
+    check('trash: rejects a bad entry name ' . var_export($badName, true), null === $trashPaths->trashFile($badName));
+}
+check('trash: accepts a well-formed entry name', null !== $trashPaths->trashFile((string) $entries[0]['name']));
+
+// Restoring puts it back exactly where it came from.
+$where = $trashStore->restore((string) $entries[0]['name']);
+check('trash: restore reports the original location', 'facts/' . $doomed['id'] === $where, $where);
+check('trash: the file is back', is_file($doomedFile));
+check('trash: the corpus has it again', 2 === $trashStore->count(), (string) $trashStore->count());
+check('trash: the trash is empty again', 0 === $trashStore->trashCount());
+check('trash: the restored entry still reads', 'Delete me.' === rtrim((string) ($trashStore->read('facts', (string) $doomed['id'])['body'] ?? '')), '');
+
+// A restore must never clobber an entry that exists again.
+$trashStore->delete('facts', (string) $doomed['id']);
+$recreated = $trashStore->create('Newer content.', 'Doomed', 'facts', id: (string) $doomed['id']);
+check('trash: an entry with the same id can be recreated', $doomed['id'] === ($recreated['id'] ?? ''), json_encode($recreated['id'] ?? null));
+$refused = false;
+try {
+    $trashStore->restore((string) $trashStore->trashed()[0]['name']);
+} catch (\InvalidArgumentException) {
+    $refused = true;
+}
+check('trash: restore refuses to overwrite a live entry', $refused);
+check('trash: the live entry was left alone', 'Newer content.' === rtrim((string) ($trashStore->read('facts', (string) $doomed['id'])['body'] ?? '')), '');
+
+// Two deletions of the same path must not overwrite each other.
+$trashStore->delete('facts', (string) $doomed['id']);
+$twice = $trashStore->trashed();
+check('trash: a second deletion is kept alongside the first', 2 === count($twice), json_encode(array_column($twice, 'name')));
+check('trash: both copies parse back to the same entry',
+    ['facts', 'facts'] === array_column($twice, 'category') && [$doomed['id'], $doomed['id']] === array_column($twice, 'id'),
+    json_encode($twice));
+check('trash: names are unique', 2 === count(array_unique(array_column($twice, 'name'))));
+
+check('trash: purge removes one entry', $trashStore->purge((string) $twice[0]['name']));
+check('trash: purge of a missing entry is false', !$trashStore->purge((string) $twice[0]['name']));
+check('trash: one entry is left', 1 === $trashStore->trashCount());
+check('trash: emptying removes the rest', 1 === $trashStore->purgeTrash());
+check('trash: the trash is empty', 0 === $trashStore->trashCount());
+check('trash: emptying an empty trash removes nothing', 0 === $trashStore->purgeTrash());
+check('trash: the keeper was never touched', null !== $trashStore->read('facts', (string) $keeper['id']));
+// A stray file dropped into the trash folder is ignored, not guessed at.
+@file_put_contents($trashRoot . '/' . PathValidator::TRASH_DIR . '/not-a-trash-entry.md', "junk\n");
+check('trash: stray files in the folder are ignored', 0 === $trashStore->trashCount());
+
 // B1: created/updated are full ISO-8601 UTC timestamps, and the parsed doc
 // exposes a numeric updated_ts used for ordering and the UI "new" badge.
 $tsDoc = $store->create('Timestamped body.', 'Timestamped', 'facts');
