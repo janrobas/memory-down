@@ -68,7 +68,7 @@ final class MemoryTools
                 'properties' => [
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
-                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category).'],
+                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected.'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary()],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
@@ -85,6 +85,9 @@ final class MemoryTools
                 }
                 if (!PathValidator::isCategory($category)) {
                     return self::fail('Invalid category. Allowed: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes.');
+                }
+                if (PathValidator::isWriteProtectedCategory($category)) {
+                    return self::failWriteProtected($category, 'memories cannot be stored in it.');
                 }
                 $tags = array_values(array_filter(array_map('strval', $tags)));
 
@@ -136,7 +139,7 @@ final class MemoryTools
                 'type' => 'object',
                 'properties' => [
                     'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories. May include "tag:foo" to require a tag.'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes).'],
+                    'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are returned like any other, but that category is read-only through MCP.'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
                     'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
                     'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
@@ -199,7 +202,7 @@ final class MemoryTools
                 'type' => 'object',
                 'properties' => [
                     'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes).'],
+                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are searchable, but that category is read-only through MCP.'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
                     'include_body' => ['type' => 'boolean', 'description' => 'Include the full body of matching memories (default false; results include a snippet).'],
                     'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
@@ -244,7 +247,9 @@ final class MemoryTools
             'name' => 'update_memory',
             'description' => 'Update an existing memory entry, identified by its id (returned by remember, '
                 . 'recall, search_memory or list_memory). Only the provided fields are changed; everything else '
-                . 'is preserved. The file keeps its id; changing the category moves the file.',
+                . 'is preserved. The file keeps its id; changing the category moves the file. Entries in the '
+                . '"writings" category are read-only through MCP and cannot be updated or moved, and no entry '
+                . 'can be moved into that category.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: false,
@@ -258,7 +263,7 @@ final class MemoryTools
                     'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'New title.'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary()],
-                    'category' => ['type' => 'string', 'description' => 'New category; the file is moved there.'],
+                    'category' => ['type' => 'string', 'description' => 'New category; the file is moved there. The "writings" category is read-only through MCP: entries cannot be moved into it.'],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
                 ],
                 'required' => ['id'],
@@ -284,6 +289,9 @@ final class MemoryTools
                     if (!PathValidator::isCategory($category)) {
                         return self::fail('Invalid category.');
                     }
+                    if (PathValidator::isWriteProtectedCategory($category)) {
+                        return self::failWriteProtected($category, 'entries cannot be moved into it.');
+                    }
                     $changes['category'] = $category;
                 }
                 if (null !== $archived) {
@@ -293,8 +301,15 @@ final class MemoryTools
                     return self::fail('Nothing to update: provide at least one of content, title, tags, category or archived.');
                 }
 
+                // A read-only category is refused wherever the entry lives, so a
+                // writing can never be edited (or archived) through MCP.
+                $currentCategory = $this->categoryFor($id);
+                if (PathValidator::isWriteProtectedCategory($currentCategory)) {
+                    return self::failWriteProtected($currentCategory, 'this memory cannot be updated here.');
+                }
+
                 try {
-                    $doc = $this->store->update($this->categoryFor($id), $id, $changes);
+                    $doc = $this->store->update($currentCategory, $id, $changes);
                 } catch (\InvalidArgumentException $e) {
                     return self::fail($e->getMessage());
                 }
@@ -314,7 +329,8 @@ final class MemoryTools
             'name' => 'forget_memory',
             'description' => 'Permanently delete a memory entry by its id. '
                 . 'DELETION IS DESTRUCTIVE AND CANNOT BE UNDONE — only call this when the user explicitly asks '
-                . 'to remove or forget a memory. The corresponding .md file is deleted.',
+                . 'to remove or forget a memory. The corresponding .md file is deleted. Entries in the '
+                . '"writings" category are read-only through MCP and cannot be deleted here.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: true,
@@ -325,7 +341,7 @@ final class MemoryTools
                 'type' => 'object',
                 'properties' => [
                     'id' => ['type' => 'string', 'description' => 'The id of the memory entry to delete.'],
-                    'category' => ['type' => 'string', 'description' => 'The category the entry lives in (used to locate the file).'],
+                    'category' => ['type' => 'string', 'description' => 'The category the entry lives in (used to locate the file). The "writings" category is read-only through MCP.'],
                 ],
                 'required' => ['id'],
             ],
@@ -337,7 +353,12 @@ final class MemoryTools
                     return self::fail('Invalid category.');
                 }
 
-                $deleted = $this->store->delete('' !== $category ? $category : $this->categoryFor($id), $id);
+                $currentCategory = '' !== $category ? $category : $this->categoryFor($id);
+                if (PathValidator::isWriteProtectedCategory($currentCategory)) {
+                    return self::failWriteProtected($currentCategory, 'this memory cannot be deleted here.');
+                }
+
+                $deleted = $this->store->delete($currentCategory, $id);
                 if (!$deleted) {
                     return self::fail("No memory entry found with id {$id}.");
                 }
@@ -411,9 +432,11 @@ final class MemoryTools
     }
 
     /**
-     * Locate the category of an id across all categories. Memory ids carry a
-     * random suffix and are globally unique across the whole corpus, so at most
-     * one category can contain a given id.
+     * Locate the category of an id across all categories — including the
+     * read-only ones, so an entry in a write-protected category is found (and
+     * then refused) rather than being silently defaulted elsewhere. Memory ids
+     * carry a random suffix and are globally unique across the whole corpus, so
+     * at most one category can contain a given id.
      */
     private function categoryFor(string $id): string
     {
@@ -465,5 +488,17 @@ final class MemoryTools
     private static function fail(string $message): CallToolResult
     {
         return new CallToolResult([new TextContent($message)], true, ['error' => $message]);
+    }
+
+    /**
+     * Refuse a write to a read-only category with an actionable message, so the
+     * calling LLM understands why and what to do instead of retrying blindly.
+     */
+    private static function failWriteProtected(string $category, string $detail): CallToolResult
+    {
+        return self::fail(
+            'The "' . strtolower(trim($category)) . '" category is read-only through MCP: ' . $detail
+            . ' It can only be edited in the admin UI by the user.'
+        );
     }
 }

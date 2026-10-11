@@ -38,6 +38,15 @@ final class PathValidator
         'writings',
     ];
 
+    /**
+     * Categories an agent may read but never write through MCP: no tool call
+     * creates, edits, moves into or deletes anything here. The admin UI still
+     * owns them, because publishing a writing is a deliberate human action.
+     *
+     * @var list<string>
+     */
+    public const WRITE_PROTECTED_CATEGORIES = ['writings'];
+
     private string $root;
 
     public function __construct(string $memoryRoot)
@@ -58,6 +67,14 @@ final class PathValidator
     public static function isId(string $id): bool
     {
         return 1 === preg_match(self::ID_PATTERN, $id);
+    }
+
+    /**
+     * True when the category may be read through MCP but never written to.
+     */
+    public static function isWriteProtectedCategory(string $category): bool
+    {
+        return in_array(strtolower(trim($category)), self::WRITE_PROTECTED_CATEGORIES, true);
     }
 
     /**

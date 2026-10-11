@@ -24,7 +24,8 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   RFC 9207 issuer identification, dynamic client registration (DCR), RFC 9728
   protected-resource metadata and RFC 8414 authorization-server metadata.
 - **Six MCP tools:** `remember`, `recall`, `search_memory`, `update_memory`,
-  `forget_memory`, `list_memory`.
+  `forget_memory`, `list_memory`. All categories except `writings` are
+  read **and** write; `writings` is read-only through MCP.
 - **Admin UI** at `/ui`: a two-pane browser/editor (search on the left,
   Markdown editor + live preview on the right) protected by a password. Themes,
   autosave, drag-to-move between categories. An **All / Active / Archived**
@@ -188,6 +189,13 @@ through MCP, so an agent cannot publish on your behalf. Enabled without a
 `PUBLIC_API_TOKEN` the API fails closed with `503`; disabled, the routes return
 `404`.
 
+The whole `writings` category is **read-only through MCP**: agents can `recall`,
+`search_memory` and `list_memory` its entries, but `remember` refuses to store
+into it, `update_memory` and `forget_memory` refuse to touch an entry that lives
+there, and nothing can be moved into it. An agent can read your posts but never
+create, edit, archive, relocate or delete one — that happens only in the admin UI.
+Every other category stays read **and** write for MCP.
+
 ### Example
 
 ```bash
@@ -265,6 +273,8 @@ php tests/run-tests.php    # chain: health → discovery → 401 → DCR → tok
 
 - Memory paths are whitelisted (categories/ids by regex plus canonical-path
   containment); traversal and deletion outside the memory root are rejected.
+- `writings` is read-only through MCP: the write tools refuse to create, edit,
+  move into or delete entries in that category.
 - Access tokens are audience-bound to the requested `resource`; tokens and codes
   are stored only as SHA-256 hashes.
 - Secrets are never logged; error messages are scrubbed of the consent password.

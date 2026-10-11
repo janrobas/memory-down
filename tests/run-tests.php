@@ -207,6 +207,20 @@ function backdateMemory(string $file, int $secondsAgo): void
     file_put_contents($file, $raw);
 }
 
+/**
+ * Count the `.md` files directly inside a directory. Used to prove a refused
+ * write really created nothing; `glob()` is avoided because it treats
+ * backslashes as escapes on Windows paths.
+ */
+function mdCount(string $dir): int
+{
+    if (!is_dir($dir)) {
+        return 0;
+    }
+
+    return count(array_filter(scandir($dir) ?: [], static fn (string $f): bool => str_ends_with($f, '.md')));
+}
+
 function waitForServer(string $base, int $attempts = 80): void
 {
     global $tmp;
@@ -1193,6 +1207,88 @@ $pubRaw = is_file($tmp . '/memory/writings/' . $pubId . '.md') ? (string) file_g
 check('unpublish -> public frontmatter removed', !str_contains($pubRaw, 'public:'), $pubRaw);
 $r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
 check('unpublish -> no longer served', 404 === $r['status'], (string) $r['status']);
+
+section('MCP: writings is read-only');
+
+$writingsDir = $tmp . '/memory/writings';
+$pubFile = $writingsDir . '/' . $pubId . '.md';
+$writingsBefore = mdCount($writingsDir);
+$pubBefore = (string) file_get_contents($pubFile);
+
+// remember must refuse the category outright and create nothing.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 30, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => ['content' => 'An agent-written post.', 'title' => 'Agent post', 'category' => 'writings']],
+]));
+$wRes = jsonBody($r['body']);
+check('mcp remember -> writings rejected', true === ($wRes['result']['isError'] ?? false), $r['body']);
+check('mcp remember -> error explains read-only', str_contains($wRes['result']['content'][0]['text'] ?? '', 'read-only through MCP'), $r['body']);
+check('mcp remember -> nothing written to writings', $writingsBefore === mdCount($writingsDir), (string) mdCount($writingsDir));
+
+// update_memory must not edit an existing writing (the id resolves across all categories).
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 31, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => ['id' => $pubId, 'content' => 'Hacked.']],
+]));
+check('mcp update_memory -> writing rejected', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
+check('mcp update_memory -> writing file unchanged', $pubBefore === (string) file_get_contents($pubFile), (string) file_get_contents($pubFile));
+
+// ... and must not move another memory into writings.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 32, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => ['id' => $factId, 'category' => 'writings']],
+]));
+check('mcp update_memory -> move into writings rejected', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
+check(
+    'mcp update_memory -> nothing moved into writings',
+    $writingsBefore === mdCount($writingsDir) && is_file($tmp . '/memory/facts/' . $factId . '.md'),
+    (string) mdCount($writingsDir)
+);
+
+// forget_memory must not delete a writing, with or without an explicit category.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 33, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $pubId, 'category' => 'writings']],
+]));
+check('mcp forget_memory -> explicit writings rejected', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
+check('mcp forget_memory -> writing still on disk', is_file($pubFile), $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 34, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $pubId]],
+]));
+check('mcp forget_memory -> id-only writings rejected', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
+check('mcp forget_memory -> id-only writing still on disk', is_file($pubFile), $r['body']);
+
+// Reads stay open: writings remain visible to every read tool.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 35, 'method' => 'tools/call',
+    'params' => ['name' => 'list_memory', 'arguments' => ['category' => 'writings']],
+]));
+$mcpList = toolResult(jsonBody($r['body']));
+check('mcp list_memory -> writings readable', in_array($pubId, array_column($mcpList['memories'] ?? [], 'id'), true), $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 36, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'Hello world']],
+]));
+$mcpFound = toolResult(jsonBody($r['body']));
+check('mcp search_memory -> writings searchable', in_array($pubId, array_column($mcpFound['results'] ?? [], 'id'), true), $r['body']);
+
+// The guard is scoped to writings: every other category stays read + write.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 37, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => ['content' => 'Still writable.', 'title' => 'Writable control', 'category' => 'facts']],
+]));
+$ctl = toolResult(jsonBody($r['body']));
+$ctlId = (string) ($ctl['memory']['id'] ?? '');
+check('mcp remember -> other categories still writable', 'created' === ($ctl['action'] ?? '') && '' !== $ctlId, $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 38, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $ctlId, 'category' => 'facts']],
+]));
+check('mcp forget_memory -> other categories still deletable', false === ((jsonBody($r['body']))['result']['isError'] ?? true), $r['body']);
 
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);

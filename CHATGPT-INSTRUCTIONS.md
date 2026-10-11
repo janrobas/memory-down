@@ -12,4 +12,6 @@ connector is enabled; the last line says what to do if it is not.
 
 **Write.** Save on remember/note, delete on forget (find it first if ambiguous). Proactively store durable info — preferences, project context, decisions, workflows, facts — not trivial details. Use the right `category`, 1–3 short `tags`, a short `title`.
 
+**Never write to `writings`.** That category is read-only through MCP: do not create, edit, archive, move into or delete anything in it. You may read and search it like any other category — it holds my published posts — but all changes happen in the admin UI.
+
 **Archive, don't delete.** Retire a memory with `archived: true` (`update_memory`, or `remember`) instead of deleting. Archived stays searchable but ranks lower; pass `archived: "active"` to skip, `tag:foo` or the `tag` arg to filter by tag.

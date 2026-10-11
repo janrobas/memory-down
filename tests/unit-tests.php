@@ -105,6 +105,21 @@ check('default categories include ideas', in_array('ideas', PathValidator::DEFAU
 check('default categories include references', in_array('references', PathValidator::DEFAULT_CATEGORIES, true));
 check('default categories include goals', in_array('goals', PathValidator::DEFAULT_CATEGORIES, true));
 check('default categories include writings', in_array('writings', PathValidator::DEFAULT_CATEGORIES, true));
+check('write-protected: writings is read-only for agents', PathValidator::isWriteProtectedCategory('writings'));
+check('write-protected: facts is writable', !PathValidator::isWriteProtectedCategory('facts'));
+check('write-protected: case/space tolerant', PathValidator::isWriteProtectedCategory(' Writings '));
+check('write-protected: empty category is not protected', !PathValidator::isWriteProtectedCategory(''));
+check(
+    'write-protected: every protected category is a real category',
+    [] === array_diff(PathValidator::WRITE_PROTECTED_CATEGORIES, PathValidator::DEFAULT_CATEGORIES),
+    json_encode(PathValidator::WRITE_PROTECTED_CATEGORIES)
+);
+// The publisher and the MCP write guard must agree on which category is which.
+check(
+    'write-protected: covers the published category',
+    in_array(Publications::CATEGORY, PathValidator::WRITE_PROTECTED_CATEGORIES, true),
+    Publications::CATEGORY
+);
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
