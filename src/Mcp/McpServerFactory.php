@@ -51,7 +51,7 @@ Categories:
 - people: information about people
 - context: long-term situational context
 - notes: catch-all for anything that does not clearly fit the categories above
-- writings: the user's own posts, published read-only through the public writings API. READ-ONLY through MCP: never create, edit, move or delete anything in this category, and never move another memory into it. The user manages it in the admin UI.
+- writings: the user's own posts, published read-only through the public writings API. READ-ONLY through MCP: never create, edit, move or delete anything in this category, and never move another memory into it. To draft a post, store it in `ideas` or `notes` and tell the user to move it into writings in the admin UI.
 
 Tags:
 - Optional but recommended: when calling remember or update_memory, add 1-3 short lowercase tags (e.g. "project-x", "meeting-notes") to make memories easier to group and search later.

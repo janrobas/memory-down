@@ -1267,6 +1267,12 @@ $r = request('POST', '/mcp', $session, json_encode([
 $wRes = jsonBody($r['body']);
 check('mcp remember -> writings rejected', true === ($wRes['result']['isError'] ?? false), $r['body']);
 check('mcp remember -> error explains read-only', str_contains($wRes['result']['content'][0]['text'] ?? '', 'read-only through MCP'), $r['body']);
+check(
+    'mcp remember -> refusal points at the draft-elsewhere workaround',
+    str_contains($wRes['result']['content'][0]['text'] ?? '', 'ideas or notes')
+    && str_contains($wRes['result']['content'][0]['text'] ?? '', 'admin UI'),
+    $r['body']
+);
 check('mcp remember -> nothing written to writings', $writingsBefore === mdCount($writingsDir), (string) mdCount($writingsDir));
 
 // update_memory must not edit an existing writing (the id resolves across all categories).

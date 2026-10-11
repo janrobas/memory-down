@@ -69,7 +69,7 @@ final class MemoryTools
                 'properties' => [
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
-                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected.'],
+                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected. To draft a post, store it in "ideas" or "notes" instead — the user moves it into writings in the admin UI.'],
                     'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary()],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
@@ -88,7 +88,12 @@ final class MemoryTools
                     return self::fail('Invalid category. Allowed: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes.');
                 }
                 if (PathValidator::isWriteProtectedCategory($category)) {
-                    return self::failWriteProtected($category, 'memories cannot be stored in it.');
+                    return self::failWriteProtected(
+                        $category,
+                        'memories cannot be stored in it.',
+                        'If a draft is needed, store it in another category (for example ideas or notes) — '
+                        . 'the user can move it into writings, and publish it, in the admin UI.',
+                    );
                 }
                 $tags = array_values(array_filter(array_map('strval', $tags)));
 
@@ -644,12 +649,18 @@ final class MemoryTools
     /**
      * Refuse a write to a read-only category with an actionable message, so the
      * calling LLM understands why and what to do instead of retrying blindly.
+     *
+     * $outro may be overridden where a more useful way forward exists than the
+     * generic one — notably when an agent tries to *create* something it cannot
+     * create, rather than to change something it cannot change.
      */
-    private static function failWriteProtected(string $category, string $detail): CallToolResult
-    {
+    private static function failWriteProtected(
+        string $category,
+        string $detail,
+        string $outro = 'The user manages this category in the admin UI.',
+    ): CallToolResult {
         return self::fail(
-            'The "' . strtolower(trim($category)) . '" category is read-only through MCP: ' . $detail
-            . ' It can only be edited in the admin UI by the user.'
+            'The "' . strtolower(trim($category)) . '" category is read-only through MCP: ' . $detail . ' ' . $outro
         );
     }
 }
