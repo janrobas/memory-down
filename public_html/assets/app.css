@@ -404,6 +404,19 @@ body.trash {
 
 .drawer-link:hover { background: var(--accent-weak); color: var(--accent); }
 
+/* The trash count: a reserved slot so the label can appear, grow and vanish
+   without moving its neighbours, kept muted so it reads as an aside. The gap is
+   a margin rather than a literal space, because an inline-block box drops
+   leading whitespace. */
+.trash-badge {
+  display: inline-block;
+  min-width: 3.6ch;
+  margin-left: .35em;
+  text-align: left;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* -------------------------------------------------------------- app shell */
 
 body.app { overflow: hidden; }

@@ -290,7 +290,14 @@ final class WebApp
     {
         $this->auth->start();
 
-        return $this->json(['categories' => $this->tree(), 'total' => $this->store->count()]);
+        // `trashed` travels with the tree so the menu badge can be refreshed by
+        // the same request the editor already makes after every delete, instead
+        // of going stale until the next full page load.
+        return $this->json([
+            'categories' => $this->tree(),
+            'total' => $this->store->count(),
+            'trashed' => $this->store->trashCount(),
+        ]);
     }
 
     private function apiSearch(ServerRequestInterface $request): ResponseInterface

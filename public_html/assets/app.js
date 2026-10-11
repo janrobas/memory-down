@@ -525,6 +525,14 @@
       if (res.ok && res.data.categories) {
         renderTree(res.data.categories);
       }
+      // The trash count rides along with the tree, so the menu badge stays
+      // correct after a delete without a second request or a page reload.
+      if (res.ok && typeof res.data.trashed === 'number') {
+        var badge = document.getElementById('trash-count');
+        if (badge) {
+          badge.textContent = res.data.trashed > 0 ? '(' + res.data.trashed + ')' : '';
+        }
+      }
     });
   }
 
@@ -872,12 +880,12 @@
   deleteBtn.addEventListener('click', function () {
     var category = fCategory.value;
     var id = fId.value;
-    if (!id || !window.confirm('Delete this memory? This cannot be undone.')) { return; }
+    if (!id || !window.confirm('Move this memory to the trash? You can restore it from the trash until you empty it.')) { return; }
     api(endpoint.memory + '?category=' + encodeURIComponent(category) + '&id=' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function (res) {
         if (res.ok) {
           hideEditor();
-          setStatus('Deleted.', 'ok');
+          setStatus('Moved to the trash.', 'ok');
           refreshTree();
         } else {
           setStatus(res.data.error || 'Delete failed.', 'err');

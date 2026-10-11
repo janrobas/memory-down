@@ -378,9 +378,31 @@ final class MemoryStore
         return $entries;
     }
 
+    /**
+     * How many entries the trash holds.
+     *
+     * Cheaper than counting trashed(): the menu badge asks for this on every
+     * page load, so it does one directory read and skips the per-entry work
+     * (canonical-path checks, sizes, timestamps) that only the trash page needs.
+     * Exact all the same — both filter on the same pattern and file test.
+     */
     public function trashCount(): int
     {
-        return count($this->trashed());
+        $dir = $this->paths->trashDir();
+        if (null === $dir || !is_dir($dir)) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach (scandir($dir) ?: [] as $name) {
+            if (1 === preg_match(PathValidator::TRASH_ENTRY_PATTERN, $name)
+                && is_file($dir . DIRECTORY_SEPARATOR . $name)
+            ) {
+                ++$count;
+            }
+        }
+
+        return $count;
     }
 
     /**

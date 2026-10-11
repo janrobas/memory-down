@@ -90,7 +90,7 @@ if (!in_array($selCategory, $categories, true)) {
 
         <div class="title-row">
           <input id="f-title" name="title" class="title-input" placeholder="Title" value="<?= WebApp::h($selTitle) ?>">
-          <button type="button" class="danger" id="delete" title="Delete this memory"<?= '' === $selId ? ' disabled hidden' : '' ?>>Delete</button>
+          <button type="button" class="danger" id="delete" title="Move this memory to the trash"<?= '' === $selId ? ' disabled hidden' : '' ?>>Delete</button>
         </div>
 
         <div class="new-cats" id="new-cats"<?= '' !== $selId ? ' hidden' : '' ?>>
@@ -167,7 +167,10 @@ if (!in_array($selCategory, $categories, true)) {
 
     <!-- Plain links: no JavaScript, and the backup is a normal file download. -->
     <a class="drawer-link" href="/ui/backup" download title="Download every memory as a zip">⭳ Backup</a>
-    <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<?= (int) ($trashCount ?? 0) > 0 ? ' (' . (int) $trashCount . ')' : '' ?></a>
+    <!-- The count sits in a fixed-width slot so its label can change without
+         nudging the neighbouring buttons; app.js keeps it current after a delete.
+         Spacing comes from CSS: an inline-block strips a leading space. -->
+    <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<span class="trash-badge" id="trash-count"><?= (int) ($trashCount ?? 0) > 0 ? '(' . (int) $trashCount . ')' : '' ?></span></a>
 
     <div class="theme-picker">
       <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>

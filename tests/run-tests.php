@@ -813,6 +813,16 @@ check(
     str_contains($r['body'], 'href="/ui/backup"') && str_contains($r['body'], 'href="/ui/trash"'),
     ''
 );
+check(
+    'GET /ui shell -> the trash count sits in a reserved slot',
+    str_contains($r['body'], 'id="trash-count"') && str_contains($r['body'], 'class="trash-badge"'),
+    ''
+);
+check(
+    'GET /ui shell -> the delete button no longer claims to be irreversible',
+    str_contains($r['body'], 'title="Move this memory to the trash"') && !str_contains($r['body'], 'cannot be undone'),
+    ''
+);
 check('serial: mobile drawers present', str_contains($r['body'], 'id="open-memories"') && str_contains($r['body'], 'id="open-menu"') && str_contains($r['body'], 'id="command-drawer"') && str_contains($r['body'], 'id="backdrop"'), (string) $r['status']);
 check('admin CSP allows self-hosted scripts', str_contains($r['headers']['content-security-policy'] ?? '', "script-src 'self'"));
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
@@ -1727,6 +1737,11 @@ $trashDir = $tmp . '/memory/.trash';
 $trashBefore = mdCount($trashDir);
 check('trash: earlier MCP deletes already went to the trash', $trashBefore > 0, (string) $trashBefore);
 
+// The badge reads this from the tree payload, which the editor already fetches
+// after every delete — so it can never be stale.
+$r = request('GET', '/ui/api/tree');
+check('trash: the tree payload reports the trash count', $trashBefore === (int) (jsonBody($r['body'])['trashed'] ?? -1), $r['body']);
+
 // Deleting through the admin API moves the file out of its category.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'facts', 'title' => 'Doomed fact', 'content' => 'This one gets deleted and restored.',
@@ -1747,6 +1762,9 @@ $trashedNames = array_values(array_filter(
     static fn (string $f): bool => str_contains($f, '__facts__' . $doomedId . '.md')
 ));
 check('trash: the trash name encodes the original location', 1 === count($trashedNames), json_encode($trashedNames));
+
+$r = request('GET', '/ui/api/tree');
+check('trash: the tree payload count follows the delete', $trashBefore + 1 === (int) (jsonBody($r['body'])['trashed'] ?? -1), $r['body']);
 
 // It is out of the corpus, the index and MCP search...
 $r = request('POST', '/mcp', $session, json_encode([

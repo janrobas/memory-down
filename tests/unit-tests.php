@@ -318,6 +318,14 @@ check('trash: the keeper was never touched', null !== $trashStore->read('facts',
 @file_put_contents($trashRoot . '/' . PathValidator::TRASH_DIR . '/not-a-trash-entry.md', "junk\n");
 check('trash: stray files in the folder are ignored', 0 === $trashStore->trashCount());
 
+// trashCount() skips the per-entry work trashed() does, so pin that it is still
+// exact: a directory whose name looks like an entry must not be counted.
+@mkdir($trashRoot . '/' . PathValidator::TRASH_DIR . '/20261011T1830Z__facts__dir-123456.md', 0775, true);
+check('trash: a directory named like an entry is not counted', 0 === $trashStore->trashCount(), (string) $trashStore->trashCount());
+check('trash: trashed() ignores it too', [] === $trashStore->trashed());
+@rmdir($trashRoot . '/' . PathValidator::TRASH_DIR . '/20261011T1830Z__facts__dir-123456.md');
+check('trash: the cheap count matches the full listing', count($trashStore->trashed()) === $trashStore->trashCount());
+
 // B1: created/updated are full ISO-8601 UTC timestamps, and the parsed doc
 // exposes a numeric updated_ts used for ordering and the UI "new" badge.
 $tsDoc = $store->create('Timestamped body.', 'Timestamped', 'facts');
