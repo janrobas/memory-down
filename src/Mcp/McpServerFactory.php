@@ -37,6 +37,7 @@ Memory semantics:
 - Do NOT store every conversational detail; be selective, like a good personal memory.
 - When you store something that clearly duplicates existing memory (same topic and same meaning), prefer updating the existing entry instead of creating a duplicate. Use recall/search_memory to check first.
 - Never overwrite unrelated information.
+- search_memory and list_memory return short snippets and metadata only: call read_memory to read an entry in full, and always read an entry before rewriting it with update_memory.
 
 Categories:
 - preferences: durable user preferences and settings
@@ -58,8 +59,9 @@ Tags:
 Tools:
 - remember: create or update a memory
 - recall: pull memories relevant to the conversation
-- search_memory: full-text search over the corpus
-- update_memory: update a specific entry by id
+- search_memory: full-text search over the corpus (returns short snippets)
+- read_memory: read one entry in full by id or path (search/list return snippets only)
+- update_memory: update a specific entry by id (read_memory it first)
 - forget_memory: delete an entry by id (destructive — only on explicit user request)
 - list_memory: see what is stored
 TXT;

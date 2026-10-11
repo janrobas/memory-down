@@ -143,6 +143,60 @@ final class MemoryStore
     }
 
     /**
+     * Resolve a loose reference into a validated (category, id) pair.
+     *
+     * Accepts what the MCP tools hand out, so a caller can copy a value
+     * verbatim instead of guessing the shape:
+     *
+     *   foo-96e3d3                 id only
+     *   foo-96e3d3.md              id, extension ignored
+     *   facts/foo-96e3d3           category + id
+     *   facts/foo-96e3d3.md        category + id, extension ignored
+     *
+     * Purely syntactic — nothing is read from disk — and every part goes
+     * through the same whitelist as any other path. The category is null when
+     * the reference did not carry one; the caller then has to find the id
+     * across the corpus. Returns null for anything that cannot name a memory
+     * file: absolute paths, drive letters, "..", backslashes, extra segments,
+     * empty values.
+     *
+     * @return array{category: ?string, id: string}|null
+     */
+    public static function locate(string $reference): ?array
+    {
+        $reference = trim($reference);
+        if ('' === $reference || str_contains($reference, "\0") || str_contains($reference, '\\')) {
+            return null;
+        }
+        // An absolute path (POSIX or a Windows drive) never names a memory file.
+        if (str_starts_with($reference, '/') || 1 === preg_match('/^[A-Za-z]:/', $reference)) {
+            return null;
+        }
+
+        $parts = explode('/', $reference);
+        if (count($parts) > 2) {
+            return null;
+        }
+
+        $id = (string) array_pop($parts);
+        $category = [] === $parts ? null : $parts[0];
+
+        // A trailing ".md" is the file extension, never part of an id.
+        if (str_ends_with(strtolower($id), '.md')) {
+            $id = substr($id, 0, -3);
+        }
+
+        if (null !== $category && !PathValidator::isCategory($category)) {
+            return null;
+        }
+        if (!PathValidator::isId($id)) {
+            return null;
+        }
+
+        return ['category' => $category, 'id' => $id];
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function read(string $category, string $id): ?array
@@ -158,6 +212,23 @@ final class MemoryStore
         }
 
         return $this->parseDocument($category, $id, $raw);
+    }
+
+    /**
+     * The raw text of a memory file, exactly as stored. Unlike {@see read()}
+     * nothing is parsed or normalised, so the frontmatter block can be shown as
+     * it exists on disk. Returns null when the file does not exist.
+     */
+    public function raw(string $category, string $id): ?string
+    {
+        $file = $this->paths->file(self::normalizeCategory($category), $id);
+        if (null === $file || !is_file($file)) {
+            return null;
+        }
+
+        $raw = file_get_contents($file);
+
+        return false === $raw ? null : $raw;
     }
 
     /**

@@ -316,6 +316,7 @@ Implement:
 - `remember`
 - `recall`
 - `search_memory`
+- `read_memory`
 - `update_memory`
 - `forget_memory`
 - `list_memory`
@@ -351,6 +352,24 @@ Search should consider:
 - body
 
 Do not introduce embeddings or vector databases in V1.
+
+### read_memory
+
+Read a single entry in full, by its id or by its `category/id.md` path.
+
+This exists because `search_memory` and `list_memory` return only metadata and a
+short snippet, and neither of them can read one specific entry. `recall` does
+return bodies, but only as context loading — it has no id lookup. An agent must be
+able to obtain the complete, current text before rewriting it with
+`update_memory`, otherwise the content it never saw is silently lost.
+
+`search_memory` deliberately has no way to return bodies: carrying the full body
+of up to 50 matches in one result is wasteful, and `read_memory` covers the
+single-entry case. `recall` remains the one tool that returns bodies by default.
+
+Reading is always allowed, including entries in the write-protected `writings`
+category. The body is returned whole by default; `offset`/`max_chars` page
+through a very long entry, and a partial body must never be written back.
 
 ### update_memory
 

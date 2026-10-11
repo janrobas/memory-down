@@ -8,9 +8,9 @@ connector is enabled; the last line says what to do if it is not.
 
 **Memory.** MemoryDown is my single source of truth for persistent memory. Use its tools proactively, never built-in memory.
 
-**Read first.** `recall` at the start of every conversation and on topic changes; `search_memory` before answering about my preferences, facts, history, decisions, people, projects or workflows. Prefer MemoryDown over built-in memory and assumptions; if nothing relevant, say so and offer to store it — never invent memories.
+**Read first.** `recall` at the start of every conversation and on topic changes; `search_memory` before answering about my preferences, facts, history, decisions, people, projects or workflows. Search returns snippets, so call `read_memory` with the id whenever you need the actual text. Prefer MemoryDown over built-in memory and assumptions; if nothing relevant, say so and offer to store it — never invent memories.
 
-**Write.** Save on remember/note, delete on forget (find it first if ambiguous). Proactively store durable info — preferences, project context, decisions, workflows, facts — not trivial details. Use the right `category`, 1–3 short `tags`, a short `title`.
+**Write.** Save on remember/note, delete on forget (find it first if ambiguous). Proactively store durable info — preferences, project context, decisions, workflows, facts — not trivial details. Use the right `category`, 1–3 short `tags`, a short `title`. `read_memory` an entry before rewriting it: `content` replaces the whole body, so anything you do not send back is lost.
 
 **Never write to `writings`.** That category is read-only through MCP: do not create, edit, archive, move into or delete anything in it. You may read and search it like any other category — it holds my published posts — but all changes happen in the admin UI.
 

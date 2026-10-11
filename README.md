@@ -23,9 +23,9 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **OAuth 2.1** authorization-code + PKCE (S256), refresh-token rotation,
   RFC 9207 issuer identification, dynamic client registration (DCR), RFC 9728
   protected-resource metadata and RFC 8414 authorization-server metadata.
-- **Six MCP tools:** `remember`, `recall`, `search_memory`, `update_memory`,
-  `forget_memory`, `list_memory`. All categories except `writings` are
-  read **and** write; `writings` is read-only through MCP.
+- **Seven MCP tools:** `remember`, `recall`, `search_memory`, `read_memory`,
+  `update_memory`, `forget_memory`, `list_memory`. All categories except
+  `writings` are read **and** write; `writings` is read-only through MCP.
 - **Admin UI** at `/ui`: a two-pane browser/editor (search on the left,
   Markdown editor + live preview on the right) protected by a password. Themes,
   autosave, drag-to-move between categories. An **All / Active / Archived**
@@ -190,11 +190,11 @@ through MCP, so an agent cannot publish on your behalf. Enabled without a
 `404`.
 
 The whole `writings` category is **read-only through MCP**: agents can `recall`,
-`search_memory` and `list_memory` its entries, but `remember` refuses to store
-into it, `update_memory` and `forget_memory` refuse to touch an entry that lives
-there, and nothing can be moved into it. An agent can read your posts but never
-create, edit, archive, relocate or delete one — that happens only in the admin UI.
-Every other category stays read **and** write for MCP.
+`search_memory`, `read_memory` and `list_memory` its entries, but `remember`
+refuses to store into it, `update_memory` and `forget_memory` refuse to touch an
+entry that lives there, and nothing can be moved into it. An agent can read your
+posts but never create, edit, archive, relocate or delete one — that happens only
+in the admin UI. Every other category stays read **and** write for MCP.
 
 ### Example
 
@@ -230,7 +230,10 @@ source of truth; the index is a cache. It rebuilds automatically when the corpus
 changes, can be rebuilt via `POST /ui/reindex`, and falls back to a direct
 `.md` scan when `pdo_sqlite`/FTS5 is unavailable. Deleting it loses nothing.
 Every `.md` file is indexed, including archived memories (archiving sets an
-`archived: true` frontmatter key; the file is never moved or hidden).
+`archived: true` frontmatter key; the file is never moved or hidden). Search
+results carry a ranked **snippet** taken from the index; the `read_memory` MCP
+tool and the admin editor read the file itself, which is where the complete body
+comes from.
 
 ## OAuth & connecting ChatGPT
 

@@ -193,6 +193,44 @@ check('collectFiles ignores root + nested .md', 1 === count($store->collectFiles
 check('collectFiles(category) finds the entry', 1 === count($store->collectFiles('facts')));
 check('collectFiles(bogus category) is empty', [] === $store->collectFiles('not-a-real'));
 
+// locate(): the loose references the MCP tools hand out must all resolve, and
+// nothing that could name a file outside the corpus may.
+check('locate: bare id', ['category' => null, 'id' => 'note-abc123'] === MemoryStore::locate('note-abc123'));
+check('locate: id with .md', ['category' => null, 'id' => 'note-abc123'] === MemoryStore::locate('note-abc123.md'));
+check('locate: category/id', ['category' => 'facts', 'id' => 'note-abc123'] === MemoryStore::locate('facts/note-abc123'));
+check('locate: category/id.md', ['category' => 'writings', 'id' => 'prvi-7b083f'] === MemoryStore::locate('writings/prvi-7b083f.md'));
+check('locate: surrounding whitespace ignored', ['category' => null, 'id' => 'note-abc123'] === MemoryStore::locate('  note-abc123  '));
+check('locate: uppercase extension accepted', ['category' => null, 'id' => 'note-abc123'] === MemoryStore::locate('note-abc123.MD'));
+foreach ([
+    'empty' => '',
+    'blank' => '   ',
+    'parent traversal' => '../secret',
+    'deep traversal' => '../../.env',
+    'traversal inside a category' => 'facts/../context/x',
+    'absolute path' => '/etc/passwd',
+    'drive letter' => 'C:/windows/win.ini',
+    'backslash separators' => 'facts\\note-abc123',
+    'dotfile' => '.env',
+    'extra segment' => 'facts/nested/x',
+    'trailing separator' => 'facts/',
+    'leading separator' => '/facts/x',
+    'null byte' => "note-abc123\0.md",
+    'bad category' => 'Facts/x',
+] as $locateLabel => $badRef) {
+    check("locate: rejects {$locateLabel}", null === MemoryStore::locate($badRef), var_export($badRef, true));
+}
+
+// raw(): the file exactly as stored, for the frontmatter block. read() parses
+// and strips the H1; raw() keeps both.
+$rawDoc = $store->create('Raw body.', 'Raw title', 'notes', ['raw']);
+$rawText = $store->raw('notes', (string) $rawDoc['id']);
+check('raw: returns the stored text', is_string($rawText) && str_starts_with($rawText, "---\n"), var_export($rawText, true));
+check('raw: keeps the frontmatter that read() parses away', str_contains((string) $rawText, 'id: ' . $rawDoc['id']), (string) $rawText);
+check('raw: keeps the title heading that read() strips', str_contains((string) $rawText, "# Raw title"), (string) $rawText);
+check('raw: null for a missing entry', null === $store->raw('notes', 'does-not-exist'));
+check('raw: null for an invalid id', null === $store->raw('notes', '../secret'));
+check('raw: null for an invalid category', null === $store->raw('a/b', 'x'));
+
 // B1: created/updated are full ISO-8601 UTC timestamps, and the parsed doc
 // exposes a numeric updated_ts used for ordering and the UI "new" badge.
 $tsDoc = $store->create('Timestamped body.', 'Timestamped', 'facts');

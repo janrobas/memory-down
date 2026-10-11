@@ -39,6 +39,7 @@ final class MemoryTools
             $this->remember(),
             $this->recall(),
             $this->searchMemory(),
+            $this->readMemory(),
             $this->updateMemory(),
             $this->forgetMemory(),
             $this->listMemory(),
@@ -192,6 +193,8 @@ final class MemoryTools
                 . 'projects, people, or anything the user may have asked to remember. Check it before '
                 . 'answering anything personal or past-related, even if the user does not mention memory '
                 . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance. '
+                . 'Results never carry the body, only a SHORT SNIPPET of it: call read_memory with the returned '
+                . 'id to read an entry in full. '
                 . 'Archived memories are included but ranked after active ones; pass archived="active" to '
                 . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".',
             'annotations' => new ToolAnnotations(
@@ -204,13 +207,21 @@ final class MemoryTools
                     'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
                     'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are searchable, but that category is read-only through MCP.'],
                     'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
-                    'include_body' => ['type' => 'boolean', 'description' => 'Include the full body of matching memories (default false; results include a snippet).'],
                     'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
                     'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
                 ],
                 'required' => ['query'],
             ],
-            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, bool $includeBody = false, string $tag = '', string $archived = 'all'): CallToolResult {
+            // NOTE: parameter names must mirror the JSON schema keys exactly —
+            // the MCP SDK matches arguments by parameter name with no
+            // snake_case conversion. A mismatch silently falls back to the
+            // default, which is how `include_body` used to be ignored.
+            //
+            // There is deliberately no `include_body` here: carrying the full
+            // body of up to 50 matches in one result is wasteful, and
+            // read_memory reads a single entry in full. recall still returns
+            // bodies for context loading.
+            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
                 $query = trim($query);
                 if ('' === $query) {
                     return self::fail('query must not be empty.');
@@ -225,18 +236,97 @@ final class MemoryTools
                     $query,
                     '' !== $category ? $category : null,
                     $probe,
-                    $includeBody,
-                    '' !== $tag ? $tag : null,
-                    self::archivedFilter($archived),
+                    includeBody: false,
+                    tag: '' !== $tag ? $tag : null,
+                    archived: self::archivedFilter($archived),
                 );
 
                 [$results, $returned, $hasMore] = self::page($results, $limit);
 
-                if ([] === $results) {
-                    return self::ok(['results' => [], 'returned' => 0, 'has_more' => false, 'message' => 'No matches.']);
+                return self::ok(self::searchPayload($results, $returned, $hasMore));
+            },
+        ];
+    }
+
+    private function readMemory(): array
+    {
+        return [
+            'name' => 'read_memory',
+            'description' => 'Read ONE memory entry in full: its complete Markdown body plus its metadata '
+                . '(title, path, category, tags, created, updated, archived, public). search_memory and '
+                . 'list_memory return only a short snippet and metadata, so call this with the id (or the path) '
+                . 'they returned whenever you need the actual text — to show an entry to the user, to check it '
+                . 'before changing it, or to append to / edit part of it. The whole body is returned by '
+                . 'default; pass offset and max_chars to page through a very long entry. Reading is always '
+                . 'allowed, including entries in the read-only "writings" category.',
+            'annotations' => new ToolAnnotations(
+                readOnlyHint: true,
+                openWorldHint: false,
+            ),
+            'inputSchema' => [
+                'type' => 'object',
+                'properties' => [
+                    'id' => ['type' => 'string', 'description' => 'The id of the entry (e.g. "mentor-od-novembra-2024-96e3d3"), or its path exactly as returned by the other tools (e.g. "facts/mentor-od-novembra-2024-96e3d3.md"). A trailing ".md" is optional.'],
+                    'category' => ['type' => 'string', 'description' => 'Optional. Only needed to disambiguate; otherwise the category is taken from the id or path.'],
+                    'offset' => ['type' => 'integer', 'description' => 'Optional character offset to start at (default 0). Use with max_chars to page through a long entry.'],
+                    'max_chars' => ['type' => 'integer', 'description' => 'Optional maximum number of characters to return (default 0 = everything from offset on, no truncation).'],
+                    'include_frontmatter' => ['type' => 'boolean', 'description' => 'Also return the raw frontmatter block as stored on disk (default false; tags, created, updated, archived and public are always returned as structured fields anyway).'],
+                ],
+                'required' => ['id'],
+            ],
+            // Parameter names mirror the JSON schema keys exactly (see the note
+            // on search_memory: the SDK does no snake_case conversion).
+            'handler' => function (string $id, string $category = '', int $offset = 0, int $max_chars = 0, bool $include_frontmatter = false): CallToolResult {
+                $reference = MemoryStore::locate($id);
+                if (null === $reference) {
+                    return self::fail('Invalid memory id or path. Pass the id or path returned by search_memory or list_memory, e.g. "facts/mentor-od-novembra-2024-96e3d3.md".');
+                }
+                if ('' !== $category && !PathValidator::isCategory($category)) {
+                    return self::fail('Invalid category.');
                 }
 
-                return self::ok(['results' => $results, 'returned' => $returned, 'has_more' => $hasMore]);
+                // Explicit argument, then the category carried by the path, then
+                // a scan of the whole corpus (ids are globally unique).
+                $resolved = '' !== $category
+                    ? $category
+                    : ($reference['category'] ?? $this->categoryFor($reference['id']));
+                $doc = null !== $resolved ? $this->store->read($resolved, $reference['id']) : null;
+                if (null === $doc || null === $resolved) {
+                    return self::fail("No memory entry found with id {$reference['id']}.");
+                }
+
+                $body = (string) ($doc['body'] ?? '');
+                $bodyChars = mb_strlen($body);
+                $offset = max(0, $offset);
+                $max_chars = max(0, $max_chars);
+                $window = 0 === $max_chars ? mb_substr($body, $offset) : mb_substr($body, $offset, $max_chars);
+                $returned = mb_strlen($window);
+                $hasMore = $offset + $returned < $bodyChars;
+
+                $memory = self::publicDocument($doc);
+                $memory['body'] = $window;
+
+                $data = [
+                    'memory' => $memory,
+                    'body_chars' => $bodyChars,
+                    'returned_chars' => $returned,
+                    'offset' => $offset,
+                    'has_more' => $hasMore,
+                    'next_offset' => $hasMore ? $offset + $returned : null,
+                    // A partial body must never be written back: doing so would
+                    // silently drop everything outside the window.
+                    'partial' => $offset > 0 || $hasMore,
+                ];
+                if (true === $data['partial']) {
+                    $data['warning'] = 'This body is PARTIAL (offset ' . $offset . ' of ' . $bodyChars
+                        . ' characters). Read it again without offset/max_chars before passing it to '
+                        . 'update_memory, or the missing text will be lost.';
+                }
+                if ($include_frontmatter) {
+                    $data['frontmatter'] = self::frontmatterBlock($this->store->raw($resolved, $reference['id']));
+                }
+
+                return self::ok($data);
             },
         ];
     }
@@ -246,8 +336,10 @@ final class MemoryTools
         return [
             'name' => 'update_memory',
             'description' => 'Update an existing memory entry, identified by its id (returned by remember, '
-                . 'recall, search_memory or list_memory). Only the provided fields are changed; everything else '
-                . 'is preserved. The file keeps its id; changing the category moves the file. Entries in the '
+                . 'recall, search_memory, read_memory or list_memory). Only the provided fields are changed; '
+                . 'everything else is preserved. The file keeps its id; changing the category moves the file. '
+                . 'Call read_memory first to obtain the current body before rewriting it: content replaces the '
+                . 'whole body, so anything you do not send back is lost. Entries in the '
                 . '"writings" category are read-only through MCP and cannot be updated or moved, and no entry '
                 . 'can be moved into that category.',
             'annotations' => new ToolAnnotations(
@@ -304,6 +396,9 @@ final class MemoryTools
                 // A read-only category is refused wherever the entry lives, so a
                 // writing can never be edited (or archived) through MCP.
                 $currentCategory = $this->categoryFor($id);
+                if (null === $currentCategory) {
+                    return self::fail("No memory entry found with id {$id}.");
+                }
                 if (PathValidator::isWriteProtectedCategory($currentCategory)) {
                     return self::failWriteProtected($currentCategory, 'this memory cannot be updated here.');
                 }
@@ -329,8 +424,9 @@ final class MemoryTools
             'name' => 'forget_memory',
             'description' => 'Permanently delete a memory entry by its id. '
                 . 'DELETION IS DESTRUCTIVE AND CANNOT BE UNDONE — only call this when the user explicitly asks '
-                . 'to remove or forget a memory. The corresponding .md file is deleted. Entries in the '
-                . '"writings" category are read-only through MCP and cannot be deleted here.',
+                . 'to remove or forget a memory (read_memory it first if the target is ambiguous). The '
+                . 'corresponding .md file is deleted. Entries in the "writings" category are read-only through '
+                . 'MCP and cannot be deleted here.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: true,
@@ -354,6 +450,9 @@ final class MemoryTools
                 }
 
                 $currentCategory = '' !== $category ? $category : $this->categoryFor($id);
+                if (null === $currentCategory) {
+                    return self::fail("No memory entry found with id {$id}.");
+                }
                 if (PathValidator::isWriteProtectedCategory($currentCategory)) {
                     return self::failWriteProtected($currentCategory, 'this memory cannot be deleted here.');
                 }
@@ -374,6 +473,7 @@ final class MemoryTools
             'name' => 'list_memory',
             'description' => 'List memory entries (metadata only, no full bodies), newest first. '
                 . 'Useful for discovering what is stored and obtaining ids for update_memory or forget_memory. '
+                . 'Bodies are never returned here: follow up with read_memory to read one entry in full. '
                 . 'With no category all categories are listed. Archived memories are included but listed '
                 . 'after active ones; pass archived="active" to exclude them.',
             'annotations' => new ToolAnnotations(
@@ -415,6 +515,39 @@ final class MemoryTools
     /* ------------------------------------------------------------------ */
 
     /**
+     * The search_memory response shape, built in one place so both branches
+     * agree.
+     *
+     * Search results are metadata plus a short snippet and NEVER a body. That is
+     * stated outright in the response — `bodies_included: false` for a client to
+     * branch on, and a note naming read_memory for a model that reads the text —
+     * so a snippet can never be mistaken for the whole entry.
+     *
+     * @param list<array<string, mixed>> $results
+     *
+     * @return array<string, mixed>
+     */
+    private static function searchPayload(array $results, int $returned, bool $hasMore): array
+    {
+        $payload = [
+            'results' => $results,
+            'returned' => $returned,
+            'has_more' => $hasMore,
+            'bodies_included' => false,
+        ];
+        if ([] === $results) {
+            $payload['message'] = 'No matches.';
+
+            return $payload;
+        }
+
+        $payload['note'] = 'These results carry metadata and a short "snippet" only, never the body. '
+            . 'Call read_memory with an id (or its path) to read an entry in full.';
+
+        return $payload;
+    }
+
+    /**
      * Split a data set into a single page plus a "more available" flag. The
      * caller is expected to have fetched one extra item (limit + 1) so that
      * has_more is exact rather than a guess.
@@ -436,9 +569,10 @@ final class MemoryTools
      * read-only ones, so an entry in a write-protected category is found (and
      * then refused) rather than being silently defaulted elsewhere. Memory ids
      * carry a random suffix and are globally unique across the whole corpus, so
-     * at most one category can contain a given id.
+     * at most one category can contain a given id. Returns null when no
+     * category contains the id.
      */
-    private function categoryFor(string $id): string
+    private function categoryFor(string $id): ?string
     {
         foreach ($this->store->categories() as $category) {
             if (null !== $this->store->read($category, $id)) {
@@ -446,7 +580,7 @@ final class MemoryTools
             }
         }
 
-        return 'facts';
+        return null;
     }
 
     /**
@@ -488,6 +622,23 @@ final class MemoryTools
     private static function fail(string $message): CallToolResult
     {
         return new CallToolResult([new TextContent($message)], true, ['error' => $message]);
+    }
+
+    /**
+     * Extract the leading `---` fenced frontmatter block from a raw file,
+     * fences included, or null when the file has none. Mirrors the parsing in
+     * {@see \MemoryDown\Memory\Frontmatter::split()} (LF and CRLF alike).
+     */
+    private static function frontmatterBlock(?string $raw): ?string
+    {
+        if (null === $raw) {
+            return null;
+        }
+        if (1 !== preg_match('/^---\r?\n.*?\r?\n---[ \t]*(?:\r?\n|$)/s', $raw, $m)) {
+            return null;
+        }
+
+        return rtrim($m[0]);
     }
 
     /**

@@ -273,7 +273,7 @@ check('GET /health -> memory path writable', true === (jsonBody($r['body'])['che
 $r = request('GET', '/health/mcp');
 $mcp = jsonBody($r['body']);
 check('GET /health/mcp -> 200', 200 === $r['status']);
-check('GET /health/mcp -> 6 tools', 6 === count($mcp['tools'] ?? []));
+check('GET /health/mcp -> 7 tools', 7 === count($mcp['tools'] ?? []));
 check('GET /health/mcp -> both protocol eras', isset($mcp['protocol_eras']['handshake'], $mcp['protocol_eras']['modern']));
 
 $r = request('GET', '/health/oauth');
@@ -522,10 +522,27 @@ check('notifications/initialized -> 202', 202 === $r['status']);
 $r = request('POST', '/mcp', $session, '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
 $tools = jsonBody($r['body']);
 $toolNames = array_map(static fn (array $t): string => $t['name'], $tools['result']['tools'] ?? []);
-check('tools/list -> 6 tools', 6 === count($toolNames ?? []), json_encode($toolNames));
-foreach (['remember', 'recall', 'search_memory', 'update_memory', 'forget_memory', 'list_memory'] as $expected) {
+check('tools/list -> 7 tools', 7 === count($toolNames ?? []), json_encode($toolNames));
+foreach (['remember', 'recall', 'search_memory', 'read_memory', 'update_memory', 'forget_memory', 'list_memory'] as $expected) {
     check("tools/list includes {$expected}", in_array($expected, $toolNames, true));
 }
+
+// search_memory exposes no way to return bodies: results are snippets and
+// read_memory covers the single-entry case. This also pins the advertised
+// schema, which must stay in lockstep with the handler parameter names (the
+// SDK does no snake_case conversion and silently falls back to the default).
+$searchSchema = null;
+foreach ($tools['result']['tools'] ?? [] as $toolDef) {
+    if ('search_memory' === ($toolDef['name'] ?? '')) {
+        $searchSchema = $toolDef['inputSchema']['properties'] ?? [];
+    }
+}
+check('search_memory schema has no include_body', is_array($searchSchema) && !array_key_exists('include_body', $searchSchema), json_encode($searchSchema));
+check(
+    'search_memory schema keeps query/category/limit/tag/archived',
+    is_array($searchSchema) && ['query', 'category', 'limit', 'tag', 'archived'] === array_keys($searchSchema),
+    json_encode(is_array($searchSchema) ? array_keys($searchSchema) : $searchSchema)
+);
 
 $r = request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call',
@@ -628,7 +645,7 @@ $r = request('POST', '/mcp', array_replace($modernHeaders, ['Mcp-Method' => 'too
     'params' => ['_meta' => $modernMeta],
 ]));
 $modernTools = jsonBody($r['body']);
-check('modern tools/list -> 6 tools', 6 === count($modernTools['result']['tools'] ?? []), $r['body']);
+check('modern tools/list -> 7 tools', 7 === count($modernTools['result']['tools'] ?? []), $r['body']);
 
 $r = request('POST', '/mcp', array_replace($modernHeaders, ['Mcp-Method' => 'tools/call', 'Mcp-Name' => 'remember']), json_encode([
     'jsonrpc' => '2.0', 'id' => 12, 'method' => 'tools/call',
@@ -680,6 +697,33 @@ $r = request('POST', '/mcp', $session, json_encode([
     'params' => ['name' => 'forget_memory', 'arguments' => ['id' => 'nonexistent-000000']],
 ]));
 check('forget_memory: unknown id -> tool error', true === ((jsonBody($r['body']))['result']['isError'] ?? false));
+
+// read_memory takes an id or a path, so it is the most exposed tool to a
+// crafted reference. Every form must be refused before any filesystem access.
+foreach ([
+    '../secret' => 'parent traversal',
+    '../../.env' => 'deep traversal',
+    'facts/../context/x' => 'traversal inside a category',
+    '/etc/passwd' => 'absolute path',
+    'C:/windows/win.ini' => 'drive letter',
+    '.env' => 'dotfile',
+    'facts/nested/x' => 'extra path segment',
+    'facts/' => 'empty id',
+] as $evilRef => $label) {
+    $r = request('POST', '/mcp', $session, json_encode([
+        'jsonrpc' => '2.0', 'id' => 18, 'method' => 'tools/call',
+        'params' => ['name' => 'read_memory', 'arguments' => ['id' => $evilRef]],
+    ]));
+    $evilRead = jsonBody($r['body']);
+    check("read_memory: {$label} rejected", true === ($evilRead['result']['isError'] ?? false), $r['body']);
+    check("read_memory: {$label} leaks no content", !str_contains($r['body'], 'root:') && !str_contains($r['body'], '[extensions]'), '(no file content)');
+}
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 19, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => 'nonexistent-000000']],
+]));
+check('read_memory: unknown id -> tool error', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
 
 /* ------------------------------------------------------------------ *
  *  9. Admin UI: password, session, CRUD, preview, search index
@@ -1289,6 +1333,325 @@ $r = request('POST', '/mcp', $session, json_encode([
     'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $ctlId, 'category' => 'facts']],
 ]));
 check('mcp forget_memory -> other categories still deletable', false === ((jsonBody($r['body']))['result']['isError'] ?? true), $r['body']);
+
+section('MCP: read_memory');
+
+// A body far longer than the ~240-character snippet the search tools return,
+// with a distinctive first and last paragraph so truncation is provable.
+$longBody = 'Prvi odstavek: ' . str_repeat('alfa beta gama. ', 30)
+    . "\n\nZadnji odstavek: konec-" . bin2hex(random_bytes(4));
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 40, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => [
+        'content' => $longBody, 'title' => 'Dolg zapis', 'category' => 'notes', 'tags' => ['dolg'],
+    ]],
+]));
+$longId = (string) (toolResult(jsonBody($r['body']))['memory']['id'] ?? '');
+check('read_memory: long entry created', '' !== $longId, $r['body']);
+
+// The premise of the tool: search hands out a snippet, never the body.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 41, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'Dolg zapis']],
+]));
+$snippetRow = null;
+foreach (toolResult(jsonBody($r['body']))['results'] ?? [] as $row) {
+    if (($row['id'] ?? '') === $longId) {
+        $snippetRow = $row;
+    }
+}
+check(
+    'read_memory: search returns a short snippet and no body',
+    null !== $snippetRow
+    && !isset($snippetRow['body'])
+    && '' !== ($snippetRow['snippet'] ?? '')
+    && mb_strlen((string) $snippetRow['snippet']) < mb_strlen($longBody),
+    $r['body']
+);
+
+// ... whereas read_memory returns all of it.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 42, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId]],
+]));
+$read = toolResult(jsonBody($r['body']));
+$storedBody = (string) ($read['memory']['body'] ?? '');
+check('read_memory -> ok', false === ((jsonBody($r['body']))['result']['isError'] ?? true), $r['body']);
+check(
+    'read_memory -> complete body, untruncated',
+    $longBody === rtrim($storedBody) && str_contains($storedBody, 'Zadnji odstavek:'),
+    mb_strlen($storedBody) . ' of ' . mb_strlen($longBody) . ' chars, ends ' . var_export(substr($storedBody, -20), true)
+);
+check(
+    'read_memory -> metadata alongside the body',
+    $longId === ($read['memory']['id'] ?? '')
+    && 'notes' === ($read['memory']['category'] ?? '')
+    && 'Dolg zapis' === ($read['memory']['title'] ?? '')
+    && ['dolg'] === ($read['memory']['tags'] ?? null)
+    && 'notes/' . $longId . '.md' === ($read['memory']['path'] ?? ''),
+    $r['body']
+);
+check(
+    'read_memory -> reports its size and that nothing is missing',
+    mb_strlen($storedBody) === ($read['body_chars'] ?? -1)
+    && mb_strlen($storedBody) === ($read['returned_chars'] ?? -1)
+    && false === ($read['has_more'] ?? true)
+    && array_key_exists('next_offset', $read) && null === $read['next_offset']
+    && false === ($read['partial'] ?? true)
+    && !array_key_exists('warning', $read),
+    'len=' . mb_strlen($storedBody) . ' chars=' . var_export($read['body_chars'] ?? null, true)
+    . ' returned=' . var_export($read['returned_chars'] ?? null, true)
+    . ' has_more=' . var_export($read['has_more'] ?? null, true)
+    . ' next_offset=' . var_export($read['next_offset'] ?? 'missing', true)
+    . ' partial=' . var_export($read['partial'] ?? null, true)
+    . ' keys=' . json_encode(array_keys($read))
+);
+check('read_memory -> frontmatter omitted unless requested', !array_key_exists('frontmatter', $read), json_encode(array_keys($read)));
+
+// A removed/unknown argument is ignored rather than fatal: the call still
+// succeeds, and the response still carries no body (see the schema assertions
+// next to tools/list).
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 52, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'Dolg zapis', 'include_body' => true]],
+]));
+$ignoredRow = null;
+foreach (toolResult(jsonBody($r['body']))['results'] ?? [] as $row) {
+    if (($row['id'] ?? '') === $longId) {
+        $ignoredRow = $row;
+    }
+}
+check(
+    'search_memory -> a removed include_body is ignored, never fatal',
+    null !== $ignoredRow && !isset($ignoredRow['body']) && '' !== ($ignoredRow['snippet'] ?? ''),
+    $r['body']
+);
+
+// Every reference shape the other tools hand out must resolve.
+foreach ([
+    'bare id' => $longId,
+    'id with extension' => $longId . '.md',
+    'path' => 'notes/' . $longId . '.md',
+    'path without extension' => 'notes/' . $longId,
+] as $refLabel => $reference) {
+    $r = request('POST', '/mcp', $session, json_encode([
+        'jsonrpc' => '2.0', 'id' => 43, 'method' => 'tools/call',
+        'params' => ['name' => 'read_memory', 'arguments' => ['id' => $reference]],
+    ]));
+    check(
+        "read_memory -> resolves {$refLabel}",
+        $storedBody === (toolResult(jsonBody($r['body']))['memory']['body'] ?? ''),
+        $r['body']
+    );
+}
+
+// An explicit category is honoured, and a wrong one is a clean miss.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 44, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId, 'category' => 'notes']],
+]));
+check('read_memory -> explicit category honoured', $storedBody === (toolResult(jsonBody($r['body']))['memory']['body'] ?? ''), $r['body']);
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 45, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId, 'category' => 'facts']],
+]));
+check('read_memory -> wrong category is a clean miss', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
+
+// The raw frontmatter block is available on request.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 46, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId, 'include_frontmatter' => true]],
+]));
+$fmBlock = (string) (toolResult(jsonBody($r['body']))['frontmatter'] ?? '');
+check(
+    'read_memory -> frontmatter block returned on request',
+    str_starts_with($fmBlock, "---\n") && str_ends_with($fmBlock, '---')
+    && str_contains($fmBlock, 'type: notes') && str_contains($fmBlock, 'id: ' . $longId),
+    $fmBlock
+);
+
+// Paging: the windows reassemble into exactly the stored body.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 47, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId, 'max_chars' => 100]],
+]));
+$page1 = toolResult(jsonBody($r['body']));
+check('read_memory -> paging returns exactly max_chars', 100 === mb_strlen((string) ($page1['memory']['body'] ?? '')), $r['body']);
+check(
+    'read_memory -> paging flags the partial body and warns',
+    true === ($page1['partial'] ?? false)
+    && true === ($page1['has_more'] ?? false)
+    && 100 === ($page1['next_offset'] ?? null)
+    && str_contains((string) ($page1['warning'] ?? ''), 'PARTIAL'),
+    json_encode($page1)
+);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 48, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId, 'offset' => 100]],
+]));
+$page2 = toolResult(jsonBody($r['body']));
+check(
+    'read_memory -> paging resumes where it left off',
+    $storedBody === ($page1['memory']['body'] ?? '') . ($page2['memory']['body'] ?? ''),
+    mb_strlen((string) ($page2['memory']['body'] ?? '')) . ' chars in the second window'
+);
+check(
+    'read_memory -> last window reaches the end of the entry',
+    false === ($page2['has_more'] ?? true)
+    && array_key_exists('next_offset', $page2) && null === $page2['next_offset']
+    // Still partial: the window is the tail, so the head is missing.
+    && true === ($page2['partial'] ?? false),
+    json_encode($page2)
+);
+
+// The scenario this tool exists for: edit one paragraph without losing the rest.
+$editedContent = str_replace('Prvi odstavek:', 'Prvi odstavek (urejen):', $storedBody);
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 49, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => ['id' => $longId, 'content' => $editedContent]],
+]));
+check('read_memory -> body round-trips through update_memory', false === ((jsonBody($r['body']))['result']['isError'] ?? true), $r['body']);
+
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 50, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $longId]],
+]));
+$afterEdit = toolResult(jsonBody($r['body']));
+$editedBody = (string) ($afterEdit['memory']['body'] ?? '');
+check(
+    'read_memory -> the edit changed one paragraph and kept every other byte',
+    $editedBody === $editedContent
+    && str_contains($editedBody, 'Prvi odstavek (urejen):')
+    && str_contains($editedBody, 'Zadnji odstavek:')
+    && substr_count($editedBody, 'alfa beta gama.') === substr_count($storedBody, 'alfa beta gama.'),
+    $editedBody
+);
+check('read_memory -> title survived the round trip', 'Dolg zapis' === ($afterEdit['memory']['title'] ?? ''), $r['body']);
+
+// Reading the read-only writings category is allowed; only writing is not.
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 51, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => 'writings/' . $pubId . '.md', 'include_frontmatter' => true]],
+]));
+$writingRead = toolResult(jsonBody($r['body']));
+check(
+    'read_memory -> writings readable in full',
+    false === ((jsonBody($r['body']))['result']['isError'] ?? true)
+    && str_contains((string) ($writingRead['memory']['body'] ?? ''), 'Hello **world**.')
+    && str_contains((string) ($writingRead['frontmatter'] ?? ''), 'type: writings'),
+    $r['body']
+);
+
+section('MCP: reading a real entry in full (reported case)');
+
+// Reproduces the reported case end to end: a `facts` entry whose body is many
+// times longer than a search snippet, with the exact title and id shape from the
+// report (an en dash in the title), written by hand like an entry imported from
+// another editor — frontmatter present, but no generated `id` key and the title
+// living in the H1 only.
+$caseId = 'glavni-ra-unalnik-za-ai-i5-12400f-rtx-4060-e363a2';
+$caseTail = 'zadnji-odstavek-' . bin2hex(random_bytes(4));
+$caseBody = implode("\n\n", [
+    'Uporabljam namizni racunalnik, ki je namenjen predvsem lokalnemu izvajanju AI modelov.',
+    "## Komponente\n\n- CPU: Intel i5-12400F\n- GPU: NVIDIA RTX 4060 8 GB\n- RAM: 32 GB DDR4\n- Disk: 1 TB NVMe SSD",
+    "## Zakaj ta konfiguracija\n\n" . str_repeat('Razlog za izbiro komponente in izkusnja pri lokalnem izvajanju modelov. ', 8),
+    "## Opombe\n\n- Kupljeno postopoma.\n- Nadgradnja na 16 GB graficne kartice je bila predraga.\n\nKonec zapisa: " . $caseTail,
+]);
+$caseDir = $tmp . '/memory/facts';
+@mkdir($caseDir, 0775, true);
+$caseFile = $caseDir . '/' . $caseId . '.md';
+@file_put_contents(
+    $caseFile,
+    "---\ntype: facts\ntags:\n  - hardware\n  - ai\ncreated: 2026-02-01\nupdated: 2026-02-02\n---\n\n"
+    . "# Glavni racunalnik za AI – i5-12400F + RTX 4060\n\n" . $caseBody . "\n"
+);
+check('reported case: .md seeded by hand', is_file($caseFile), $caseFile);
+
+// Step 1-2 of the report: search finds the entry, but only as a snippet...
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 60, 'method' => 'tools/call',
+    'params' => ['name' => 'search_memory', 'arguments' => ['query' => 'RTX 4060']],
+]));
+$caseSearch = toolResult(jsonBody($r['body']));
+$caseRow = null;
+foreach ($caseSearch['results'] ?? [] as $row) {
+    if (($row['id'] ?? '') === $caseId) {
+        $caseRow = $row;
+    }
+}
+check('reported case: search finds the entry by content', null !== $caseRow, $r['body']);
+check(
+    'reported case: search result is a snippet, never the body',
+    null !== $caseRow
+    && !isset($caseRow['body'])
+    && '' !== ($caseRow['snippet'] ?? '')
+    && mb_strlen((string) $caseRow['snippet']) < mb_strlen($caseBody),
+    (string) mb_strlen((string) ($caseRow['snippet'] ?? '')) . ' vs ' . mb_strlen($caseBody) . ' body chars'
+);
+check(
+    'reported case: search response says outright that bodies are excluded',
+    false === ($caseSearch['bodies_included'] ?? true)
+    && str_contains((string) ($caseSearch['note'] ?? ''), 'read_memory'),
+    json_encode(['bodies_included' => $caseSearch['bodies_included'] ?? null, 'note' => $caseSearch['note'] ?? null])
+);
+
+// Step 2 of the report: fetch the whole entry, by id and by the reported path.
+foreach (['bare id' => $caseId, 'reported path' => 'facts/' . $caseId . '.md'] as $form => $reference) {
+    $r = request('POST', '/mcp', $session, json_encode([
+        'jsonrpc' => '2.0', 'id' => 61, 'method' => 'tools/call',
+        'params' => ['name' => 'read_memory', 'arguments' => ['id' => $reference]],
+    ]));
+    $caseRead = jsonBody($r['body']);
+    $caseMemory = toolResult($caseRead);
+    // The file's body is the content minus frontmatter and minus the H1 (the
+    // title is returned as its own field), keeping the file's trailing newline.
+    $expected = $caseBody . "\n";
+    check(
+        "reported case: read_memory by {$form} returns the body whole",
+        false === ($caseRead['result']['isError'] ?? true)
+        && $expected === ($caseMemory['memory']['body'] ?? '')
+        && false === ($caseMemory['partial'] ?? true)
+        && false === ($caseMemory['has_more'] ?? true)
+        && mb_strlen($expected) === ($caseMemory['body_chars'] ?? -1)
+        && mb_strlen($expected) === ($caseMemory['returned_chars'] ?? -1),
+        mb_strlen((string) ($caseMemory['memory']['body'] ?? '')) . ' of ' . mb_strlen($expected) . ' chars'
+    );
+    check(
+        "reported case: read_memory by {$form} keeps every block",
+        // Title, both subheadings, every bullet, the long repeated paragraph and
+        // the final line — nothing dropped from the middle or the end.
+        'Glavni racunalnik za AI – i5-12400F + RTX 4060' === ($caseMemory['memory']['title'] ?? '')
+        && 'facts' === ($caseMemory['memory']['category'] ?? '')
+        && ['hardware', 'ai'] === ($caseMemory['memory']['tags'] ?? null)
+        && str_contains((string) ($caseMemory['memory']['body'] ?? ''), '## Komponente')
+        && str_contains((string) ($caseMemory['memory']['body'] ?? ''), '## Zakaj ta konfiguracija')
+        && str_contains((string) ($caseMemory['memory']['body'] ?? ''), '- GPU: NVIDIA RTX 4060 8 GB')
+        && str_contains((string) ($caseMemory['memory']['body'] ?? ''), substr($caseBody, 0, 60))
+        && str_contains((string) ($caseMemory['memory']['body'] ?? ''), $caseTail),
+        $r['body']
+    );
+}
+
+// A hand-written file with no frontmatter at all must read just as well. Note
+// the trailing newline: Frontmatter::split() trims the file's trailing newline
+// when there is no frontmatter block, whereas a file with frontmatter keeps it
+// (the body comes back as content + "\n"). Both are stable round-trip forms.
+$bareId = 'brez-frontmatter-' . bin2hex(random_bytes(3));
+@file_put_contents($caseDir . '/' . $bareId . '.md', "# Brez frontmatter\n\nPrvi odstavek.\n\n- ena\n- dve\n\nZadnji odstavek.\n");
+$r = request('POST', '/mcp', $session, json_encode([
+    'jsonrpc' => '2.0', 'id' => 62, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => 'facts/' . $bareId . '.md']],
+]));
+$bareRead = toolResult(jsonBody($r['body']));
+check(
+    'reported case: frontmatter-less file reads in full',
+    'Brez frontmatter' === ($bareRead['memory']['title'] ?? '')
+    && "Prvi odstavek.\n\n- ena\n- dve\n\nZadnji odstavek." === ($bareRead['memory']['body'] ?? '')
+    && false === ($bareRead['partial'] ?? true)
+    && 45 === ($bareRead['body_chars'] ?? -1),
+    $r['body']
+);
 
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
