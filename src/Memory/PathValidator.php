@@ -48,6 +48,23 @@ final class PathValidator
     public const WRITE_PROTECTED_CATEGORIES = ['writings'];
 
     /**
+     * Tags only a human may set, in the admin UI.
+     *
+     * `executable` marks a memory as a workflow definition that a runner is
+     * allowed to execute (see docs/WORKFLOWS.md). It is deliberately NOT
+     * settable through MCP: if an agent could add the tag, an agent could
+     * authorise its own automation. For the same reason an entry that carries
+     * it is read-only through MCP — otherwise the tag the user added could be
+     * left in place while the instructions underneath it were rewritten.
+     *
+     * This is the one deliberate exception to "tags are freeform and never a
+     * status"; nothing else is reserved.
+     *
+     * @var list<string>
+     */
+    public const HUMAN_ONLY_TAGS = ['executable'];
+
+    /**
      * Where deletions go instead of being unlinked, relative to the memory root.
      *
      * The leading dot is load-bearing: {@see isCategory()} rejects it, so the
@@ -95,6 +112,42 @@ final class PathValidator
     public static function isWriteProtectedCategory(string $category): bool
     {
         return in_array(strtolower(trim($category)), self::WRITE_PROTECTED_CATEGORIES, true);
+    }
+
+    /**
+     * True when the tag may only be added in the admin UI.
+     */
+    public static function isHumanOnlyTag(string $tag): bool
+    {
+        return in_array(strtolower(trim($tag)), self::HUMAN_ONLY_TAGS, true);
+    }
+
+    /**
+     * The first human-only tag in a list of tags ('' when there is none).
+     *
+     * Accepts whatever a caller has: the parsed document's "tags" array, a raw
+     * value from a tool argument, or anything else. Non-arrays and non-strings
+     * simply cannot carry a reserved tag, so they answer ''.
+     *
+     * @param mixed $tags
+     */
+    public static function humanOnlyTag(mixed $tags): string
+    {
+        if (!is_array($tags)) {
+            return '';
+        }
+        foreach ($tags as $tag) {
+            // JSON arguments can hold anything; only scalars can spell a tag.
+            if (!is_scalar($tag)) {
+                continue;
+            }
+            $tag = strtolower(trim((string) $tag));
+            if (self::isHumanOnlyTag($tag)) {
+                return $tag;
+            }
+        }
+
+        return '';
     }
 
     /**

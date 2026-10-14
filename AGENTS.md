@@ -428,6 +428,11 @@ recommended to users (admin UI chips) and to AI agents (MCP instructions and the
 They are a convention, not a schema: nothing enforces them, they are never a
 status, and custom tags are always allowed.
 
+One exception, added deliberately later: the tag `executable` is **reserved**.
+It marks a workflow definition (see `docs/WORKFLOWS.md`), can only be set in the
+admin UI, and makes the entry read-only through MCP. It is the only tag with
+enforced meaning; everything above still holds for every other tag.
+
 ---
 
 ## Search architecture
@@ -683,6 +688,30 @@ the constraints that follow. The rest of the list still stands.
   memory directory only — never `data/auth/` or `.env`, so a download can never
   leak a credential. Both are admin-session-only, and neither introduces a
   scheduler: taking backups is the user's call, on their own schedule.
+
+### Amendment: workflow definitions (standard v1, in scope)
+
+Automation definitions are in scope as **data in the memory store**, and nothing
+more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
+
+- A definition lives in the `workflows` category as a normal Markdown entry. Its
+  operational configuration (`mode`, `schedule`, `timezone`, `allowed_tools`)
+  lives in a fenced `yaml` block **in the body**, because the frontmatter is
+  rebuilt from a fixed key list on every save and would silently drop it.
+- The tag `executable` is reserved and human-only, and any entry carrying it is
+  read-only through MCP (`remember`/`update_memory`/`forget_memory` refuse it).
+  This is the trust boundary: an agent may *propose* a workflow, but only the
+  user, in the admin UI, can authorise one — and because the definition is then
+  unreachable through MCP, an authorised workflow cannot be rewritten underneath
+  its own permission. Activation is therefore a human act in the UI; there is no
+  separate approval store.
+- Nothing executes yet. The scheduler, the LLM runner, the Tool Registry, the
+  Telegram integration and the operational SQLite state all belong to the
+  future C#/.NET Worker Service, not to MemoryDown; MemoryDown keeps serving
+  definitions and memory as Markdown only. No new tables, no queue, no worker
+  here.
+- Still out of scope in this area: unattended mutating runs without per-action
+  confirmation, embeddings, and any second source of workflow definitions.
 
 Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
 (one instance per person instead), teams, billing, background jobs/queues.

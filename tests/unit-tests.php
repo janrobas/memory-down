@@ -121,6 +121,25 @@ check(
     Publications::CATEGORY
 );
 
+// Reserved, human-only tags: only the admin UI may add them, and an entry that
+// carries one is read-only through MCP (docs/WORKFLOWS.md).
+check('human-only: executable is reserved', PathValidator::isHumanOnlyTag('executable'));
+check('human-only: case/space tolerant', PathValidator::isHumanOnlyTag(' Executable '));
+check('human-only: ordinary tags are not reserved', !PathValidator::isHumanOnlyTag('workflow'));
+check('human-only: an empty tag is not reserved', !PathValidator::isHumanOnlyTag(''));
+check('human-only: detected in a tag list', 'executable' === PathValidator::humanOnlyTag(['workflow', 'executable']));
+check('human-only: detected case-insensitively', 'executable' === PathValidator::humanOnlyTag(['EXECUTABLE']));
+check('human-only: exact match only', '' === PathValidator::humanOnlyTag(['executables', 'my-executable']));
+check('human-only: ordinary tag list yields nothing', '' === PathValidator::humanOnlyTag(['workflow', 'software']));
+check('human-only: empty list yields nothing', '' === PathValidator::humanOnlyTag([]));
+// Whatever a caller hands over must never be mistaken for a reservation.
+check('human-only: a missing tags value yields nothing', '' === PathValidator::humanOnlyTag(null));
+check('human-only: a non-array tags value yields nothing', '' === PathValidator::humanOnlyTag('executable'));
+check('human-only: a nested value yields nothing', '' === PathValidator::humanOnlyTag([['executable']]));
+// The guard must not accidentally reserve a category, nor the other way round.
+check('human-only: no category is a reserved tag', !PathValidator::isHumanOnlyTag('writings'));
+check('human-only: the reserved tag is not a category', !PathValidator::isCategory('executable'));
+
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
 check('recommended tags drop idea', !in_array('idea', RecommendedTags::LIST, true));

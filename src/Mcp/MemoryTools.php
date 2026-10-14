@@ -57,7 +57,10 @@ final class MemoryTools
                 . 'project context, decisions, useful facts about people or systems, recurring workflows. '
                 . 'Do NOT store trivial conversational details. If an existing memory clearly represents the '
                 . 'same information (same title or same content in the same category), it is updated instead '
-                . 'of creating a duplicate. Unrelated information is never overwritten.',
+                . 'of creating a duplicate. Unrelated information is never overwritten. '
+                . 'Tags are freeform EXCEPT the reserved tag "executable", which is rejected here: it marks a '
+                . 'workflow definition and can only be added by the user in the admin UI, because a workflow '
+                . 'that a runner executes must be authorised by a human, not by an agent.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: false,
@@ -70,7 +73,7 @@ final class MemoryTools
                     'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
                     'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected. To draft a post, store it in "ideas" or "notes" instead — the user moves it into writings in the admin UI.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary()],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only, see docs/WORKFLOWS.md).'],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
                 ],
                 'required' => ['content'],
@@ -95,10 +98,22 @@ final class MemoryTools
                         . 'the user can move it into writings, and publish it, in the admin UI.',
                     );
                 }
+                $reserved = PathValidator::humanOnlyTag($tags);
+                if ('' !== $reserved) {
+                    return self::failHumanOnlyTag($reserved, 'memories cannot be created with it.');
+                }
                 $tags = array_values(array_filter(array_map('strval', $tags)));
 
                 $duplicate = $this->store->findDuplicate($content, $title, $category);
                 if (null !== $duplicate) {
+                    // An existing entry carrying the reserved tag is never
+                    // rewritten here: what a runner executes is the definition
+                    // the user authorised, not a version an agent replaced
+                    // underneath the tag.
+                    $reserved = PathValidator::humanOnlyTag($duplicate['tags'] ?? []);
+                    if ('' !== $reserved) {
+                        return self::failHumanOnlyTag($reserved, 'this memory cannot be updated here.');
+                    }
                     $changes = [
                         'content' => $content,
                         'title' => $title !== '' ? $title : $duplicate['title'],
@@ -346,7 +361,10 @@ final class MemoryTools
                 . 'Call read_memory first to obtain the current body before rewriting it: content replaces the '
                 . 'whole body, so anything you do not send back is lost. Entries in the '
                 . '"writings" category are read-only through MCP and cannot be updated or moved, and no entry '
-                . 'can be moved into that category.',
+                . 'can be moved into that category. The reserved tag "executable" cannot be added here, and an '
+                . 'entry that already carries it (a workflow definition the user authorised) is read-only '
+                . 'through MCP: it cannot be edited, archived or moved, only read — ask the user to change it '
+                . 'in the admin UI.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: false,
@@ -359,7 +377,7 @@ final class MemoryTools
                     'id' => ['type' => 'string', 'description' => 'The id of the memory entry to update.'],
                     'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
                     'title' => ['type' => 'string', 'description' => 'New title.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary()],
+                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only).'],
                     'category' => ['type' => 'string', 'description' => 'New category; the file is moved there. The "writings" category is read-only through MCP: entries cannot be moved into it.'],
                     'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
                 ],
@@ -368,6 +386,10 @@ final class MemoryTools
             'handler' => function (string $id, string $content = '', string $title = '', array $tags = [], string $category = '', ?bool $archived = null): CallToolResult {
                 if (!PathValidator::isId($id)) {
                     return self::fail('Invalid memory id.');
+                }
+                $reserved = PathValidator::humanOnlyTag($tags);
+                if ('' !== $reserved) {
+                    return self::failHumanOnlyTag($reserved, 'the tag cannot be added through MCP.');
                 }
                 $changes = [];
                 if ('' !== $content) {
@@ -407,6 +429,11 @@ final class MemoryTools
                 if (PathValidator::isWriteProtectedCategory($currentCategory)) {
                     return self::failWriteProtected($currentCategory, 'this memory cannot be updated here.');
                 }
+                $current = $this->store->read($currentCategory, $id);
+                $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
+                if ('' !== $reserved) {
+                    return self::failHumanOnlyTag($reserved, 'this memory cannot be changed here.');
+                }
 
                 try {
                     $doc = $this->store->update($currentCategory, $id, $changes);
@@ -431,7 +458,9 @@ final class MemoryTools
                 . 'It is moved to the trash, where the user can still restore it in the admin UI — but treat it as '
                 . 'gone: only call this when the user explicitly asks to remove or forget a memory, and read_memory '
                 . 'it first if the target is ambiguous. The entry disappears from memory, search and recall. '
-                . 'Entries in the "writings" category are read-only through MCP and cannot be deleted here.',
+                . 'Entries in the "writings" category are read-only through MCP and cannot be deleted here. '
+                . 'An entry carrying the reserved tag "executable" (a workflow definition) cannot be deleted '
+                . 'here either — deleting an authorised workflow is the user\'s call in the admin UI.',
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: true,
@@ -460,6 +489,11 @@ final class MemoryTools
                 }
                 if (PathValidator::isWriteProtectedCategory($currentCategory)) {
                     return self::failWriteProtected($currentCategory, 'this memory cannot be deleted here.');
+                }
+                $current = $this->store->read($currentCategory, $id);
+                $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
+                if ('' !== $reserved) {
+                    return self::failHumanOnlyTag($reserved, 'this memory cannot be deleted here.');
                 }
 
                 try {
@@ -671,6 +705,24 @@ final class MemoryTools
     ): CallToolResult {
         return self::fail(
             'The "' . strtolower(trim($category)) . '" category is read-only through MCP: ' . $detail . ' ' . $outro
+        );
+    }
+
+    /**
+     * Refuse an operation involving a reserved, human-only tag.
+     *
+     * Two different refusals share this message, because both mean the same
+     * thing to the calling agent: an agent may not create, edit, move, archive
+     * or delete a workflow definition. Granting execution is the user's act,
+     * and it is taken in the admin UI — see docs/WORKFLOWS.md.
+     */
+    private static function failHumanOnlyTag(string $tag, string $detail): CallToolResult
+    {
+        return self::fail(
+            'The "' . $tag . '" tag is reserved: ' . $detail
+            . ' It can only be added in the admin UI, and any memory carrying it is read-only through MCP, '
+            . 'so a workflow definition cannot be created, rewritten, moved, archived or deleted by an agent. '
+            . 'Propose the change to the user and let them make it in the admin UI.'
         );
     }
 }

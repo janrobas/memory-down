@@ -36,6 +36,13 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Read-only public writings API** at `/public/writings`: publish entries in the
   `writings` category (`public: true`) as Markdown over a token-gated GET API, for
   a personal website to consume. Disabled by default.
+- **Workflow definitions** in `workflows`: a Markdown entry tagged `executable`
+  is a definition a runner may execute, with its instructions in natural
+  language and its configuration (`mode`, `schedule`, `timezone`,
+  `allowed_tools`) in a small YAML block in the body. The tag can only be added
+  in the admin UI, and any entry carrying it is read-only through MCP — an agent
+  can propose a workflow, never authorise or rewrite one. See
+  [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 - **Deletes are recoverable:** anything deleted — in the UI or by an agent — goes
   to a `.trash/` folder instead of vanishing, and can be restored until you empty
   it.
@@ -231,6 +238,55 @@ foreach ($list['writings'] ?? [] as $w) {
 }
 ```
 
+## Workflows (`workflows`)
+
+The `workflows` category holds two different things, told apart by one tag:
+
+| Entry | Meaning |
+| --- | --- |
+| in `workflows`, **no** `executable` tag | a note, draft or description of a process. Never executed. |
+| in `workflows`, **with** `executable` | a workflow definition a runner (see below) may execute |
+
+A definition keeps its instructions in natural language in the body, under a
+small YAML block that carries its operational configuration:
+
+````markdown
+# Preverjanje e-pošte in koledarja
+
+```yaml
+mode: dry-run
+schedule: "0 7,12 * * *"
+timezone: Europe/Ljubljana
+allowed_tools:
+  - calendar.search_emails
+  - calendar.get_events
+```
+
+## Navodila
+
+Preglej nova sporočila, preveri koledar in pripravi predloge …
+````
+
+- **Configuration lives in the body, not in the frontmatter.** MemoryDown
+  rebuilds the frontmatter from a fixed set of keys on every save, so any other
+  key there is dropped by the next autosave; the body survives every write.
+- **`mode`** is `dry-run` (read-only: it reports what it *would* do) or `apply`
+  (may change things, each mutating action confirmed by you). It defaults to
+  `dry-run`, so a newly activated workflow cannot write anything by accident.
+- **`schedule`** is a 5-field cron expression in `timezone` (default
+  `Europe/Ljubljana`); omit it for a manual-only workflow.
+- **`allowed_tools`** is the allowlist of tools the workflow may call. Anything
+  not listed is refused, and every tool that changes state needs your explicit
+  confirmation at the moment it is called.
+- **Pause** a workflow by archiving it (the *Archived* checkbox) or by removing
+  the tag.
+
+Nothing in MemoryDown runs anything yet: this is the definition format and the
+rules a future C#/.NET Worker Service will follow.
+[`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) is the normative document (in
+Slovenian): the full field list, the validation rules a runner must apply before
+executing, and the safety model.
+
 ## Search index
 
 Search uses a **disposable SQLite FTS5 index** (`INDEX_PATH`). Markdown stays the
@@ -327,6 +383,10 @@ php tests/run-tests.php    # chain: health → discovery → 401 → DCR → tok
   containment); traversal and deletion outside the memory root are rejected.
 - `writings` is read-only through MCP: the write tools refuse to create, edit,
   move into or delete entries in that category.
+- The `executable` tag is reserved and human-only: it can only be added in the
+  admin UI, and `remember`, `update_memory` and `forget_memory` refuse to touch
+  any entry that carries it. A workflow definition cannot be created, rewritten,
+  moved, archived or deleted by an agent — only proposed, for you to activate.
 - Deletes are soft: entries move to `memory/.trash/` and are restorable until the
   trash is emptied, and a broken trash directory fails the delete rather than
   silently unlinking the file.
