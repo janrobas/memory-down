@@ -940,12 +940,13 @@ body.dragging .cat.drop-hover .cat-name {
   font-weight: 600;
 }
 
-/* The reserved `executable` tag: a permission rather than a suggestion, so it
-   reads like the switch it is and is only offered in the workflows category
-   (app.js hides it everywhere else; the admin API refuses it there too). */
+/* The reserved `executable` tag is a permission rather than a suggestion, but
+   that is a property of *where it is offered*, not of how it looks: the chip is
+   styled exactly like every other tag chip, so an off chip never reads as an on
+   one. What marks it out is that it only appears in the workflows category
+   (app.js hides it everywhere else; the admin API refuses it there too) and the
+   explanatory title on the button. */
 .tag-suggest .tag-chip[hidden] { display: none; }
-.tag-suggest .tag-chip-reserved { border-color: var(--accent); color: var(--accent); }
-.tag-suggest .tag-chip-reserved.active { background: var(--accent); color: var(--panel); }
 
 /* The verdict of a runner's pre-flight checks, for an entry that carries the
    reserved tag — the only case where the question has an answer. */
