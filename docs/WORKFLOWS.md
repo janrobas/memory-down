@@ -53,59 +53,71 @@ biti ključavnica (glej razdelek 5).
 
 ## 3. Kanonična struktura zapisa
 
+Ko v admin UI ustvariš nov zapis v kategoriji `workflows`, se telo **prednapolni
+s predlogo** (glej razdelek 11). To je torej kanonična oblika enega izvedljivega
+workflowa:
+
 ````markdown
 ---
 type: workflows
 tags:
   - executable
-  - email
-  - calendar
 created: 2026-10-15T09:00:00Z
 updated: 2026-10-15T09:00:00Z
 source: chatgpt
-id: preverjanje-e-poste-in-koledarja-1a2b3c
+id: jutranji-pregled-poste-1a2b3c
 ---
 
-# Preverjanje e-pošte in koledarja
+# Jutranji pregled pošte
 
 ```yaml
-mode: dry-run
-schedule: "0 7,12 * * *"
+# Kdaj naj se zažene: 5-poljski cron (minuta ura dan-v-mesecu dan-v-tednu), v
+# časovnem pasu spodaj. Brez te vrstice se zažene samo ročno.
+# schedule: "0 7 * * *"
 timezone: Europe/Ljubljana
+
+# Kako se obnaša: dry-run samo bere in poroča, kaj bi naredil. apply sme
+# spreminjati, vsako mutirajoče dejanje pa potrdiš ti ob klicu.
+mode: dry-run
+
+# Katera orodja sme klicati. Kar ni na seznamu, izvajalec zavrne. Brez seznama
+# sme le brati.
 allowed_tools:
-  - calendar.search_emails
-  - calendar.get_email
-  - calendar.get_events
   - memory.search_memory
   - memory.read_memory
-  - calendar.create_event
+
+# S katerim modelom naj teče. Vpiši pravi id modela.
+llm_provider: opencode-go
+llm_model: <model-id>
 ```
 
 ## Namen
 
-Preglej nova sporočila od zadnjega uspešnega zagona in poišči dogodke, ki bi
-morali biti v koledarju, pa jih tam ni.
+TODO: kaj naj workflow naredi in zakaj.
 
 ## Navodila
 
-1. Preglej relevantna sporočila v INBOX-u od zadnjega uspešnega zagona.
-2. Za vsak zaznan dogovor preveri, ali dogodek v koledarju že obstaja.
-3. Če dogodek manjka in so datum, ura in vsebina dovolj jasni, ga predlagaj
-   (v načinu `apply` ga dodaj, če to potrdim).
-4. Če je karkoli nejasno ali je možen dvojnik, pripravi predlog namesto
-   ugibanja.
-5. Na koncu poročaj: kaj je pomembno, kaj predlagaš, kaj je bilo izvršeno in
-   katere odločitve potrebujem od tebe.
+1. TODO: koraki, ki naj jih izvajalec izvede.
+2. Če je karkoli nejasno ali manjka podatek, pripravi predlog in vprašanje namesto ugibanja.
+
+## Poročilo
+
+Na koncu vedno pošlji kratek povzetek: kaj je bilo narejeno, kaj je negotovo in kaj potrebuje mojo odločitev.
 ````
 
 Pravila oblike:
 
-- Naslov (H1) je prvi naslov telesa. MemoryDown ga vrne ločeno, telo pa se začne
-  s konfiguracijskim blokom.
-- Konfiguracijski blok je **prvi fenced blok v telesu** z oznako jezika `yaml`.
-  Natanko eden na dokument.
+- **Naslov (H1) ni del telesa.** Vpiše se v polje *Title* v admin UI, store pa ga
+  zapiše kot `# …` med frontmatter in telo; ob branju ga spet odstrani. Zato se
+  telo (in prednastavljena predloga) začne s konfiguracijskim blokom. Če naslova
+  ne vpišeš, zapis nima H1 in je v seznamu prikazan po svojem id-ju.
+- **Konfiguracijski blok je prvi fenced blok v telesu** z oznako jezika `yaml`.
+  Natanko eden na dokument. Vrstice, ki se v bloku začnejo z `#`, so YAML
+  komentarji — niso naslovi in ne štejejo kot vsebina.
 - Za blokom so navodila v naravnem jeziku (slovensko ali angleško), lahko tudi
   z vmesnimi naslovi `##`.
+- Predloga je namerno **osnutek**: vsebuje `TODO` in `<model-id>`, zato je
+  izvajalec ne izvede, dokler je ne izpolniš (razdelek 8, 6. pogoj).
 - Dokument ne vsebuje skrivnosti (gesel, žetonov). Navodila naj jih ne
   zahtevajo: izvajalec jih bere iz svoje konfiguracije.
 
@@ -119,6 +131,8 @@ Pravila oblike:
 | `schedule` | cron (5 polj) | odsotno = samo ročni zagon | Kdaj se izvede, v času `timezone`. |
 | `timezone` | IANA ime | `Europe/Ljubljana` | Časovni pas urnika in poročil. |
 | `allowed_tools` | seznam id-jev | odsotno = samo bralna orodja | Katera orodja workflow sploh sme klicati. Kar ni na seznamu, izvajalec zavrne. |
+| `llm_provider` | ime ponudnika | odsotno = privzeti ponudnik izvajalca | S katerim ponudnikom naj teče. Imena razrešuje izvajalec; neznano ime javi kot napako, ne ugiba. |
+| `llm_model` | id modela | odsotno = privzeti model ponudnika | Kateri model naj teče. |
 
 Dodatna pravila:
 
@@ -128,9 +142,18 @@ Dodatna pravila:
   `enabled` nadomeščata oznaka in arhiviranje; potrditev je lastnost orodja in
   odločitev uporabnika, ne polje v definiciji; samodejno odobritev bo dodana
   (če sploh) kot odločitev izvajalca, vezana na vsebino definicije.
+- **Blok je ploski seznam `ključ: vrednost`**, brez gnezdenih preslikav. Seznam
+  (`allowed_tools`) je ena vrstica `- id` na element; `#` na začetku vrstice je
+  komentar; vrednost v narekovajih obdrži presledke (`schedule: "0 7 * * *"`).
+- **`schedule` sprejme številke** in običajna tričrkovna imena (`*`, `7`,
+  `7,12`, `6-9`, `*/4`, `mon-fri`, `jan`).
 - Izvajalec naj za razvrščanje orodij med bralna in mutirajoča uporabi oznake
   orodij iz Tool Registryja (MCP orodja nosijo `readOnlyHint`), ne lastnega
   seznama imen.
+
+MemoryDown tega ne uveljavlja; v admin UI (glej razdelek 5) preveri le toliko,
+da ti pove, kaj bi izvajalec zavrnil. Polje, ki ga MemoryDown ne pozna, je za
+izvajalca neznano polje — zato se nova polja dodajo tukaj, ne ad hoc.
 
 ---
 
@@ -138,12 +161,23 @@ Dodatna pravila:
 
 - Oznako `executable` **lahko doda samo admin UI**. `remember` in
   `update_memory` prek MCP jo zavrneta.
+- Oznaka je dovoljena **samo v kategoriji `workflows`** — v obe smeri:
+  - zapisa zunaj `workflows` ni mogoče označiti (admin UI oznake tam niti ne
+    ponudi, admin API pa shranjevanje zavrne, namesto da bi oznako tiho odstranil);
+  - aktiviranega workflowa ni mogoče premakniti iz `workflows`, dokler oznake ne
+    odstraniš.
+  Prva omejitev prepreči, da bi oznaka označevala nekaj, kar izvajalec nikoli ne
+  bi gledal; druga, da bi definicija ušla iz edinega seznama, ki ga izvajalec bere.
 - Vsak zapis, ki oznako nosi, je prek MCP **samo za branje**: `update_memory`
   ne more spremeniti telesa, oznak, kategorije (premika) ali arhiviranja,
   `forget_memory` pa ga ne more izbrisati. Branje (`recall`, `search_memory`,
   `read_memory`, `list_memory`) je vedno dovoljeno.
 - Zato lahko agent workflow **predlaga** (zapiše osnutek brez oznake), nikoli pa
   ga ne more **aktivira** ali prepisati.
+
+Admin UI ob zapisu z oznako pokaže **verdikt**: kaj bi izvajalec zavrnil
+(razdelek 8). To ni uveljavljanje — MemoryDown shranjuje tudi nepopolne osnutke —
+ampak opozorilo, preden se zaneseš na definicijo, ki se ne bo izvedla.
 
 Zakaj tako:
 
@@ -216,7 +250,9 @@ odpove, workflowa **ne izvede**, ampak zabeleži in sporoči razlog.
 5. Vrednosti polj so veljavne (`mode` znan, `schedule` veljaven cron,
    `timezone` veljavno IANA ime).
 6. Navodila za blokom so neprazna in ne vsebujejo oznak osnutka (`TODO`,
-   `FIXME`, `…`, `<placeholder>`).
+   `FIXME`, `…`, `<placeholder>`). Oznake osnutka se iščejo v **celem telesu**,
+   tudi v vrednostih konfiguracijskega bloka: `<model-id>`, ki je ostal v bloku,
+   je enako osnutek kot `TODO` v navodilih.
 7. Vsa orodja iz `allowed_tools` se razrešijo v Tool Registryju in so v tem
    okolju dovoljena.
 8. Če je predvideno mutirajoče dejanje: na voljo je potrditev uporabnika (ali je
@@ -266,11 +302,15 @@ zunanjem sistemu.
 
 ## 11. Postopek: od osnutka do upokojitve
 
-1. **Osnutek** — zapišeš ga sam (admin UI) ali ga predlaga agent (`remember` v
-   `workflows`, **brez** oznake `executable`; to je navaden zapisek).
-2. **Aktivacija** — v admin UI dodaš oznako `executable`. Dodaj tudi
-   konfiguracijski blok z `mode: dry-run` (privzeto) in `schedule`. Od tu
-   izvajalec definicijo vidi.
+1. **Osnutek** — v admin UI odpreš *New memory*, izbereš kategorijo `workflows`
+   in telo se prednapolni s predlogo (razdelek 3). Izpolniš `Namen`, `Navodila`
+   in (če je treba) `schedule` ter `llm_*`. Osnutek lahko zapiše tudi agent
+   (`remember` v `workflows`, **brez** oznake `executable`; to je navaden
+   zapisek).
+2. **Aktivacija** — v admin UI dodaš oznako `executable`. Dokler je v telesu še
+   `TODO` ali placeholder, ti verdikt pove, da izvajalec definicijo zavrne.
+   Oznaka je dovoljena samo v `workflows` (razdelek 5). Od tu izvajalec
+   definicijo vidi.
 3. **Preverjanje** — workflow nekaj zagonov teče v `dry-run`: bere in poroča.
    Preveri, da je povzetek uporaben in da predlogi nimajo smisla le navidezno.
 4. **Dovolitev pisanja** — v admin UI dodaš v `allowed_tools` orodja, ki
@@ -310,42 +350,55 @@ Zavestno **ni** v v1 in naj se ne doda brez prave potrebe:
 
 ## 13. Stanje preverjanja
 
-Standard je treba brati s to razliko:
+**Izmerjeno (testi v repozitoriju, CI na PHP 8.2, 8.3 in 8.4):**
 
-**Izmerjeno (izvedeno nad resnično kodo iz `src/`)** — ker je lokalni PHP 8.0 in
-projekt zahteva 8.2, je bil test izveden nad kopijo, v kateri sta bila mehansko
-nevtralizirana le `readonly` in privzeti `new` (nič drugega):
+- `tests/unit-tests.php`: oblika predloge (prvi blok je `yaml`, brez
+  frontmatterja in brez H1, znana polja, `TODO` in placeholder za model),
+  parser konfiguracijskega bloka (neznano polje, neveljaven `mode`, 4-poljski in
+  izven-obsežni cron, neveljaven časovni pas, prazen seznam, manjkajoča navodila,
+  komentarji in narekovaji), oznaka `executable` proti seznamu človeških oznak.
+- `tests/run-tests.php` (cela veriga: health → odkrivanje → OAuth → token →
+  MCP `initialize` → `tools/list` → klici orodij → admin UI): oznaka je zavrnjena
+  povsod, kjer bi jo agent lahko nastavil, zapis z oznako prek MCP ni ne
+  spremenljiv ne brisljiv, branje ostane odprto, zapisek v `workflows` ostane
+  pisljiv, admin UI definicijo še vedno ureja.
+- Fenced `yaml` blok v telesu preživi `create` → `read` → `update` → `read`.
+- Oznaka je dovoljena samo v `workflows`: zavrnjeno je označevanje drugje in
+  premik aktiviranega workflowa drugam.
+- Zapis brez naslova ne dobi več praznega naslova `#`: to je nekoč potisnilo
+  telo navzdol in hkrati naredilo naslednjo vrstico za naslov (pri predlogi:
+  komentar v bloku).
+- Verdikt (kaj bi izvajalec zavrnil) se izračuna ob shranjevanju in ob branju,
+  tako v API-ju kot na strani.
 
-- fenced `yaml` blok v telesu preživi `create` → `read` → `update` (tudi `update`
-  brez telesa) → `read` nespremenjen;
-- eno shranjevanje **izbriše** neznane ključe iz frontmatterja (`enabled:`,
-  `confirmation:`), oznaka `executable` pa pri tem **ostane** — kar je razlog za
-  pravilo iz razdelka 5;
-- poizvedba `list(category: workflows, tag: executable, active)` najde definicijo,
-  neobstoječa oznaka ne ujame ničesar, arhiviranje izloči workflow iz aktivnih in
-  hkrati ohrani oznako.
+**Ni izmerjeno:**
 
-**Ni izmerjeno (samo pregledano v kodi):**
-
-- vedenje `MemoryTools` prek MCP (zavrnitev oznake v `remember`/`update_memory`/
-  `forget_memory`): koda je pregledana, novi testi v `tests/run-tests.php` pa se
-  izvedejo šele na PHP ≥ 8.2 (CI ali gostovanje). Lokalno jih ni mogoče pognati.
-- vedenje admin UI nad definicijo z autosave (sklep iz kode, ne preizkus).
-- dejanski vzporedni dostop, veliki dokumenti, robni primeri YAML.
+- Izvajalec ne obstaja. Pogoji iz razdelka 8 so tu **opozorilo**, ne
+  uveljavljanje: MemoryDown shrani tudi nepopolno definicijo, ker je osnutek
+  normalno stanje (razdelek 11).
+- Dejanski vzporedni dostop, veliki dokumenti, YAML zunaj ploske podmnožice iz
+  razdelka 4 (gnezdenje, več dokumentov, sidra).
+- Kako bo izvajalec razreševal `llm_provider` in `llm_model`.
 
 **Kako se zapre:** ko obstaja C# `WorkflowProvider`, se doda test, ki definicijo
 ustvari prek živega MCP, jo prebere, poskusi spremeniti (mora biti zavrnjeno) in
 jo nato spremeni v admin UI. Ta korak je zadnja odprta točka tega standarda.
+
+**Kdo kaj uveljavlja:** oznako in kategorijo uveljavlja MemoryDown (to je meja
+zaupanja, razdelek 5). Vse ostalo iz razdelka 8 uveljavlja šele izvajalec;
+preverjanje v admin UI je informacija za uporabnika, ne varovalka.
 
 ---
 
 ## 14. Povzetek v enem odstavku
 
 Workflow je Markdown zapis v `workflows` z oznako `executable`, ki jo lahko doda
-samo človek v admin UI. Njegovo telo vsebuje prvi fenced `yaml` blok s `mode`,
-`schedule`, `timezone` in `allowed_tools` ter navodila v naravnem jeziku. Z
-oznako je zapis prek MCP samo za branje, zato ga agent ne more ne ustvariti ne
-spremeniti. Privzeto teče v `dry-run` (samo bere in poroča), pisanje omogoči
-`mode: apply`, kjer vsako mutirajoče dejanje potrdi uporabnik. Pavza je
+samo človek v admin UI — in samo v tej kategoriji. Njegovo telo se začne s prvim
+fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`,
+`llm_provider`, `llm_model`), za njim so navodila v naravnem jeziku; telo za nov
+zapis prednapolni admin UI. Z oznako je zapis prek MCP samo za branje, zato ga
+agent ne more ne ustvariti ne spremeniti, verdikt v UI pa ti pove, kaj bi
+izvajalec zavrnil. Privzeto teče v `dry-run` (samo bere in poroča), pisanje
+omogoči `mode: apply`, kjer vsako mutirajoče dejanje potrdi uporabnik. Pavza je
 arhiviranje. Izvajalec sme izvesti le definicijo, ki prestane vse pogoje iz
 razdelka 8 — v nasprotnem primeru javi razlog in ne spremeni ničesar.

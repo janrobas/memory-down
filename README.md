@@ -248,36 +248,58 @@ The `workflows` category holds two different things, told apart by one tag:
 | in `workflows`, **with** `executable` | a workflow definition a runner (see below) may execute |
 
 A definition keeps its instructions in natural language in the body, under a
-small YAML block that carries its operational configuration:
+small YAML block that carries its operational configuration. Creating a new
+memory in `workflows` in the admin UI **pre-fills that body** with the canonical
+template, so the shape is never guessed:
 
 ````markdown
 # Preverjanje e-pošte in koledarja
 
 ```yaml
-mode: dry-run
-schedule: "0 7,12 * * *"
+# schedule: "0 7,12 * * *"
 timezone: Europe/Ljubljana
+mode: dry-run
 allowed_tools:
   - calendar.search_emails
   - calendar.get_events
+llm_provider: opencode-go
+llm_model: <model-id>
 ```
+
+## Namen
+
+TODO: kaj naj workflow naredi in zakaj.
 
 ## Navodila
 
-Preglej nova sporočila, preveri koledar in pripravi predloge …
+1. TODO: koraki, ki naj jih izvajalec izvede.
 ````
 
 - **Configuration lives in the body, not in the frontmatter.** MemoryDown
   rebuilds the frontmatter from a fixed set of keys on every save, so any other
-  key there is dropped by the next autosave; the body survives every write.
+  key there is dropped by the next autosave; the body survives every write. The
+  block must be the first thing in the body — the title is a separate field and
+  is written as the `# …` heading above it.
 - **`mode`** is `dry-run` (read-only: it reports what it *would* do) or `apply`
   (may change things, each mutating action confirmed by you). It defaults to
   `dry-run`, so a newly activated workflow cannot write anything by accident.
 - **`schedule`** is a 5-field cron expression in `timezone` (default
-  `Europe/Ljubljana`); omit it for a manual-only workflow.
+  `Europe/Ljubljana`); omit it for a manual-only workflow. The template leaves it
+  commented out, so a new definition starts manual.
 - **`allowed_tools`** is the allowlist of tools the workflow may call. Anything
   not listed is refused, and every tool that changes state needs your explicit
   confirmation at the moment it is called.
+- **`llm_provider` / `llm_model`** name the model to run with. Left out, the
+  runner uses its own defaults.
+- **The template is a draft on purpose**: it still contains `TODO` and a
+  placeholder model, which a runner refuses to execute. Once enabled, the editor
+  shows the same verdict you would get — *a runner may execute this definition*,
+  or the list of reasons it would refuse — so a half-filled definition cannot
+  look finished.
+- **The `executable` tag is offered only in `workflows`**: outside it the admin
+  UI does not suggest it and the admin API refuses it, and an activated workflow
+  cannot be moved out of the category until the tag is removed. That is the same
+  permission seen from the other side — a runner only ever looks in `workflows`.
 - **Pause** a workflow by archiving it (the *Archived* checkbox) or by removing
   the tag.
 

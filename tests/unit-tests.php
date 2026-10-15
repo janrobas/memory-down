@@ -22,6 +22,7 @@ use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
+use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
 use MemoryDown\Support\RateLimiter;
 
@@ -150,6 +151,136 @@ check(
 );
 check('human-only: the reserved tag is not a write-protected category', !PathValidator::isWriteProtectedCategory('executable'));
 
+/* ------------------------------------------------------------------ *
+ *  Workflow definitions
+ * ------------------------------------------------------------------ */
+
+section('Workflow definition');
+
+// The reserved tag and the workflow category are two different things: the tag
+// says "a runner may execute this", the category says where that may be said.
+check('workflow: the tag is the reserved one', in_array(WorkflowDefinition::TAG, PathValidator::HUMAN_ONLY_TAGS, true));
+check('workflow: the tag is not the category', WorkflowDefinition::TAG !== WorkflowDefinition::CATEGORY);
+// isCategory() is a slug check, so this asserts the store accepts the directory
+// name the standard names — not that "executable" is a real category.
+check('workflow: the category is a legal category name', PathValidator::isCategory(WorkflowDefinition::CATEGORY));
+check('workflow: the category is not write-protected', !PathValidator::isWriteProtectedCategory(WorkflowDefinition::CATEGORY));
+check('workflow: isWorkflowCategory accepts the category', WorkflowDefinition::isWorkflowCategory('workflows'));
+check('workflow: isWorkflowCategory is case/space tolerant', WorkflowDefinition::isWorkflowCategory(' Workflows '));
+check('workflow: isWorkflowCategory rejects other categories', !WorkflowDefinition::isWorkflowCategory('notes'));
+check('workflow: the tag is found in a tag list', WorkflowDefinition::hasTag(['note', 'executable']));
+check('workflow: the tag is case/space tolerant', WorkflowDefinition::hasTag([' EXECUTABLE ']));
+check('workflow: an ordinary tag list carries no tag', !WorkflowDefinition::hasTag(['note', 'workflow']));
+check('workflow: a missing tags value carries no tag', !WorkflowDefinition::hasTag(null));
+check('workflow: a non-list tags value carries no tag', !WorkflowDefinition::hasTag('executable'));
+check(
+    'workflow: a definition needs both the tag and the category',
+    WorkflowDefinition::isDefinition('workflows', ['executable'])
+    && !WorkflowDefinition::isDefinition('notes', ['executable'])
+    && !WorkflowDefinition::isDefinition('workflows', ['workflow'])
+);
+check('workflow: a plain note has no verdict', null === WorkflowDefinition::activationProblems('workflows', [], 'Samo zapisek.'));
+check('workflow: a tagged definition has a verdict', is_array(WorkflowDefinition::activationProblems('workflows', ['executable'], 'x')));
+
+// The template the admin UI pre-fills for a new workflow.
+$template = WorkflowDefinition::TEMPLATE_BODY;
+$parsed = WorkflowDefinition::parse($template);
+$problems = implode(' | ', $parsed['problems']);
+
+check('template: carries no frontmatter of its own', !str_starts_with(ltrim($template), '---'));
+check('template: carries no H1 (the title is a field)', !str_starts_with(ltrim($template), '#'));
+check('template: opens with the yaml block', str_starts_with($template, "```yaml\n"));
+check('template: no unknown fields', [] === array_diff(array_keys($parsed['config']), WorkflowDefinition::FIELDS), json_encode(array_keys($parsed['config'])));
+check('template: mode is dry-run', WorkflowDefinition::MODE_DRY_RUN === ($parsed['config']['mode'] ?? null), json_encode($parsed['config']));
+check('template: no schedule, so it starts manual-only', !array_key_exists('schedule', $parsed['config']), json_encode($parsed['config']));
+check('template: timezone is the documented default', WorkflowDefinition::DEFAULT_TIMEZONE === ($parsed['config']['timezone'] ?? null));
+check('template: allowed_tools is a list of ids', ['memory.search_memory', 'memory.read_memory'] === ($parsed['config']['allowed_tools'] ?? null));
+check('template: names a provider and a model', isset($parsed['config']['llm_provider'], $parsed['config']['llm_model']));
+check('template: instructions survive parsing', str_contains($parsed['instructions'], '## Navodila'));
+// Load-bearing: the template is a draft, so activating it before filling it in
+// cannot produce something a runner would execute.
+check('template: is refused while it is a draft', [] === array_filter($parsed['problems'], static fn (string $p): bool => !str_contains($p, 'Draft marker')), $problems);
+check('template: the refusal names the TODO', str_contains($problems, 'TODO'), $problems);
+check('template: the refusal names the placeholder model', str_contains($problems, '<placeholder>'), $problems);
+
+// A definition a user actually filled in.
+$filled = "```yaml\n"
+    . "mode: apply\n"
+    . "schedule: \"30 6 * * mon-fri\"\n"
+    . "timezone: Europe/Ljubljana\n"
+    . "allowed_tools:\n"
+    . "  - calendar.get_events\n"
+    . "  - memory.search_memory\n"
+    . "llm_provider: opencode-go\n"
+    . "llm_model: qwen3\n"
+    . "```\n\n"
+    . "Preglej koledar in porocaj.\n";
+$ok = WorkflowDefinition::parse($filled);
+check('definition: a filled-in definition has no problems', [] === $ok['problems'], implode(' | ', $ok['problems']));
+check('definition: values are parsed', 'apply' === ($ok['config']['mode'] ?? null) && 'qwen3' === ($ok['config']['llm_model'] ?? null), json_encode($ok['config']));
+check('definition: instructions are the text after the block', 'Preglej koledar in porocaj.' === $ok['instructions'], var_export($ok['instructions'], true));
+
+// Each rule a runner applies, and that this parser reports.
+$bad = static fn (string $body): string => implode(' | ', WorkflowDefinition::parse($body)['problems']);
+check(
+    'definition: a missing block is reported',
+    str_contains($bad('Samo navodila brez bloka.'), 'configuration block'),
+    $bad('Samo navodila brez bloka.')
+);
+check(
+    'definition: text before the block is reported',
+    str_contains($bad("Uvodni odstavek.\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n"), 'before the configuration block')
+);
+check(
+    'definition: an unknown mode is reported',
+    str_contains($bad("```yaml\nmode: sometimes\n```\n\nNavodila.\n"), 'mode')
+);
+check(
+    'definition: a four-field cron is reported',
+    str_contains($bad("```yaml\nschedule: \"0 7 * *\"\n```\n\nNavodila.\n"), 'schedule')
+);
+check(
+    'definition: an out-of-range cron is reported',
+    str_contains($bad("```yaml\nschedule: \"99 7 * * *\"\n```\n\nNavodila.\n"), 'schedule')
+);
+check(
+    'definition: a bad timezone is reported',
+    str_contains($bad("```yaml\ntimezone: Mars/Olympus\n```\n\nNavodila.\n"), 'timezone')
+);
+check(
+    'definition: an unknown field is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nlimits:\n  - 5\n```\n\nNavodila.\n"), 'limits')
+);
+check(
+    'definition: empty instructions are reported',
+    str_contains($bad("```yaml\nmode: dry-run\n```\n"), 'instructions')
+);
+check(
+    'definition: a stray list item is reported',
+    str_contains($bad("```yaml\n  - sirota\n```\n\nNavodila.\n"), 'field name')
+);
+check(
+    'definition: an angle-bracket placeholder is a draft marker',
+    str_contains($bad("```yaml\nmode: dry-run\n```\n\nPoslji na <your-address>.\n"), '<placeholder>')
+);
+check(
+    'definition: a commented line is not a field',
+    [] === WorkflowDefinition::parse("```yaml\n# schedule: \"0 7 * * *\"\nmode: dry-run\n```\n\nNavodila.\n")['problems'],
+    $bad("```yaml\n# schedule: \"0 7 * * *\"\nmode: dry-run\n```\n\nNavodila.\n")
+);
+check(
+    'definition: a quoted value keeps its spaces',
+    '0 7 * * *' === (WorkflowDefinition::parse("```yaml\nschedule: \"0 7 * * *\"\n```\n\nNavodila.\n")['config']['schedule'] ?? null)
+);
+check(
+    'definition: an inline comment is dropped from a value',
+    'dry-run' === (WorkflowDefinition::parse("```yaml\nmode: dry-run # zacasno\n```\n\nNavodila.\n")['config']['mode'] ?? null)
+);
+check(
+    'definition: a leading H1 before the block is the title, not an error',
+    [] === WorkflowDefinition::parse("# Naslov\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n")['problems']
+);
+
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
 check('recommended tags drop idea', !in_array('idea', RecommendedTags::LIST, true));
@@ -259,6 +390,44 @@ check('raw: keeps the title heading that read() strips', str_contains((string) $
 check('raw: null for a missing entry', null === $store->raw('notes', 'does-not-exist'));
 check('raw: null for an invalid id', null === $store->raw('notes', '../secret'));
 check('raw: null for an invalid category', null === $store->raw('a/b', 'x'));
+
+// The title heading and the body are two different things. An entry written
+// without a title must not gain a stray "#" heading — that pushed the body down
+// and, because the title pattern could run past it, the *next* line became the
+// title. A workflow template whose configuration block carries "#" comments is
+// exactly where that hurt: the comments were read as the title and the block was
+// no longer the first thing in the body.
+$untitledBody = "```yaml\n# komentar v bloku\nmode: dry-run\n```\n\nNavodila.\n";
+$untitled = $store->create($untitledBody, '', 'workflows');
+$untitledRaw = (string) $store->raw('workflows', (string) $untitled['id']);
+check('untitled: no stray heading line is written', 0 === preg_match('/^#[ \t]*$/m', $untitledRaw), $untitledRaw);
+check('untitled: the title stays empty', '' === $untitled['title'], json_encode($untitled['title']));
+check('untitled: the body starts at the configuration block', str_starts_with($untitled['body'], '```yaml'), var_export($untitled['body'], true));
+check('untitled: a comment inside the block is not the title', !str_contains($untitled['title'], 'komentar'), (string) $untitled['title']);
+
+// A leading H1 is still adopted when no title was given, and is not duplicated.
+$adopted = $store->create("# Naslov iz telesa\n\nTelo.\n", '', 'notes');
+check('untitled: a leading H1 is adopted as the title', 'Naslov iz telesa' === $adopted['title'], json_encode($adopted['title']));
+check('untitled: the adopted H1 is not left in the body', 'Telo.' === trim($adopted['body']), var_export($adopted['body'], true));
+
+// ... but a line that only looks like one is not: Markdown needs the space, so a
+// note that opens with a "#hashtag" keeps it (and keeps no title).
+$hashtag = $store->create("#todo\n\nKupi mleko.\n", '', 'notes');
+check('untitled: "#todo" is not a heading', '' === $hashtag['title'], json_encode($hashtag['title']));
+check('untitled: "#todo" stays in the body', str_starts_with(trim($hashtag['body']), '#todo'), var_export($hashtag['body'], true));
+
+// An entry an older version left with a bare "#" heals: it reads sanely, and the
+// next save writes it back without the empty heading.
+$legacyId = 'legacy-abc123';
+@file_put_contents(
+    $memRoot . '/notes/' . $legacyId . '.md',
+    "---\ntype: notes\ntags: []\ncreated: 2026-01-01\nupdated: 2026-01-01\nid: {$legacyId}\n---\n\n# \n\nLegacy body.\n"
+);
+$legacy = $store->read('notes', $legacyId);
+check('legacy: a bare heading is not the title', '' === ($legacy['title'] ?? 'x'), json_encode($legacy['title'] ?? null));
+check('legacy: a bare heading is stripped from the body', 'Legacy body.' === trim((string) ($legacy['body'] ?? '')), var_export($legacy['body'] ?? null, true));
+$store->update('notes', $legacyId, ['title' => '', 'content' => 'Legacy body.']);
+check('legacy: the next save drops the bare heading', 0 === preg_match('/^#[ \t]*$/m', (string) $store->raw('notes', $legacyId)), (string) $store->raw('notes', $legacyId));
 
 /* ------------------------------------------------------------------ *
  *  MemoryStore: the trash

@@ -10,6 +10,7 @@ use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\SearchEngine;
+use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Support\ZipWriter;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseInterface;
@@ -165,6 +166,11 @@ final class WebApp
             'categories' => $this->store->categories(),
             'tree' => $this->tree(),
             'selected' => $selected,
+            'definition' => null === $selected ? null : WorkflowDefinition::activationProblems(
+                (string) ($selected['category'] ?? ''),
+                $selected['tags'] ?? [],
+                (string) ($selected['body'] ?? ''),
+            ),
             'trashCount' => $this->store->trashCount(),
             'engine' => $this->search instanceof MemoryIndex ? $this->search->status() : ['engine' => 'direct'],
         ]));
@@ -355,7 +361,14 @@ final class WebApp
             return $this->json(['error' => 'not_found'], 404);
         }
 
-        return $this->json(['memory' => $doc]);
+        return $this->json([
+            'memory' => $doc,
+            'definition' => WorkflowDefinition::activationProblems(
+                (string) ($doc['category'] ?? ''),
+                $doc['tags'] ?? [],
+                (string) ($doc['body'] ?? ''),
+            ),
+        ]);
     }
 
     private function apiSave(ServerRequestInterface $request): ResponseInterface
@@ -381,6 +394,33 @@ final class WebApp
             return $this->json(['error' => 'Content must not be empty.'], 400);
         }
 
+        // A definition stays in `workflows` until its activation is taken away,
+        // so moving it out is refused while the tag is still on it. Checked
+        // before the rule below, because for a move the actionable message is
+        // "remove the tag first", not "that tag belongs elsewhere" — the tag came
+        // from the entry being moved, not from the user typing it.
+        $currentCategory = '' === $id ? '' : $this->categoryFor($id);
+        if ('' !== $currentCategory && $currentCategory !== $category) {
+            $current = $this->store->read($currentCategory, $id);
+            if (null !== $current && WorkflowDefinition::hasTag($current['tags'] ?? [])) {
+                return $this->json([
+                    'error' => 'This entry is an active workflow: remove the "' . WorkflowDefinition::TAG . '" tag before moving it out of "' . WorkflowDefinition::CATEGORY . '".',
+                ], 400);
+            }
+        }
+
+        // The reserved tag is a permission, and it is only meaningful on an entry
+        // in `workflows` (docs/WORKFLOWS.md). Anywhere else it would claim an
+        // authorisation no runner would honour, so it is refused where it is
+        // illegal rather than silently stripped: the user is told what happened
+        // instead of losing a definition's activation without noticing.
+        $reserved = PathValidator::humanOnlyTag($tags);
+        if ('' !== $reserved && !WorkflowDefinition::isWorkflowCategory($category)) {
+            return $this->json([
+                'error' => 'The "' . $reserved . '" tag can only be used in the "' . WorkflowDefinition::CATEGORY . '" category.',
+            ], 400);
+        }
+
         try {
             if ('' === $id) {
                 $doc = $this->store->create($content, $title, $category, $tags, archived: $archived, public: $public);
@@ -400,13 +440,20 @@ final class WebApp
                 if (array_key_exists('public', $data)) {
                     $changes['public'] = $public;
                 }
-                $doc = $this->store->update($this->categoryFor($id), $id, $changes);
+                $doc = $this->store->update($currentCategory, $id, $changes);
             }
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], 400);
         }
 
-        return $this->json(['memory' => $doc]);
+        return $this->json([
+            'memory' => $doc,
+            'definition' => WorkflowDefinition::activationProblems(
+                (string) ($doc['category'] ?? ''),
+                $doc['tags'] ?? [],
+                (string) ($doc['body'] ?? ''),
+            ),
+        ]);
     }
 
     private function apiDelete(ServerRequestInterface $request): ResponseInterface

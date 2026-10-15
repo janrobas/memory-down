@@ -940,6 +940,33 @@ body.dragging .cat.drop-hover .cat-name {
   font-weight: 600;
 }
 
+/* The reserved `executable` tag: a permission rather than a suggestion, so it
+   reads like the switch it is and is only offered in the workflows category
+   (app.js hides it everywhere else; the admin API refuses it there too). */
+.tag-suggest .tag-chip[hidden] { display: none; }
+.tag-suggest .tag-chip-reserved { border-color: var(--accent); color: var(--accent); }
+.tag-suggest .tag-chip-reserved.active { background: var(--accent); color: var(--panel); }
+
+/* The verdict of a runner's pre-flight checks, for an entry that carries the
+   reserved tag — the only case where the question has an answer. */
+.definition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .1rem .5rem;
+  align-items: baseline;
+  padding: .4rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: .78rem;
+  color: var(--muted);
+}
+.definition[hidden] { display: none; }
+.definition-head { font-weight: 600; }
+.definition.is-problem .definition-head { color: var(--danger); }
+.definition.is-ok .definition-head { color: var(--accent); }
+.definition-list { margin: 0; padding-left: 1.1rem; flex: 1 1 100%; }
+.definition-list:empty { display: none; }
+
 .editor-body {
   display: flex;
   flex-direction: column;

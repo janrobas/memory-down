@@ -695,10 +695,22 @@ Automation definitions are in scope as **data in the memory store**, and nothing
 more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
 
 - A definition lives in the `workflows` category as a normal Markdown entry. Its
-  operational configuration (`mode`, `schedule`, `timezone`, `allowed_tools`)
-  lives in a fenced `yaml` block **in the body**, because the frontmatter is
-  rebuilt from a fixed key list on every save and would silently drop it.
-- The tag `executable` is reserved and human-only, and any entry carrying it is
+  operational configuration (`mode`, `schedule`, `timezone`, `allowed_tools`,
+  `llm_provider`, `llm_model`) lives in a fenced `yaml` block **in the body**,
+  because the frontmatter is rebuilt from a fixed key list on every save and would
+  silently drop it. The block is the first thing in the body; the title is a
+  separate field, written as the `# …` heading above it.
+- The admin UI pre-fills that block (and the instructions skeleton) when a new
+  memory is created in `workflows`, from `WorkflowDefinition::TEMPLATE_BODY` — one
+  definition of the shape, not a second copy of it in JavaScript. The template is
+  deliberately a draft (`TODO`, `<model-id>`), so activating it before filling it
+  in is refused by a runner rather than executed. The UI also shows the verdict a
+  runner would reach: an advisory parse, never enforcement — a half-written draft
+  must stay savable.
+- The tag `executable` is reserved and human-only, legal **only in the
+  `workflows` category**: the admin UI offers it there and nowhere else, the admin
+  API refuses it elsewhere (rather than silently stripping it), and an entry that
+  carries it cannot be moved out of the category. Any entry carrying it is
   read-only through MCP (`remember`/`update_memory`/`forget_memory` refuse it).
   This is the trust boundary: an agent may *propose* a workflow, but only the
   user, in the admin UI, can authorise one — and because the definition is then

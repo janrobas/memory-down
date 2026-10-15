@@ -9,12 +9,15 @@
  * @var list<string>                    $categories
  * @var list<array<string, mixed>>      $tree
  * @var array<string, mixed>|null       $selected
+ * @var list<string>|null               $definition  what a runner would refuse, for an activated workflow
  * @var array<string, mixed>            $engine
  * @var int                             $trashCount
  */
+use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Web\WebApp;
 
 $selected = $selected ?? null;
+$definition = $definition ?? null;
 $selCategory = $selected['category'] ?? 'facts';
 $selId = $selected['id'] ?? '';
 $selTitle = $selected['title'] ?? '';
@@ -26,10 +29,19 @@ if (!in_array($selCategory, $categories, true)) {
     $categories[] = $selCategory;
     sort($categories);
 }
+
+// The definition verdict: null means the entry is not an activated workflow and
+// the verdict would be meaningless, so the row is not shown at all.
+$definitionState = null === $definition ? 'is-hidden' : ([] === $definition ? 'is-ok' : 'is-problem');
+$definitionHead = null === $definition
+    ? ''
+    : ([] === $definition ? 'A runner may execute this definition' : 'A runner would refuse this definition');
 ?>
 <div class="app-shell<?= '' === $selId ? ' is-empty' : '' ?>"
      data-csrf="<?= WebApp::h($csrf) ?>"
-     data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>">
+     data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
+     data-workflow-category="<?= WebApp::h(WorkflowDefinition::CATEGORY) ?>"
+     data-workflow-template="<?= WebApp::h(WorkflowDefinition::TEMPLATE_BODY) ?>">
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
@@ -120,6 +132,14 @@ if (!in_array($selCategory, $categories, true)) {
               <?php foreach (\MemoryDown\Memory\RecommendedTags::LIST as $tag): ?>
                 <button type="button" class="tag-chip" data-tag="<?= WebApp::h($tag) ?>"><?= WebApp::h($tag) ?></button>
               <?php endforeach; ?>
+              <?php /* The reserved tag is offered exactly where it is legal — on an
+                       entry in `workflows` — and the admin API refuses it anywhere
+                       else. app.js keeps it in step when the category changes. */ ?>
+              <button type="button" class="tag-chip tag-chip-reserved"
+                      data-tag="<?= WebApp::h(WorkflowDefinition::TAG) ?>"
+                      data-only-category="<?= WebApp::h(WorkflowDefinition::CATEGORY) ?>"
+                      title="Reserved tag: marks this entry as a workflow definition a runner may execute, so agents can only read it. Only allowed in the workflows category."
+                      <?= WorkflowDefinition::CATEGORY === $selCategory ? '' : 'hidden' ?>><?= WebApp::h(WorkflowDefinition::TAG) ?></button>
             </div>
           </div>
           <div class="field check">
@@ -137,6 +157,18 @@ if (!in_array($selCategory, $categories, true)) {
             </label>
           </div>
         </div>
+      </div>
+
+      <?php /* The verdict of a runner's pre-flight checks, shown only for an
+               activated definition: that is when the question has an answer.
+               app.js keeps it current after every save (see renderDefinition). */ ?>
+      <div class="definition <?= $definitionState ?>" id="definition"<?= null === $definition ? ' hidden' : '' ?>>
+        <span class="definition-head" id="definition-head"><?= WebApp::h($definitionHead) ?></span>
+        <ul class="definition-list" id="definition-list">
+          <?php foreach ($definition ?? [] as $problem): ?>
+            <li><?= WebApp::h($problem) ?></li>
+          <?php endforeach; ?>
+        </ul>
       </div>
 
       <div class="editor-body">

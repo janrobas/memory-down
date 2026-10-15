@@ -679,10 +679,11 @@ final class MemoryStore
         $heading = $title !== '' ? "# {$title}" : '';
 
         // Adopt the first existing H1 as the title when none was supplied, and
-        // drop any leading H1s (including duplicates left by earlier versions)
-        // so exactly one title heading is ever written.
+        // drop any leading H1s (including duplicates and the bare "#" older
+        // versions wrote for an untitled entry) so exactly one title heading is
+        // ever written.
         $content = self::stripLeadingHeadings($content, $adopted);
-        if ('' === $title && '' !== $adopted) {
+        if ('' === $title && null !== $adopted && '' !== $adopted) {
             $heading = '# ' . $adopted;
         }
         if ('' !== $heading) {
@@ -694,14 +695,26 @@ final class MemoryStore
 
     /**
      * Remove all leading H1 (`# ...`) lines, returning the remaining body.
-     * The first one found is exposed via $first (used as a fallback title).
+     * The first one that actually has text is exposed via $first (used as a
+     * fallback title).
+     *
+     * A bare "#" line is a heading with no title: it is stripped like any other
+     * leading heading but never becomes the title. It used to be written for
+     * untitled entries and, because the title pattern below allowed whitespace —
+     * newlines included — to run past it, the *next* line was adopted as the
+     * title instead. Horizontal whitespace only, so a heading can never reach
+     * into the line after it.
      */
     private static function stripLeadingHeadings(string $text, ?string &$first = null): string
     {
         $text = ltrim($text);
-        while ('' !== $text && preg_match('/^#\s+(.+?)\s*(?:\r?\n|$)/', $text, $m)) {
-            if (null === $first) {
-                $first = trim($m[1]);
+        // "# Title", and a bare "#" (an empty heading, which older versions wrote
+        // for an untitled entry). "#hashtag" is not a heading — Markdown needs the
+        // space — so a note that starts with one keeps its line.
+        while ('' !== $text && 1 === preg_match('/^#(?:[ \t]+(.*?))?[ \t]*(?:\r?\n|$)/', $text, $m)) {
+            $heading = $m[1] ?? '';
+            if (null === $first && '' !== $heading) {
+                $first = $heading;
             }
             $text = ltrim(substr($text, strlen($m[0])));
         }
@@ -774,14 +787,17 @@ final class MemoryStore
         $title = '';
         if (isset($fm['title']) && is_string($fm['title']) && '' !== $fm['title']) {
             $title = $fm['title'];
-        } elseif (preg_match('/^#\s+(.+)$/m', $body, $m)) {
-            $title = trim($m[1]);
         }
 
-        // The title lives in the frontmatter / UI title field, not in the body.
-        // Strip the leading H1 (and any accidental duplicates) so that saving a
-        // memory back never re-prepends the title and compounds the heading.
-        $body = self::stripLeadingHeadings($body);
+        // The title lives in the frontmatter / UI title field, not in the body:
+        // the canonical layout is a leading H1, so strip one (and any accidental
+        // duplicates) and take it as the fallback title. Only a *leading* heading
+        // counts — a "#" line further down is a YAML comment inside the
+        // configuration block or a heading in the instructions, never the title.
+        $body = self::stripLeadingHeadings($body, $leading);
+        if ('' === $title && null !== $leading) {
+            $title = $leading;
+        }
 
         $date = gmdate('Y-m-d');
         $createdRaw = isset($fm['created']) && is_string($fm['created']) ? $fm['created'] : '';

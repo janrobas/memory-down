@@ -1551,6 +1551,105 @@ check(
     $r['body']
 );
 
+section('Admin UI: the workflow template and the definition verdict');
+
+// The page ships the canonical template (docs/WORKFLOWS.md) and the reserved
+// chip, which is offered only where the tag is legal.
+$r = request('GET', '/ui');
+check('workflow UI: page ships the template', str_contains($r['body'], 'data-workflow-template="') && str_contains($r['body'], '```yaml'), 'page');
+check('workflow UI: the template is a draft, not a runnable definition', str_contains($r['body'], 'TODO:') && str_contains($r['body'], '&lt;model-id&gt;'), 'page');
+check(
+    'workflow UI: the reserved chip is scoped to the workflows category',
+    str_contains($r['body'], 'data-tag="executable"') && str_contains($r['body'], 'data-only-category="workflows"'),
+    'page'
+);
+
+// The tag is refused outside `workflows`: it is a permission, and a permission
+// attached to a note would claim an authorisation no runner would honour.
+$notesBefore = mdCount($tmp . '/memory/notes');
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes', 'title' => 'Tag smuggling', 'tags' => ['executable'], 'content' => 'Navodila za nekaj.',
+]));
+check('admin API -> executable refused outside workflows', 400 === $r['status'], $r['body']);
+check('admin API -> the refusal names the workflows category', str_contains(jsonBody($r['body'])['error'] ?? '', 'workflows'), $r['body']);
+check('admin API -> the refused save wrote nothing', $notesBefore === mdCount($tmp . '/memory/notes'), (string) mdCount($tmp . '/memory/notes'));
+
+// A definition activated straight from the template is a draft: the verdict says
+// what a runner would refuse, which is the point of pre-filling it.
+$draftBody = "```yaml\nmode: dry-run\ntimezone: Europe/Ljubljana\nallowed_tools:\n  - memory.read_memory\n```\n\nTODO: napisi navodila.\n";
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => 'Template draft', 'tags' => ['executable'], 'content' => $draftBody,
+]));
+$draft = jsonBody($r['body']);
+$draftId = (string) ($draft['memory']['id'] ?? '');
+check('admin API -> a tagged definition in workflows is accepted', 200 === $r['status'] && '' !== $draftId, $r['body']);
+check('admin API -> the verdict is a list, not null, for a definition', is_array($draft['definition'] ?? null), $r['body']);
+check('admin API -> the verdict names the draft marker', str_contains(implode(' ', $draft['definition'] ?? []), 'TODO'), $r['body']);
+
+// The pre-filled template is saved with an empty title, which is the one case
+// where a stray "#" heading used to be written into the body — pushing the
+// configuration block down and turning the verdict into "no block at all".
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => '', 'tags' => ['executable'], 'content' => $draftBody,
+]));
+$untitled = jsonBody($r['body']);
+$untitledId = (string) ($untitled['memory']['id'] ?? '');
+$untitledRaw = $tmp . '/memory/workflows/' . $untitledId . '.md';
+check('admin API -> an untitled definition is accepted', 200 === $r['status'] && '' !== $untitledId, $r['body']);
+check('admin API -> an untitled definition keeps the block first', str_starts_with((string) ($untitled['memory']['body'] ?? ''), "```yaml"), $r['body']);
+check('admin API -> an untitled definition gets its verdict', str_contains(implode(' ', $untitled['definition'] ?? []), 'Draft marker'), $r['body']);
+$untitledFile = is_file($untitledRaw) ? (string) file_get_contents($untitledRaw) : '';
+check('admin API -> no stray heading is written for an untitled entry', 1 !== preg_match('/^#[ \t]*$/m', $untitledFile), $untitledFile);
+
+// A note in the same category has no verdict at all: null, not an empty list.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => 'Template note', 'tags' => ['workflow'], 'content' => 'Samo zapisek.',
+]));
+$noteDoc = jsonBody($r['body']);
+check('admin API -> a plain note has no verdict', array_key_exists('definition', $noteDoc) && null === $noteDoc['definition'], $r['body']);
+
+// The server-rendered page shows the same verdict when the definition is opened.
+$r = request('GET', '/ui?category=workflows&id=' . rawurlencode($draftId));
+check('workflow UI: the page shows the verdict for a draft', str_contains($r['body'], 'would refuse this definition'), 'page');
+check('workflow UI: the verdict lists the draft marker', str_contains($r['body'], 'Draft marker'), 'page');
+
+// Filling it in clears the verdict, in the API and on the page.
+$filledBody = "```yaml\nmode: apply\nschedule: \"0 7 * * *\"\ntimezone: Europe/Ljubljana\nallowed_tools:\n  - calendar.get_events\n```\n\nPreglej koledar in porocaj.\n";
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $draftId, 'category' => 'workflows', 'title' => 'Template draft', 'tags' => ['executable'], 'content' => $filledBody,
+]));
+check('admin API -> a filled-in definition has no problems left', [] === (jsonBody($r['body'])['definition'] ?? null), $r['body']);
+$r = request('GET', '/ui?category=workflows&id=' . rawurlencode($draftId));
+check('workflow UI: the page says a runner may execute it', str_contains($r['body'], 'may execute this definition'), 'page');
+
+// The tag keeps the definition in `workflows`: moving it out is refused while it
+// is still active, and the file stays where it was.
+$draftFile = $tmp . '/memory/workflows/' . $draftId . '.md';
+$before = is_file($draftFile) ? (string) file_get_contents($draftFile) : '';
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $draftId, 'category' => 'notes', 'title' => 'Template draft', 'tags' => ['executable'], 'content' => $filledBody,
+]));
+check('admin API -> an active workflow cannot be moved out of workflows', 400 === $r['status'], $r['body']);
+check('admin API -> the refusal says to remove the tag first', str_contains(jsonBody($r['body'])['error'] ?? '', 'remove'), $r['body']);
+check('admin API -> the refused move left the file alone', $before === (string) @file_get_contents($draftFile), 'file');
+check('admin API -> the refused move created no copy', !is_file($tmp . '/memory/notes/' . $draftId . '.md'), 'file');
+
+// Retiring it (removing the tag) is what makes a move legal — and what makes the
+// verdict disappear, because the entry is a note again.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $draftId, 'category' => 'workflows', 'title' => 'Template draft', 'tags' => [], 'content' => $filledBody,
+]));
+$retired = jsonBody($r['body']);
+check(
+    'admin API -> removing the tag retires the definition',
+    200 === $r['status'] && array_key_exists('definition', $retired) && null === $retired['definition'],
+    $r['body']
+);
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $draftId, 'category' => 'notes', 'title' => 'Template draft', 'tags' => [], 'content' => $filledBody,
+]));
+check('admin API -> a retired definition may be moved', 200 === $r['status'] && 'notes' === (jsonBody($r['body'])['memory']['category'] ?? ''), $r['body']);
+
 section('MCP: read_memory');
 
 // A body far longer than the ~240-character snippet the search tools return,

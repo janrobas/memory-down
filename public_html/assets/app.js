@@ -45,6 +45,9 @@
   var newCats = document.getElementById('new-cats');
   var moveField = document.getElementById('move-field');
   var moveCategory = document.getElementById('move-category');
+  var definitionBox = document.getElementById('definition');
+  var definitionHead = document.getElementById('definition-head');
+  var definitionList = document.getElementById('definition-list');
   var filterBar = document.getElementById('filter');
   var backdrop = document.getElementById('backdrop');
   var openMemoriesBtn = document.getElementById('open-memories');
@@ -567,6 +570,87 @@
     });
     // The "Public" flag only means something for the writings category.
     if (publicField) { publicField.hidden = category !== 'writings'; }
+    syncReservedChips(category);
+    prefillWorkflowTemplate(category);
+  }
+
+  /* The reserved `executable` tag is a permission, so it is offered exactly where
+     it is legal: on an entry in the workflows category. The admin API enforces
+     the same rule, so a hand-typed tag elsewhere is refused, not accepted. */
+  function syncReservedChips(category) {
+    if (!tagSuggest) { return; }
+    Array.prototype.forEach.call(tagSuggest.querySelectorAll('.tag-chip[data-only-category]'), function (chip) {
+      chip.hidden = chip.getAttribute('data-only-category') !== category;
+    });
+  }
+
+  /* A new memory in the workflows category starts from the canonical template
+     (docs/WORKFLOWS.md). The template is a draft — it still carries a TODO and a
+     placeholder model — so activating it before filling it in is refused by a
+     runner rather than executed. */
+  var workflowTemplate = shell.getAttribute('data-workflow-template') || '';
+  var workflowCategory = shell.getAttribute('data-workflow-category') || '';
+  var templateUntouched = false;
+
+  function prefillWorkflowTemplate(category) {
+    // Never touch an existing entry, and never overwrite text the user wrote.
+    if ('' !== fId.value || '' === workflowTemplate) { return; }
+
+    if (category === workflowCategory) {
+      if ('' === fContent.value) {
+        fContent.value = workflowTemplate;
+        templateUntouched = true;
+        // Adopt it into the snapshot: the template is where the editor starts,
+        // not a change the user made, and an autosave of it alone would create an
+        // untitled draft just from opening the form.
+        snapshot(currentPayload());
+        if (previewVisible()) { renderPreview(); }
+        autosizeContent();
+      }
+      return;
+    }
+
+    // Leaving the category before touching the template takes it away again, so
+    // "the text is still empty" keeps meaning what it says.
+    if (templateUntouched && fContent.value === workflowTemplate) {
+      fContent.value = '';
+      templateUntouched = false;
+      snapshot(currentPayload());
+      if (previewVisible()) { renderPreview(); }
+      autosizeContent();
+    }
+  }
+
+  /* The definition verdict: what a runner would refuse. Shown only for an entry
+     that carries the reserved tag, where the answer means something. */
+  function renderDefinition(problems) {
+    if (!definitionBox) { return; }
+    if (undefined === problems || null === problems) {
+      definitionBox.hidden = true;
+      definitionBox.classList.remove('is-ok');
+      definitionBox.classList.remove('is-problem');
+      if (definitionList) { definitionList.innerHTML = ''; }
+      if (definitionHead) { definitionHead.textContent = ''; }
+      return;
+    }
+    var bad = problems.length > 0;
+    definitionBox.hidden = false;
+    definitionBox.classList.remove('is-hidden');
+    definitionBox.classList.toggle('is-problem', bad);
+    definitionBox.classList.toggle('is-ok', !bad);
+    if (definitionHead) {
+      definitionHead.textContent = bad
+        ? 'A runner would refuse this definition'
+        : 'A runner may execute this definition';
+    }
+    if (definitionList) {
+      definitionList.innerHTML = '';
+      problems.forEach(function (problem) {
+        var li = document.createElement('li');
+        li.textContent = problem;
+        definitionList.appendChild(li);
+      });
+    }
   }
 
   function updateBreadcrumb(category, id) {
@@ -638,11 +722,13 @@
     el.value = value;
   }
 
-  function fillEditor(doc, tab) {
+  function fillEditor(doc, tab, problems) {
     // Never let a previous document's preview linger: clear first, always.
     showEditorEmpty(false);
     clearPreview();
     resetReindexButton();
+    templateUntouched = false;
+    renderDefinition(problems);
 
     fId.value = doc.id;
     setValuePreservingCaret(fTitle, doc.title || '');
@@ -696,7 +782,7 @@
     return api(endpoint.memory + '?category=' + encodeURIComponent(category) + '&id=' + encodeURIComponent(id))
       .then(function (res) {
         if (res.ok && res.data.memory) {
-          fillEditor(res.data.memory, browseTab());
+          fillEditor(res.data.memory, browseTab(), res.data.definition);
         } else {
           setStatus('Could not load that memory.', 'err');
         }
@@ -715,6 +801,8 @@
     fArchived.checked = false;
     fPublic.checked = false;
     fContent.value = '';
+    templateUntouched = false;
+    renderDefinition(null);
     deleteBtn.disabled = true;
     deleteBtn.hidden = true;
     newCats.hidden = false;
@@ -724,7 +812,9 @@
     markActive('', '');
     history.replaceState(null, '', '/ui');
     resetTabs();
-    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, public: false, content: '' });
+    // The body is read (not assumed empty) because selecting `workflows` may have
+    // just pre-filled the template in the line above.
+    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, public: false, content: fContent.value });
     setStatus('');
     fTitle.focus();
   }
@@ -767,6 +857,7 @@
         if ('' === payload.id) {
           adoptCreatedMemory(res.data.memory);
         }
+        renderDefinition(res.data.definition);
         markSaved(currentPayload());
         refreshTree();
         return true;
@@ -858,7 +949,7 @@
         return api(endpoint.memory, { method: 'POST', body: payload }).then(function (saved) {
           if (saved.ok && saved.data.memory) {
             if (fId.value === id) {
-              fillEditor(saved.data.memory, previewVisible() ? 'preview' : 'write');
+              fillEditor(saved.data.memory, previewVisible() ? 'preview' : 'write', saved.data.definition);
               markSaved(currentPayload());
             }
             setStatus('Moved to ' + toCategory + '.', 'ok');
@@ -1406,7 +1497,12 @@
     if (previewVisible()) { renderPreview(); }
   }
 
-  fContent.addEventListener('input', onEdit);
+  fContent.addEventListener('input', function () {
+    // Whatever is in the textarea is now the user's text, not the pre-filled
+    // template, so switching category must no longer take it away.
+    templateUntouched = false;
+    onEdit();
+  });
   fTitle.addEventListener('input', onEdit);
   fTags.addEventListener('input', onEdit);
 
