@@ -153,6 +153,19 @@ return [
     'public_api_token' => $__env('PUBLIC_API_TOKEN'),
 
     // -----------------------------------------------------------------------
+    // Workflows API (read-only): serves the "workflows" category — the
+    // definitions a runner may execute, plus the drafts and notes beside them —
+    // as JSON, with the stored Markdown body. Disabled by default. When enabled,
+    // WORKFLOWS_API_TOKEN must be set; requests must send
+    // "Authorization: Bearer <token>".
+    // -----------------------------------------------------------------------
+    'workflows_api_enabled' => filter_var(
+        $__env('WORKFLOWS_API_ENABLED', 'false'),
+        FILTER_VALIDATE_BOOL
+    ),
+    'workflows_api_token' => $__env('WORKFLOWS_API_TOKEN'),
+
+    // -----------------------------------------------------------------------
     // Lightweight per-IP rate limiting for the OAuth token and consent
     // endpoints (fixed window, file-backed; no daemon required).
     // -----------------------------------------------------------------------

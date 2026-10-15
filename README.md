@@ -36,13 +36,17 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Read-only public writings API** at `/public/writings`: publish entries in the
   `writings` category (`public: true`) as Markdown over a token-gated GET API, for
   a personal website to consume. Disabled by default.
+- **Read-only workflows API** at `/api/workflows`: the same idea for the
+  `workflows` category, so a runner (or any tool) can read the definitions and
+  their authorisation state over HTTP instead of the filesystem. Token-gated,
+  disabled by default, and there is nothing to write with.
 - **Workflow definitions** in `workflows`: a Markdown entry tagged `executable`
   is a definition a runner may execute, with its instructions in natural
   language and its configuration (`mode`, `schedule`, `timezone`,
-  `allowed_tools`) in a small YAML block in the body. The tag can only be added
-  in the admin UI, and any entry carrying it is read-only through MCP — an agent
-  can propose a workflow, never authorise or rewrite one. See
-  [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+  `allowed_tools`, `llm_provider`, `llm_model`) in a small YAML block in the body.
+  The tag can only be added in the admin UI, and any entry carrying it is
+  read-only through MCP — an agent can propose a workflow, never authorise or
+  rewrite one. See [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 - **Deletes are recoverable:** anything deleted — in the UI or by an agent — goes
   to a `.trash/` folder instead of vanishing, and can be restored until you empty
   it.
@@ -123,6 +127,8 @@ in the hosting panel or php.ini win over `.env`.
 | `INDEX_PATH` | `./data/index/memory.sqlite` | Location of the disposable search index |
 | `PUBLIC_API_ENABLED` | `false` | Serve published writings read-only at `/public/writings` |
 | `PUBLIC_API_TOKEN` | *(empty)* | Bearer token required by the public writings API (required when enabled) |
+| `WORKFLOWS_API_ENABLED` | `false` | Serve the `workflows` category read-only at `/api/workflows` |
+| `WORKFLOWS_API_TOKEN` | *(empty)* | Bearer token required by the workflows API (required when enabled) |
 | `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limiting on the OAuth token + consent endpoints |
 | `RATE_LIMIT_TOKEN_MAX` | `30` | Max token requests per IP per window |
 | `RATE_LIMIT_CONSENT_MAX` | `10` | Max consent submissions per IP per window |
@@ -238,6 +244,56 @@ foreach ($list['writings'] ?? [] as $w) {
 }
 ```
 
+## Workflows API (`/api/workflows`)
+
+The same shape of API as the writings one, for the other direction: a runner — or
+any tool you point at it — can read your workflow definitions over HTTP instead
+of the filesystem. It only ever reads the `workflows` category. Disabled by
+default, and read-only by construction: only `GET` is routed, so there is no way
+to write through it, and the Markdown files stay the source of truth.
+
+Enable it in `.env` with its **own** key, separate from `PUBLIC_API_TOKEN`:
+
+```
+WORKFLOWS_API_ENABLED=true
+WORKFLOWS_API_TOKEN=a-long-random-secret
+```
+
+Generate the key with `php -r "echo bin2hex(random_bytes(32));"`. Requests then
+send `Authorization: Bearer a-long-random-secret`.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/workflows?limit=50&offset=0[&executable=true\|false]` | `{ workflows: [{ id, title, executable, archived, tags, created, updated }], count, total, has_more }`, newest-**created** first |
+| `GET /api/workflows/{id}` | `{ workflow: { id, title, executable, archived, tags, created, updated, markdown, config, instructions } }` |
+
+- **`executable`** is the authorisation flag from `docs/WORKFLOWS.md`: `true` when
+  the entry carries the reserved tag, so a runner's discovery query is
+  `GET /api/workflows?executable=true`.
+- **The list carries metadata only**; the body is in the detail endpoint.
+  `markdown` is the body exactly as stored — the YAML block followed by the
+  instructions — and `config` / `instructions` are the same content parsed, for
+  consumers that would rather not parse it themselves.
+- **No verdict is published.** Whether a definition may run is decided by the
+  runner's own checks (`docs/WORKFLOWS.md` §8); reading a definition here
+  authorises nothing.
+- Both endpoints carry an `ETag` and `Cache-Control: private`, and answer
+  `If-None-Match` with `304`. Enabled without a `WORKFLOWS_API_TOKEN` the API
+  fails closed with `503`; disabled, the routes return `404`.
+
+```bash
+# The definitions a runner is allowed to execute
+curl -s "https://memory.example.com/api/workflows?executable=true" \
+  -H "Authorization: Bearer a-long-random-secret"
+
+# One definition, configuration and instructions
+curl -s https://memory.example.com/api/workflows/jutranji-pregled-poste-a1b2c3 \
+  -H "Authorization: Bearer a-long-random-secret"
+```
+
+Treat the key like a password: whoever holds it can read your automation
+surface — the instructions, the allowed tools and the schedules.
+
 ## Workflows (`workflows`)
 
 The `workflows` category holds two different things, told apart by one tag:
@@ -307,7 +363,9 @@ Nothing in MemoryDown runs anything yet: this is the definition format and the
 rules a future C#/.NET Worker Service will follow.
 [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) is the normative document (in
 Slovenian): the full field list, the validation rules a runner must apply before
-executing, and the safety model.
+executing, and the safety model. A runner that cannot read your filesystem can
+fetch definitions through the read-only [workflows API](#workflows-api-apiworkflows)
+instead — same Markdown, one more way to read it.
 
 ## Search index
 

@@ -38,6 +38,9 @@ final class Config
     public readonly bool $publicApiEnabled;
     public readonly string $publicApiToken;
 
+    public readonly bool $workflowsApiEnabled;
+    public readonly string $workflowsApiToken;
+
     public readonly bool $rateLimitEnabled;
     public readonly int $rateLimitTokenMax;
     public readonly int $rateLimitConsentMax;
@@ -69,6 +72,9 @@ final class Config
 
         $this->publicApiEnabled = (bool) ($c['public_api_enabled'] ?? false);
         $this->publicApiToken = (string) ($c['public_api_token'] ?? '');
+
+        $this->workflowsApiEnabled = (bool) ($c['workflows_api_enabled'] ?? false);
+        $this->workflowsApiToken = (string) ($c['workflows_api_token'] ?? '');
 
         $this->rateLimitEnabled = (bool) ($c['rate_limit_enabled'] ?? true);
         $this->rateLimitTokenMax = (int) ($c['rate_limit_token_max'] ?? 30);

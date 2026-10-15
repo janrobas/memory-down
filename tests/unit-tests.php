@@ -16,6 +16,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use MemoryDown\Config;
 use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
@@ -25,6 +26,7 @@ use MemoryDown\Memory\SearchQuery;
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
 use MemoryDown\Support\RateLimiter;
+use MemoryDown\Workflows\WorkflowCatalog;
 
 $passed = 0;
 $failed = 0;
@@ -280,6 +282,103 @@ check(
     'definition: a leading H1 before the block is the title, not an error',
     [] === WorkflowDefinition::parse("# Naslov\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n")['problems']
 );
+
+/* ------------------------------------------------------------------ *
+ *  The workflow catalog (read-only API over the workflows category)
+ * ------------------------------------------------------------------ */
+
+section('WorkflowCatalog');
+
+$catalogRoot = $root . '/catalog';
+$catalogStore = new MemoryStore($catalogRoot . '/memory', $catalogRoot . '/auth');
+$catalogStore->create(
+    "```yaml\nmode: apply\nschedule: \"0 7 * * *\"\ntimezone: Europe/Ljubljana\n```\n\nPreglej posto.\n",
+    'Jutranji pregled',
+    'workflows',
+    ['executable', 'email'],
+);
+$catalogStore->create('Samo zapisek o postopku.', 'Postopek', 'workflows', ['workflow']);
+$catalogStore->create('Tuja kategorija.', 'Ni workflow', 'facts');
+$catalog = new WorkflowCatalog($catalogStore);
+
+$list = $catalog->list();
+check('catalog: lists only the workflows category', 2 === ($list['total'] ?? -1), json_encode(array_column($list['workflows'] ?? [], 'id')));
+check('catalog: envelope matches the writings API', ['count', 'total', 'has_more', 'limit', 'offset'] === array_slice(array_keys($list), 1), json_encode(array_keys($list)));
+$definition = null;
+$note = null;
+foreach ($list['workflows'] as $entry) {
+    if (true === $entry['executable']) {
+        $definition = $entry;
+    } else {
+        $note = $entry;
+    }
+}
+check('catalog: the tagged entry reports executable', is_array($definition) && 'Jutranji pregled' === ($definition['title'] ?? ''), json_encode($list['workflows']));
+check('catalog: the plain entry reports unexecutable', is_array($note) && 'Postopek' === ($note['title'] ?? ''), json_encode($list['workflows']));
+check('catalog: summary carries no body', !array_key_exists('markdown', $definition ?? []), json_encode($definition));
+check('catalog: summary leaks no path or source', !array_key_exists('path', $definition ?? []) && !array_key_exists('source', $definition ?? []), json_encode($definition));
+
+$onlyDefinitions = $catalog->list(50, 0, true);
+check('catalog: executable=true keeps only the definition', 1 === ($onlyDefinitions['total'] ?? -1) && true === ($onlyDefinitions['workflows'][0]['executable'] ?? null), json_encode($onlyDefinitions));
+$onlyNotes = $catalog->list(50, 0, false);
+check('catalog: executable=false keeps only the rest', 1 === ($onlyNotes['total'] ?? -1) && false === ($onlyNotes['workflows'][0]['executable'] ?? null), json_encode($onlyNotes));
+
+$paged = $catalog->list(1, 0);
+check('catalog: paging returns one entry and has_more', 1 === ($paged['count'] ?? -1) && true === ($paged['has_more'] ?? null), json_encode($paged));
+check('catalog: paging past the end is empty', 0 === ($catalog->list(1, 5)['count'] ?? -1) && false === ($catalog->list(1, 5)['has_more'] ?? null), json_encode($catalog->list(1, 5)));
+
+$full = $catalog->get((string) $definition['id']);
+check('catalog: get returns the entry', is_array($full) && $definition['id'] === ($full['id'] ?? null), json_encode($full));
+check('catalog: get returns the body verbatim', str_starts_with((string) ($full['markdown'] ?? ''), "```yaml\n"), var_export($full['markdown'] ?? null, true));
+check('catalog: get returns the parsed config', 'apply' === ($full['config']['mode'] ?? null) && '0 7 * * *' === ($full['config']['schedule'] ?? null), json_encode($full['config'] ?? null));
+check('catalog: get returns the instructions', 'Preglej posto.' === trim((string) ($full['instructions'] ?? '')), var_export($full['instructions'] ?? null, true));
+check('catalog: get reports authorization', true === ($full['executable'] ?? null), json_encode($full['executable'] ?? null));
+check('catalog: get leaks no path or source', !array_key_exists('path', $full ?? []) && !array_key_exists('source', $full ?? []), json_encode($full));
+
+// A note in the same category is readable too: the token is the boundary, the
+// tag only says whether a runner may execute it.
+$noteFull = $catalog->get((string) $note['id']);
+check('catalog: get serves a plain note too', is_array($noteFull) && false === ($noteFull['executable'] ?? null), json_encode($noteFull));
+check('catalog: a note without a block has no config', [] === ($noteFull['config'] ?? null), json_encode($noteFull['config'] ?? null));
+
+check('catalog: unknown id is null', null === $catalog->get('does-not-exist'));
+check('catalog: traversal id is null', null === $catalog->get('../secret') && null === $catalog->get('..%2F..%2F.env'));
+check('catalog: an empty id is null', null === $catalog->get(''));
+
+/* ------------------------------------------------------------------ *
+ *  Configuration defaults
+ * ------------------------------------------------------------------ */
+
+section('Config');
+
+$minimal = [
+    'app_base_url' => 'https://example.test',
+    'app_env' => 'production',
+    'app_name' => 'MemoryDown',
+    'app_version' => '1.0.0',
+    'data_path' => '/tmp/data',
+    'memory_path' => '/tmp/data/memory',
+    'log_path' => '/tmp/data/logs',
+    'oauth_access_token_ttl' => 3600,
+    'oauth_refresh_token_ttl' => 7776000,
+    'oauth_code_ttl' => 600,
+    'oauth_username' => '',
+    'oauth_consent_password' => '',
+    'oauth_cimd_allowed_origins' => [],
+    'mcp_session_ttl' => 3600,
+];
+$config = new Config($minimal);
+check('config: the workflows API is off by default', false === $config->workflowsApiEnabled);
+check('config: the workflows API has no key by default', '' === $config->workflowsApiToken);
+check('config: the public writings API is off by default', false === $config->publicApiEnabled);
+$enabled = new Config($minimal + ['workflows_api_enabled' => true, 'workflows_api_token' => 'k']);
+check('config: an explicit flag is honoured', true === $enabled->workflowsApiEnabled && 'k' === $enabled->workflowsApiToken);
+
+// The switch and the key have to be documented where a deployment looks for
+// them; an undocumented variable is a variable nobody sets.
+$envExample = (string) @file_get_contents(dirname(__DIR__) . '/.env.example');
+check('config: .env.example documents the workflows API switch', str_contains($envExample, 'WORKFLOWS_API_ENABLED=false'), '');
+check('config: .env.example documents the workflows API key', str_contains($envExample, 'WORKFLOWS_API_TOKEN='), '');
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));

@@ -98,6 +98,8 @@ if (!$keepServer) {
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
     putenv('PUBLIC_API_ENABLED=true');
     putenv('PUBLIC_API_TOKEN=test-public-token');
+    putenv('WORKFLOWS_API_ENABLED=true');
+    putenv('WORKFLOWS_API_TOKEN=test-workflows-token');
 
     // The child `php -S` server inherits the current PHP configuration (its
     // php.ini / loaded extensions). We deliberately do NOT add `-d extension=`
@@ -147,9 +149,10 @@ function section(string $title): void
 /** @var array<string, string> session cookie jar shared by all requests */
 $GLOBALS['memorydown_cookies'] = [];
 
-function request(string $method, string $path, array $headers = [], ?string $body = null): array
+function request(string $method, string $path, array $headers = [], ?string $body = null, ?string $baseUrl = null): array
 {
     global $base;
+    $baseUrl ??= $base;
     $headerLines = [];
     foreach ($headers as $k => $v) {
         $headerLines[] = "{$k}: {$v}";
@@ -169,7 +172,7 @@ function request(string $method, string $path, array $headers = [], ?string $bod
         'timeout' => 30,
         'follow_location' => 0,
     ]]);
-    $raw = file_get_contents($base . $path, false, $ctx);
+    $raw = file_get_contents($baseUrl . $path, false, $ctx);
     $parsedHeaders = [];
     $status = 0;
     foreach ($http_response_header ?? [] as $line) {
@@ -1323,6 +1326,202 @@ $pubRaw = is_file($tmp . '/memory/writings/' . $pubId . '.md') ? (string) file_g
 check('unpublish -> public frontmatter removed', !str_contains($pubRaw, 'public:'), $pubRaw);
 $r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
 check('unpublish -> no longer served', 404 === $r['status'], (string) $r['status']);
+
+/* ------------------------------------------------------------------ *
+ * 12. Workflows API (/api/workflows) — read-only, token-gated
+ * ------------------------------------------------------------------ */
+
+section('Workflows API');
+
+$wfAuth = ['Authorization' => 'Bearer test-workflows-token'];
+
+// What the API serves: a definition the user authorised (the tag), and the plain
+// note that lives beside it in the same category.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows',
+    'title' => 'API workflow',
+    'tags' => ['executable', 'avtomatizacija'],
+    'content' => "```yaml\nmode: dry-run\nschedule: \"0 7 * * *\"\ntimezone: Europe/Ljubljana\n```\n\nPreglej posto.\n",
+]));
+$apiWfId = jsonBody($r['body'])['memory']['id'] ?? '';
+$apiWfFile = $tmp . '/memory/workflows/' . $apiWfId . '.md';
+$apiWfBefore = is_file($apiWfFile) ? (string) file_get_contents($apiWfFile) : '';
+check('workflows API: definition created', 200 === $r['status'] && '' !== $apiWfId, $r['body']);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => 'API note', 'tags' => ['proces'], 'content' => 'Samo zapisek o postopku.',
+]));
+$apiNoteId = jsonBody($r['body'])['memory']['id'] ?? '';
+check('workflows API: note created', 200 === $r['status'] && '' !== $apiNoteId, $r['body']);
+
+// Authentication first: no token, a wrong token, and the challenge itself.
+$r = request('GET', '/api/workflows');
+check('workflows API list -> 401 without a token', 401 === $r['status'], (string) $r['status']);
+check(
+    'workflows API list -> 401 carries the bearer challenge',
+    str_contains(strtolower($r['headers']['www-authenticate'] ?? ''), 'bearer realm="memorydown workflows"'),
+    json_encode($r['headers'])
+);
+$r = request('GET', '/api/workflows', ['Authorization' => 'Bearer wrong-token']);
+check('workflows API list -> 401 with a wrong token', 401 === $r['status'], (string) $r['status']);
+$r = request('GET', '/api/workflows', ['Authorization' => 'test-workflows-token']);
+check('workflows API list -> 401 without the Bearer scheme', 401 === $r['status'], (string) $r['status']);
+
+$r = request('GET', '/api/workflows', $wfAuth);
+$wfList = jsonBody($r['body']);
+$wfById = [];
+foreach (($wfList['workflows'] ?? []) as $entry) {
+    $wfById[$entry['id'] ?? ''] = $entry;
+}
+check('workflows API list -> 200 with the token', 200 === $r['status'], (string) $r['status']);
+check(
+    'workflows API list -> envelope matches the writings API',
+    isset($wfList['count'], $wfList['total'], $wfList['has_more'], $wfList['limit'], $wfList['offset'], $wfList['workflows']),
+    $r['body']
+);
+check(
+    'workflows API list -> the definition is flagged executable',
+    true === ($wfById[$apiWfId]['executable'] ?? null),
+    $r['body']
+);
+check(
+    'workflows API list -> the note is present and flagged unexecutable',
+    false === ($wfById[$apiNoteId]['executable'] ?? null),
+    $r['body']
+);
+check('workflows API list -> another category is unreachable', !isset($wfById[$factId]), $r['body']);
+check(
+    'workflows API list -> the list carries no body',
+    !array_key_exists('markdown', $wfById[$apiWfId] ?? [])
+    && !array_key_exists('path', $wfById[$apiWfId] ?? [])
+    && !array_key_exists('source', $wfById[$apiWfId] ?? []),
+    $r['body']
+);
+
+$r = request('GET', '/api/workflows?executable=true', $wfAuth);
+$ids = array_column(jsonBody($r['body'])['workflows'] ?? [], 'id');
+check(
+    'workflows API list -> executable=true is the runner query',
+    in_array($apiWfId, $ids, true) && !in_array($apiNoteId, $ids, true) && !in_array($factId, $ids, true),
+    $r['body']
+);
+$r = request('GET', '/api/workflows?executable=false', $wfAuth);
+$ids = array_column(jsonBody($r['body'])['workflows'] ?? [], 'id');
+check('workflows API list -> executable=false is its complement', in_array($apiNoteId, $ids, true) && !in_array($apiWfId, $ids, true), $r['body']);
+
+$r = request('GET', '/api/workflows?limit=1&offset=0', $wfAuth);
+$onePage = jsonBody($r['body']);
+check(
+    'workflows API list -> paging',
+    1 === count($onePage['workflows'] ?? []) && 1 === ($onePage['limit'] ?? 0) && 0 === ($onePage['offset'] ?? -1) && true === ($onePage['has_more'] ?? null),
+    $r['body']
+);
+
+$etag = $r['headers']['etag'] ?? '';
+check('workflows API list -> ETag present', '' !== $etag);
+$r = request('GET', '/api/workflows?limit=1&offset=0', $wfAuth + ['If-None-Match' => $etag]);
+check('workflows API list -> 304 on a matching ETag', 304 === $r['status'], (string) $r['status']);
+
+// One definition, in full: the body as stored, plus the parsed convenience view.
+$r = request('GET', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth);
+$apiWfDoc = jsonBody($r['body'])['workflow'] ?? [];
+check('workflows API get -> 200', 200 === $r['status'], (string) $r['status']);
+check(
+    'workflows API get -> returns the whole body, block and instructions',
+    str_starts_with((string) ($apiWfDoc['markdown'] ?? ''), "```yaml\n")
+    && str_contains((string) ($apiWfDoc['markdown'] ?? ''), 'Preglej posto.'),
+    $r['body']
+);
+check(
+    'workflows API get -> returns the parsed configuration',
+    'dry-run' === ($apiWfDoc['config']['mode'] ?? null) && '0 7 * * *' === ($apiWfDoc['config']['schedule'] ?? null),
+    $r['body']
+);
+check('workflows API get -> returns the instructions', 'Preglej posto.' === trim((string) ($apiWfDoc['instructions'] ?? '')), $r['body']);
+check('workflows API get -> reports the authorisation', true === ($apiWfDoc['executable'] ?? null), $r['body']);
+check(
+    'workflows API get -> no internal fields',
+    !array_key_exists('path', $apiWfDoc) && !array_key_exists('source', $apiWfDoc),
+    $r['body']
+);
+
+$r = request('GET', '/api/workflows/' . rawurlencode($apiNoteId), $wfAuth);
+check(
+    'workflows API get -> a plain note is readable, unexecutable',
+    200 === $r['status'] && false === (jsonBody($r['body'])['workflow']['executable'] ?? null),
+    $r['body']
+);
+
+$r = request('GET', '/api/workflows/does-not-exist', $wfAuth);
+check('workflows API get -> unknown id 404', 404 === $r['status'], (string) $r['status']);
+$r = request('GET', '/api/workflows/' . rawurlencode($factId), $wfAuth);
+check('workflows API get -> another category 404', 404 === $r['status'], (string) $r['status']);
+$r = request('GET', '/api/workflows/..%2F..%2F.env', $wfAuth);
+check('workflows API get -> traversal 404', 404 === $r['status'], (string) $r['status']);
+
+// Read-only by construction: only GET is routed, so there is nothing to write
+// with, and the definition on disk is untouched by any of the above.
+$r = request('POST', '/api/workflows', $wfAuth, json_encode(['id' => $apiWfId, 'tags' => []]));
+check('workflows API -> POST is not routed', 404 === $r['status'], (string) $r['status']);
+$r = request('DELETE', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth);
+check('workflows API -> DELETE is not routed', 404 === $r['status'], (string) $r['status']);
+$r = request('PUT', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth, '{}');
+check('workflows API -> PUT is not routed', 404 === $r['status'], (string) $r['status']);
+check('workflows API -> nothing was written', $apiWfBefore === (string) @file_get_contents($apiWfFile), 'file');
+
+// Two configurations that must never serve a definition: disabled (the default),
+// and enabled without a key (fail closed). Each needs its own server, because the
+// configuration comes from the environment the process started with.
+$wfGuards = [
+    'disabled' => ['WORKFLOWS_API_ENABLED' => 'false', 'WORKFLOWS_API_TOKEN' => 'test-workflows-token', 'status' => 404],
+    'enabled without a key' => ['WORKFLOWS_API_ENABLED' => 'true', 'WORKFLOWS_API_TOKEN' => '', 'status' => 503],
+];
+foreach ($wfGuards as $wfGuardLabel => $wfGuard) {
+    $offProbe = @stream_socket_server('tcp://127.0.0.1:0', $offErrno, $offErrstr);
+    if (false === $offProbe) {
+        check("workflows API {$wfGuardLabel} -> a server could be started", false, $offErrstr);
+        continue;
+    }
+    $offName = (string) stream_socket_get_name($offProbe, false);
+    $offPort = (int) substr($offName, strrpos($offName, ':') + 1);
+    fclose($offProbe);
+    $offBase = 'http://127.0.0.1:' . $offPort;
+
+    $wfRestore = [];
+    foreach ($wfGuard as $wfKey => $wfValue) {
+        $wfRestore[$wfKey] = (string) getenv($wfKey);
+        putenv($wfKey . '=' . $wfValue);
+    }
+    $offProc = proc_open(
+        [$phpBin, '-S', '127.0.0.1:' . $offPort, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php'],
+        [1 => ['file', $tmp . '/off.out.log', 'w'], 2 => ['file', $tmp . '/off.err.log', 'w']],
+        $offPipes,
+        dirname(__DIR__)
+    );
+    foreach ($wfRestore as $wfKey => $wfValue) {
+        putenv($wfKey . '=' . $wfValue);
+    }
+    if (!is_resource($offProc)) {
+        check("workflows API {$wfGuardLabel} -> a server could be started", false, 'proc_open failed');
+        continue;
+    }
+
+    waitForServer($offBase);
+    $r = request('GET', '/api/workflows', $wfAuth, null, $offBase);
+    check(
+        "workflows API {$wfGuardLabel} -> the list route answers {$wfGuard['status']}",
+        $wfGuard['status'] === $r['status'],
+        (string) $r['status']
+    );
+    $r = request('GET', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth, null, $offBase);
+    check(
+        "workflows API {$wfGuardLabel} -> no definition leaks through the detail route",
+        $wfGuard['status'] === $r['status'],
+        (string) $r['status']
+    );
+    proc_terminate($offProc);
+    proc_close($offProc);
+}
 
 section('MCP: writings is read-only');
 

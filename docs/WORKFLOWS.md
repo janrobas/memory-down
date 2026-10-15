@@ -39,6 +39,19 @@ definicijo: **navodila v naravnem jeziku niso dovoljenje za izvajanje.**
 | navodila | **telo** dokumenta, v naravnem jeziku | isto |
 | kdaj se je izvedlo, kaj je bilo predlagano/odobreno | SQLite izvajalca | izvajalec |
 
+Definicije se berejo na tri načine — vsi trije berejo iste Markdown datoteke, noben
+ni drugi vir resnice:
+
+1. neposredno z diska (če izvajalec teče ob datotekah),
+2. prek MCP (`list_memory`, `read_memory`),
+3. prek **izklopljenega po privzetku, žetonsko zaščitenega API-ja**
+   `GET /api/workflows[/{id}]` (glej `README.md`), če izvajalec nima dostopa do
+   datotek.
+
+Branje definicije **ne avtorizira ničesar**: izvajalec mora pogoje iz razdelka 8
+preveriti sam, ne glede na to, od kod je definicijo dobil. API ne vrača verdikta,
+ker verdikt ni njegova odločitev.
+
 **Zakaj je konfiguracija v telesu in ne v frontmatterju?** Ker MemoryDown ob
 vsakem pisanju sestavi frontmatter na novo iz fiksnega seznama ključev
 (`type`, `tags`, `created`, `updated`, `source`, `id`, `archived`, `public`) in
@@ -386,7 +399,8 @@ jo nato spremeni v admin UI. Ta korak je zadnja odprta točka tega standarda.
 
 **Kdo kaj uveljavlja:** oznako in kategorijo uveljavlja MemoryDown (to je meja
 zaupanja, razdelek 5). Vse ostalo iz razdelka 8 uveljavlja šele izvajalec;
-preverjanje v admin UI je informacija za uporabnika, ne varovalka.
+preverjanje v admin UI je informacija za uporabnika, ne varovalka. Enako velja za
+branje prek API-ja: dostop do definicije ni dovoljenje za izvedbo.
 
 ---
 

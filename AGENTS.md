@@ -681,6 +681,15 @@ the constraints that follow. The rest of the list still stands.
   via MCP, so an agent cannot publish on the user's behalf. No rendering, no
   comments, no multi-user: the consuming website owns display.
 
+- **A read-only workflows API** (`/api/workflows`) is in scope on the same terms,
+  for the other direction: a runner that cannot read the filesystem fetches the
+  definitions over HTTP. `WORKFLOWS_API_ENABLED` (default `false`) and its own
+  `WORKFLOWS_API_TOKEN`; it serves the `workflows` category only, as JSON with the
+  stored Markdown body, reports the `executable` flag and nothing about whether a
+  definition may run. Only `GET` is routed, so there is nothing to write with —
+  it is a second way to *read* the same Markdown, never a second source of truth,
+  and reading a definition authorises nothing.
+
 - **A recoverable trash and a backup download** are in scope, under the same
   constraint that Markdown stays canonical. A delete moves the file to
   `memory/.trash/` (restorable in the admin UI, purgeable there, never part of

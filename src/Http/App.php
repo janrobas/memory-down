@@ -29,6 +29,7 @@ use Psr\Log\LoggerInterface;
  *   POST /, GET /                                     MCP at the base URL too
  *   GET  /                                             landing page for humans
  *   GET  /public/writings[/{id}]                       published writings (bearer)
+ *   GET  /api/workflows[/{id}]                         workflow definitions (bearer)
  *
  * ChatGPT may probe the base URL instead of /mcp, so the MCP endpoint is
  * mounted at both paths.
@@ -89,6 +90,7 @@ final class App
                 '/' === $path && 'GET' === $method && $this->wantsEventStream($request) => McpServerFactory::run($request),
                 '/' === $path && 'GET' === $method => $this->landingPage(),
                 ('/public/writings' === $path || str_starts_with($path, '/public/writings/')) && 'GET' === $method => $this->publicWritings($request, $path),
+                ('/api/workflows' === $path || str_starts_with($path, '/api/workflows/')) && 'GET' === $method => $this->workflowsApi($request, $path),
                 default => $this->notFound(),
             };
         } catch (\Throwable $e) {
@@ -299,7 +301,7 @@ final class App
         if ('/public/writings' === $path) {
             $query = $request->getQueryParams();
 
-            return $this->publicJson($request, $publications->list(
+            return $this->apiJson($request, $publications->list(
                 (int) ($query['limit'] ?? 50),
                 (int) ($query['offset'] ?? 0),
             ));
@@ -310,7 +312,51 @@ final class App
             return $this->json(['error' => 'not_found'], 404);
         }
 
-        return $this->publicJson($request, ['writing' => $writing]);
+        return $this->apiJson($request, ['writing' => $writing]);
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  Workflows API (read-only, token-gated)
+     * ------------------------------------------------------------------ */
+
+    private function workflowsApi(ServerRequestInterface $request, string $path): ResponseInterface
+    {
+        if (!$this->config->workflowsApiEnabled) {
+            return $this->notFound();
+        }
+
+        $token = $this->config->workflowsApiToken;
+        if ('' === $token) {
+            // Enabled but no token: fail closed rather than serving definitions
+            // — instructions and allowed_tools — to anyone who asks.
+            $this->logger->error('workflows_api.misconfigured', ['reason' => 'empty_token']);
+
+            return $this->json(['error' => 'not_configured'], 503);
+        }
+        if (!$this->bearerMatches($request, $token)) {
+            return $this->json(['error' => 'unauthorized'], 401)
+                ->withHeader('WWW-Authenticate', 'Bearer realm="MemoryDown workflows"');
+        }
+
+        $catalog = new \MemoryDown\Workflows\WorkflowCatalog(Kernel::get()->memory);
+
+        if ('/api/workflows' === $path) {
+            $query = $request->getQueryParams();
+            $executable = $query['executable'] ?? null;
+
+            return $this->apiJson($request, $catalog->list(
+                (int) ($query['limit'] ?? 50),
+                (int) ($query['offset'] ?? 0),
+                null === $executable ? null : filter_var($executable, FILTER_VALIDATE_BOOL),
+            ));
+        }
+
+        $workflow = $catalog->get(substr($path, strlen('/api/workflows/')));
+        if (null === $workflow) {
+            return $this->json(['error' => 'not_found'], 404);
+        }
+
+        return $this->apiJson($request, ['workflow' => $workflow]);
     }
 
     /**
@@ -326,13 +372,13 @@ final class App
     }
 
     /**
-     * JSON reply for the public API with cache revalidation: an ETag over the
-     * exact body, a "private" cache directive (the token is per-client), and a
-     * 304 when the caller already holds this representation.
+     * JSON reply for the read-only APIs with cache revalidation: an ETag over
+     * the exact body, a "private" cache directive (the token is per-client), and
+     * a 304 when the caller already holds this representation.
      *
      * @param array<string, mixed> $data
      */
-    private function publicJson(ServerRequestInterface $request, array $data): ResponseInterface
+    private function apiJson(ServerRequestInterface $request, array $data): ResponseInterface
     {
         $body = (string) json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
         $etag = '"' . md5($body) . '"';
