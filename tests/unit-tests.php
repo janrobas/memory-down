@@ -137,8 +137,18 @@ check('human-only: a missing tags value yields nothing', '' === PathValidator::h
 check('human-only: a non-array tags value yields nothing', '' === PathValidator::humanOnlyTag('executable'));
 check('human-only: a nested value yields nothing', '' === PathValidator::humanOnlyTag([['executable']]));
 // The guard must not accidentally reserve a category, nor the other way round.
+// Note that isCategory() answers "is this a legal directory name" (a slug
+// check), not "is this a built-in category" — "executable" is a perfectly valid
+// slug. What must hold is that the reservation and the category set stay
+// disjoint, in both directions.
 check('human-only: no category is a reserved tag', !PathValidator::isHumanOnlyTag('writings'));
-check('human-only: the reserved tag is not a category', !PathValidator::isCategory('executable'));
+check('human-only: the reserved tag is not a built-in category', !in_array('executable', PathValidator::DEFAULT_CATEGORIES, true));
+check(
+    'human-only: no built-in category is a reserved tag',
+    [] === array_intersect(PathValidator::DEFAULT_CATEGORIES, PathValidator::HUMAN_ONLY_TAGS),
+    json_encode(array_values(array_intersect(PathValidator::DEFAULT_CATEGORIES, PathValidator::HUMAN_ONLY_TAGS)))
+);
+check('human-only: the reserved tag is not a write-protected category', !PathValidator::isWriteProtectedCategory('executable'));
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
