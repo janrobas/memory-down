@@ -94,7 +94,8 @@ timezone: Europe/Ljubljana
 mode: dry-run
 
 # Katera orodja sme klicati. Kar ni na seznamu, izvajalec zavrne. Brez seznama
-# sme le brati.
+# sme le brati. Namesto id-jev lahko vpišeš * (vsa orodja vseh strežnikov) ali
+# calendar.* (vsa orodja enega strežnika).
 allowed_tools:
   - memory.search_memory
   - memory.read_memory
