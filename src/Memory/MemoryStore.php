@@ -18,11 +18,62 @@ final class MemoryStore
 {
     private const SOURCE = 'chatgpt';
 
+    /**
+     * Written into a memory root that does not have one yet, so the directory
+     * explains itself to whoever opens it in Obsidian, VS Code or a file
+     * manager. It sits at the root, not inside a category, which is exactly the
+     * kind of file {@see collectFiles()} ignores: it is documentation, never an
+     * entry, and it can be edited or deleted freely.
+     */
+    private const README = <<<'MD'
+    # Memory directory
+
+    This directory IS the memory store: Markdown files are the source of truth for
+    MemoryDown. Keep it portable — it can be opened in Obsidian, VS Code, Codex or
+    any text editor.
+
+    Layout:
+
+        memory/
+          preferences/   durable user preferences
+          projects/      ongoing project context
+          decisions/     decisions and their reasoning
+          workflows/     recurring processes, procedures and habits
+          ideas/         thoughts, proposals or possibilities
+          references/    durable pointers to links, systems, docs, configs
+          goals/         things the user wants to achieve
+          facts/         general durable facts
+          people/        information about people
+          context/       long-term situational context
+          notes/         catch-all for anything else
+          writings/      published posts — read-only through MCP, edited in the admin UI
+          .trash/        deleted entries — restorable from the admin UI, ignored by
+                         search and every tool; safe to empty by hand
+
+    Each entry is `{category}/{slug-id}.md` with simple frontmatter:
+
+        ---
+        type: facts
+        tags:
+          - example
+        created: 2026-08-27T09:15:00Z
+        updated: 2026-08-27T14:32:05Z
+        source: chatgpt
+        id: example-abc123
+        ---
+
+        # Title
+
+        Body as Markdown.
+
+    Edit freely: MemoryDown reads whatever it finds. Entries without frontmatter
+    are treated as plain Markdown.
+    MD;
+
     private PathValidator $paths;
 
     public function __construct(
         string $memoryRoot,
-        private readonly string $authDataDir,
         private readonly LoggerInterface $logger = new \Psr\Log\NullLogger(),
     ) {
         $this->paths = new PathValidator($memoryRoot);
@@ -49,6 +100,13 @@ final class MemoryStore
         $trash = $this->paths->trashDir();
         if (null !== $trash && !is_dir($trash)) {
             @mkdir($trash, 0775, true);
+        }
+
+        $readme = $this->paths->root() . DIRECTORY_SEPARATOR . 'README.md';
+        if (!is_file($readme)) {
+            // Best effort: a read-only memory root must still be usable, and
+            // the README is a courtesy, never a requirement.
+            @file_put_contents($readme, self::README . "\n");
         }
     }
 

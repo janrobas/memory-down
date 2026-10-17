@@ -104,6 +104,12 @@
       body: options.body ? JSON.stringify(options.body) : undefined,
       credentials: 'same-origin'
     }).then(function (res) {
+      // The session expired (or was signed out) while this page was open: every
+      // /ui/api/* call is authenticated now, so go and sign in again instead of
+      // leaving the page quietly doing nothing.
+      if (res.status === 401) {
+        window.location.href = '/ui/login';
+      }
       return res.json().catch(function () { return {}; }).then(function (data) {
         return { ok: res.ok, status: res.status, data: data };
       });

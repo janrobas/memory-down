@@ -42,7 +42,13 @@ foreach (array_slice($argv, 1) as $arg) {
 // still-running) server colliding with this one.
 $tmp = sys_get_temp_dir() . '/memorydown-e2e-' . getmypid() . '-' . bin2hex(random_bytes(3));
 $GLOBALS['tmp'] = $tmp;
-mkdir($tmp . '/memory', 0775, true);
+// The single-user memory directory this instance is upgraded from. Boot seeds
+// the first account from the environment and adopts the corpus in it.
+$legacyMemory = $tmp . '/memory';
+// Where an account's memory actually lives once accounts exist. The seeded
+// admin is "test-user", so that is where every fixture below has to look.
+$memoryRoot = $tmp . '/users/test-user/memory';
+mkdir($legacyMemory, 0775, true);
 mkdir($tmp . '/logs', 0775, true);
 
 $phpBin = PHP_BINARY;
@@ -91,15 +97,14 @@ if (!$keepServer) {
     putenv('APP_BASE_URL=' . $base);
     putenv('APP_ENV=testing');
     putenv('DATA_PATH=' . $tmp);
-    putenv('MEMORY_PATH=' . $tmp . '/memory');
+    putenv('MEMORY_PATH=' . $legacyMemory);
     putenv('LOG_PATH=' . $tmp . '/logs');
+    // One credential per person: this username + password are BOTH the admin UI
+    // login and the OAuth consent login of the seeded admin.
     putenv('OAUTH_USERNAME=test-user');
-    putenv('OAUTH_CONSENT_PASSWORD=' . password_hash('test-password', PASSWORD_DEFAULT));
-    putenv('ADMIN_PASSWORD_HASH=' . password_hash('secret123', PASSWORD_DEFAULT));
+    putenv('ADMIN_PASSWORD_HASH=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('PUBLIC_API_ENABLED=true');
-    putenv('PUBLIC_API_TOKEN=test-public-token');
     putenv('WORKFLOWS_API_ENABLED=true');
-    putenv('WORKFLOWS_API_TOKEN=test-workflows-token');
 
     // The child `php -S` server inherits the current PHP configuration (its
     // php.ini / loaded extensions). We deliberately do NOT add `-d extension=`
@@ -476,15 +481,15 @@ $r = request('GET', '/oauth/authorize?' . http_build_query([
 check('authorize: mismatched redirect_uri rejected', 400 === $r['status']);
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
-    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'consent_password' => 'wrong-password']));
+    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'password' => 'wrong-password']));
 check('authorize: wrong consent password denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
-    http_build_query(['decision' => 'allow', 'username' => 'wrong-user', 'consent_password' => 'test-password']));
+    http_build_query(['decision' => 'allow', 'username' => 'wrong-user', 'password' => 'test-password']));
 check('authorize: wrong username denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
-    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'consent_password' => 'test-password']));
+    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'password' => 'test-password']));
 $location = $r['headers']['location'] ?? '';
 check('authorize: approved -> 302 redirect', 302 === $r['status'], $location);
 check('authorize: code in redirect', str_contains($location, 'code='));
@@ -619,7 +624,7 @@ $remembered = toolResult($res);
 check('remember -> created', 'created' === ($remembered['action'] ?? ''), json_encode($remembered));
 $memId = $remembered['memory']['id'] ?? '';
 check('remember -> id returned', '' !== $memId);
-$mdFile = $tmp . '/memory/preferences/' . $memId . '.md';
+$mdFile = $memoryRoot . '/preferences/' . $memId . '.md';
 check('remember -> Markdown file exists', is_file($mdFile), $mdFile);
 $mdRaw = is_file($mdFile) ? (string) file_get_contents($mdFile) : '';
 check('remember -> frontmatter written', str_starts_with($mdRaw, "---\n"));
@@ -718,7 +723,7 @@ $r = request('POST', '/mcp', array_replace($modernHeaders, ['Mcp-Method' => 'too
 $modernRes = jsonBody($r['body']);
 check('modern tools/call remember -> ok', false === ($modernRes['result']['isError'] ?? true), $r['body']);
 $modernId = toolResult($modernRes)['memory']['id'] ?? '';
-check('modern remember -> file created', is_file($tmp . '/memory/context/' . $modernId . '.md'));
+check('modern remember -> file created', is_file($memoryRoot . '/context/' . $modernId . '.md'));
 
 $r = request('POST', '/mcp', array_replace($modernHeaders, ['Mcp-Method' => 'tools/call', 'Mcp-Name' => 'search_memory']), json_encode([
     'jsonrpc' => '2.0', 'id' => 13, 'method' => 'tools/call',
@@ -800,14 +805,20 @@ preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $m);
 $adminCsrf = $m[1] ?? '';
 check('admin login page exposes csrf token', '' !== $adminCsrf);
 
-$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'password' => 'wrong-password']));
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'username' => 'test-user', 'password' => 'wrong-password']));
 check('admin login wrong password -> 401', 401 === $r['status'], (string) $r['status']);
 
-$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['password' => 'secret123']));
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['username' => 'test-user', 'password' => 'test-password']));
 check('admin login missing csrf -> 400', 400 === $r['status'], (string) $r['status']);
 
-$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'password' => 'secret123']));
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'username' => 'nobody', 'password' => 'test-password']));
+check('admin login unknown user -> 401', 401 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/ui/login', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $adminCsrf, 'username' => 'test-user', 'password' => 'test-password']));
 check('admin login -> 302 to /ui', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui'), (string) $r['status']);
+
+// The UI and the OAuth consent page accept the same credential: the password
+// typed here is the one the consent form below takes.
 
 $r = request('GET', '/ui');
 check('GET /ui authenticated -> 200 shell', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
@@ -831,6 +842,30 @@ check('admin CSP allows self-hosted scripts', str_contains($r['headers']['conten
 preg_match('/data-csrf="([^"]+)"/', $r['body'], $m);
 $apiCsrf = $m[1] ?? '';
 check('admin shell exposes csrf token', '' !== $apiCsrf);
+check(
+    'admin shell -> offers settings, and users to an admin',
+    str_contains($r['body'], 'href="/ui/settings"') && str_contains($r['body'], 'href="/ui/users"'),
+    ''
+);
+
+// API tokens are per account now, and only the admin UI mints them. Mint both
+// here; /ui/settings deliberately shows a token again (so it can be copied),
+// which is also how these tests get the value to use.
+$r = request('POST', '/ui/settings/token', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf, 'kind' => 'writings', 'action' => 'rotate']));
+check('settings: rotate writings token -> 302', 302 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/settings/token', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf, 'kind' => 'workflows', 'action' => 'rotate']));
+check('settings: rotate workflows token -> 302', 302 === $r['status'], (string) $r['status']);
+
+$r = request('GET', '/ui/settings');
+check('settings: page renders', 200 === $r['status'] && str_contains($r['body'], 'API tokens'), (string) $r['status']);
+check('settings: the token is revealed on demand', str_contains($r['body'], 'Show token'), '');
+
+$usersRaw = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+$publicToken = (string) ($usersRaw['test-user']['tokens']['writings'] ?? '');
+$workflowsToken = (string) ($usersRaw['test-user']['tokens']['workflows'] ?? '');
+check('settings: writings token stored for this account', '' !== $publicToken);
+check('settings: workflows token stored for this account', '' !== $workflowsToken);
+check('settings: the stored token is the one the page shows', '' !== $publicToken && str_contains($r['body'], $publicToken), '');
 
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'preferences',
@@ -841,7 +876,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 $created = jsonBody($r['body']);
 $adminId = $created['memory']['id'] ?? '';
 check('admin API create -> 200 + id', 200 === $r['status'] && '' !== $adminId, $r['body']);
-$adminFile = $tmp . '/memory/preferences/' . $adminId . '.md';
+$adminFile = $memoryRoot . '/preferences/' . $adminId . '.md';
 check('admin API create -> Markdown file written', is_file($adminFile), $adminFile);
 
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json'], json_encode(['category' => 'facts', 'content' => 'no csrf']));
@@ -888,7 +923,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'category' => 'notes', 'title' => 'Sort old', 'content' => 'old sort probe',
 ]));
 $sortOldId = jsonBody($r['body'])['memory']['id'] ?? '';
-backdateMemory($tmp . '/memory/notes/' . $sortOldId . '.md', 3 * 86400);
+backdateMemory($memoryRoot . '/notes/' . $sortOldId . '.md', 3 * 86400);
 
 $r = request('GET', '/ui/api/tree');
 $notesOrder = [];
@@ -950,7 +985,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 ]));
 $moved = jsonBody($r['body']);
 check('admin API move -> category updated', 'projects' === ($moved['memory']['category'] ?? ''), $r['body']);
-$movedFile = $tmp . '/memory/projects/' . $adminId . '.md';
+$movedFile = $memoryRoot . '/projects/' . $adminId . '.md';
 clearstatcache(true, $adminFile);
 check('admin API move -> file relocated on disk', is_file($movedFile) && !is_file($adminFile), $movedFile);
 check('admin API move -> old location gone', !is_file($adminFile));
@@ -964,7 +999,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 $inCat = jsonBody($r['body']);
 $inCatId = $inCat['memory']['id'] ?? '';
 check('admin API new-in-category -> created in people', 'people' === ($inCat['memory']['category'] ?? ''), $r['body']);
-check('admin API new-in-category -> file in people', '' !== $inCatId && is_file($tmp . '/memory/people/' . $inCatId . '.md'));
+check('admin API new-in-category -> file in people', '' !== $inCatId && is_file($memoryRoot . '/people/' . $inCatId . '.md'));
 
 // Clean up the extra entry.
 request('DELETE', '/ui/api/memory?category=people&id=' . rawurlencode($inCatId), ['X-CSRF-Token' => $apiCsrf]);
@@ -978,13 +1013,13 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 $note = jsonBody($r['body']);
 $noteId = $note['memory']['id'] ?? '';
 check('admin API notes category -> created', 'notes' === ($note['memory']['category'] ?? ''), $r['body']);
-check('admin API notes category -> file in notes/', '' !== $noteId && is_file($tmp . '/memory/notes/' . $noteId . '.md'));
+check('admin API notes category -> file in notes/', '' !== $noteId && is_file($memoryRoot . '/notes/' . $noteId . '.md'));
 if ('' !== $noteId) {
     request('DELETE', '/ui/api/memory?category=notes&id=' . rawurlencode($noteId), ['X-CSRF-Token' => $apiCsrf]);
 }
 
 // The "workflows" category is a built-in default and usable.
-check('workflows category dir auto-created', is_dir($tmp . '/memory/workflows'));
+check('workflows category dir auto-created', is_dir($memoryRoot . '/workflows'));
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'workflows',
     'title' => 'Release process',
@@ -993,7 +1028,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 $wf = jsonBody($r['body']);
 $wfId = $wf['memory']['id'] ?? '';
 check('admin API workflows category -> created', 'workflows' === ($wf['memory']['category'] ?? ''), $r['body']);
-check('admin API workflows category -> file in workflows/', '' !== $wfId && is_file($tmp . '/memory/workflows/' . $wfId . '.md'));
+check('admin API workflows category -> file in workflows/', '' !== $wfId && is_file($memoryRoot . '/workflows/' . $wfId . '.md'));
 if ('' !== $wfId) {
     request('DELETE', '/ui/api/memory?category=workflows&id=' . rawurlencode($wfId), ['X-CSRF-Token' => $apiCsrf]);
 }
@@ -1019,7 +1054,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 ]));
 $h1doc = jsonBody($r['body']);
 $h1id = $h1doc['memory']['id'] ?? '';
-$h1raw = '' !== $h1id ? (string) @file_get_contents($tmp . '/memory/context/' . $h1id . '.md') : '';
+$h1raw = '' !== $h1id ? (string) @file_get_contents($memoryRoot . '/context/' . $h1id . '.md') : '';
 check('H1: title heading written once', 1 === preg_match_all('/^#\s+Heading test$/m', $h1raw), $h1raw);
 
 // Round-trip: the body returned by the API must not contain the title H1, so
@@ -1037,12 +1072,12 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 ]));
 $round = jsonBody($r['body']);
 check('H1: round-trip rename -> ok', 200 === $r['status'], $r['body']);
-$roundRaw = (string) @file_get_contents($tmp . '/memory/context/' . $h1id . '.md');
+$roundRaw = (string) @file_get_contents($memoryRoot . '/context/' . $h1id . '.md');
 check('H1: rename leaves exactly one H1', 1 === preg_match_all('/^#\s+/m', $roundRaw), $roundRaw);
 check('H1: rename applied', str_contains($roundRaw, '# Heading test renamed'));
 
 // A pre-corrupted file (several leading H1s) heals to one H1 on save.
-$corrupt = $tmp . '/memory/context/' . $h1id . '.md';
+$corrupt = $memoryRoot . '/context/' . $h1id . '.md';
 file_put_contents($corrupt, "---\ntype: context\nid: {$h1id}\n---\n\n# A\n\n# A\n\n# A\n\nBody.\n");
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'id' => $h1id, 'category' => 'context', 'title' => 'A', 'tags' => '', 'content' => 'Body.',
@@ -1060,7 +1095,7 @@ check('health -> reports search index engine', in_array($index['engine'] ?? '', 
 
 // Externally dropped file (e.g. via FTP) is picked up after a search triggers
 // an index refresh.
-$dropped = $tmp . '/memory/context/dropped-by-ftp.md';
+$dropped = $memoryRoot . '/context/dropped-by-ftp.md';
 @mkdir(dirname($dropped), 0775, true);
 file_put_contents($dropped, "# Dropped by FTP\n\nA memory placed directly on disk.\n");
 $r = request('GET', '/ui/api/search?q=' . rawurlencode('dropped ftp'));
@@ -1109,7 +1144,7 @@ $archId = $archDoc['memory']['id'] ?? '';
 check('archive: archived memory created', 200 === $r['status'] && '' !== $archId, $r['body']);
 check('archive: archived flag returned', true === ($archDoc['memory']['archived'] ?? false), $r['body']);
 
-$archFile = $tmp . '/memory/facts/' . $archId . '.md';
+$archFile = $memoryRoot . '/facts/' . $archId . '.md';
 $archRaw = is_file($archFile) ? (string) file_get_contents($archFile) : '';
 check('archive: frontmatter archived: true', str_contains($archRaw, 'archived: true'), $archRaw);
 
@@ -1264,7 +1299,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 ]));
 $factId = jsonBody($r['body'])['memory']['id'] ?? '';
 
-$auth = ['Authorization' => 'Bearer test-public-token'];
+$auth = ['Authorization' => 'Bearer ' . $publicToken];
 
 $r = request('GET', '/public/writings', $auth);
 $pubList = jsonBody($r['body']);
@@ -1322,7 +1357,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'id' => $pubId, 'category' => 'writings', 'title' => 'Public post', 'tags' => ['blog'], 'content' => 'Hello **world**.', 'public' => false,
 ]));
 check('admin API -> writing unpublished', 200 === $r['status'] && false === (jsonBody($r['body'])['memory']['public'] ?? true), $r['body']);
-$pubRaw = is_file($tmp . '/memory/writings/' . $pubId . '.md') ? (string) file_get_contents($tmp . '/memory/writings/' . $pubId . '.md') : '';
+$pubRaw = is_file($memoryRoot . '/writings/' . $pubId . '.md') ? (string) file_get_contents($memoryRoot . '/writings/' . $pubId . '.md') : '';
 check('unpublish -> public frontmatter removed', !str_contains($pubRaw, 'public:'), $pubRaw);
 $r = request('GET', '/public/writings/' . rawurlencode($pubId), $auth);
 check('unpublish -> no longer served', 404 === $r['status'], (string) $r['status']);
@@ -1333,7 +1368,7 @@ check('unpublish -> no longer served', 404 === $r['status'], (string) $r['status
 
 section('Workflows API');
 
-$wfAuth = ['Authorization' => 'Bearer test-workflows-token'];
+$wfAuth = ['Authorization' => 'Bearer ' . $workflowsToken];
 
 // What the API serves: a definition the user authorised (the tag), and the plain
 // note that lives beside it in the same category.
@@ -1344,7 +1379,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'content' => "```yaml\nmode: dry-run\nschedule: \"0 7 * * *\"\ntimezone: Europe/Ljubljana\n```\n\nPreglej posto.\n",
 ]));
 $apiWfId = jsonBody($r['body'])['memory']['id'] ?? '';
-$apiWfFile = $tmp . '/memory/workflows/' . $apiWfId . '.md';
+$apiWfFile = $memoryRoot . '/workflows/' . $apiWfId . '.md';
 $apiWfBefore = is_file($apiWfFile) ? (string) file_get_contents($apiWfFile) : '';
 check('workflows API: definition created', 200 === $r['status'] && '' !== $apiWfId, $r['body']);
 
@@ -1469,12 +1504,13 @@ $r = request('PUT', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth, '{}');
 check('workflows API -> PUT is not routed', 404 === $r['status'], (string) $r['status']);
 check('workflows API -> nothing was written', $apiWfBefore === (string) @file_get_contents($apiWfFile), 'file');
 
-// Two configurations that must never serve a definition: disabled (the default),
-// and enabled without a key (fail closed). Each needs its own server, because the
-// configuration comes from the environment the process started with.
+// Two configurations that must never serve a definition: the endpoint switched
+// off (the default), and a token that belongs to nobody. Each needs its own
+// server, because the configuration comes from the environment the process
+// started with.
 $wfGuards = [
-    'disabled' => ['WORKFLOWS_API_ENABLED' => 'false', 'WORKFLOWS_API_TOKEN' => 'test-workflows-token', 'status' => 404],
-    'enabled without a key' => ['WORKFLOWS_API_ENABLED' => 'true', 'WORKFLOWS_API_TOKEN' => '', 'status' => 503],
+    'disabled' => ['env' => ['WORKFLOWS_API_ENABLED' => 'false'], 'auth' => $wfAuth, 'status' => 404],
+    'no matching token' => ['env' => ['WORKFLOWS_API_ENABLED' => 'true'], 'auth' => ['Authorization' => 'Bearer not-a-real-token'], 'status' => 401],
 ];
 foreach ($wfGuards as $wfGuardLabel => $wfGuard) {
     $offProbe = @stream_socket_server('tcp://127.0.0.1:0', $offErrno, $offErrstr);
@@ -1488,7 +1524,7 @@ foreach ($wfGuards as $wfGuardLabel => $wfGuard) {
     $offBase = 'http://127.0.0.1:' . $offPort;
 
     $wfRestore = [];
-    foreach ($wfGuard as $wfKey => $wfValue) {
+    foreach ($wfGuard['env'] as $wfKey => $wfValue) {
         $wfRestore[$wfKey] = (string) getenv($wfKey);
         putenv($wfKey . '=' . $wfValue);
     }
@@ -1507,13 +1543,13 @@ foreach ($wfGuards as $wfGuardLabel => $wfGuard) {
     }
 
     waitForServer($offBase);
-    $r = request('GET', '/api/workflows', $wfAuth, null, $offBase);
+    $r = request('GET', '/api/workflows', $wfGuard['auth'], null, $offBase);
     check(
         "workflows API {$wfGuardLabel} -> the list route answers {$wfGuard['status']}",
         $wfGuard['status'] === $r['status'],
         (string) $r['status']
     );
-    $r = request('GET', '/api/workflows/' . rawurlencode($apiWfId), $wfAuth, null, $offBase);
+    $r = request('GET', '/api/workflows/' . rawurlencode($apiWfId), $wfGuard['auth'], null, $offBase);
     check(
         "workflows API {$wfGuardLabel} -> no definition leaks through the detail route",
         $wfGuard['status'] === $r['status'],
@@ -1525,7 +1561,7 @@ foreach ($wfGuards as $wfGuardLabel => $wfGuard) {
 
 section('MCP: writings is read-only');
 
-$writingsDir = $tmp . '/memory/writings';
+$writingsDir = $memoryRoot . '/writings';
 $pubFile = $writingsDir . '/' . $pubId . '.md';
 $writingsBefore = mdCount($writingsDir);
 $pubBefore = (string) file_get_contents($pubFile);
@@ -1562,7 +1598,7 @@ $r = request('POST', '/mcp', $session, json_encode([
 check('mcp update_memory -> move into writings rejected', true === ((jsonBody($r['body']))['result']['isError'] ?? false), $r['body']);
 check(
     'mcp update_memory -> nothing moved into writings',
-    $writingsBefore === mdCount($writingsDir) && is_file($tmp . '/memory/facts/' . $factId . '.md'),
+    $writingsBefore === mdCount($writingsDir) && is_file($memoryRoot . '/facts/' . $factId . '.md'),
     (string) mdCount($writingsDir)
 );
 
@@ -1631,7 +1667,7 @@ $wfDoc = jsonBody($r['body'])['memory'] ?? [];
 $wfId = (string) ($wfDoc['id'] ?? '');
 check('admin API -> executable tag accepted', 200 === $r['status'] && in_array('executable', $wfDoc['tags'] ?? [], true), $r['body']);
 
-$wfDir = $tmp . '/memory/workflows';
+$wfDir = $memoryRoot . '/workflows';
 $wfFile = $wfDir . '/' . $wfId . '.md';
 $wfBefore = is_file($wfFile) ? (string) file_get_contents($wfFile) : '';
 $wfCount = mdCount($wfDir);
@@ -1765,13 +1801,13 @@ check(
 
 // The tag is refused outside `workflows`: it is a permission, and a permission
 // attached to a note would claim an authorisation no runner would honour.
-$notesBefore = mdCount($tmp . '/memory/notes');
+$notesBefore = mdCount($memoryRoot . '/notes');
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'notes', 'title' => 'Tag smuggling', 'tags' => ['executable'], 'content' => 'Navodila za nekaj.',
 ]));
 check('admin API -> executable refused outside workflows', 400 === $r['status'], $r['body']);
 check('admin API -> the refusal names the workflows category', str_contains(jsonBody($r['body'])['error'] ?? '', 'workflows'), $r['body']);
-check('admin API -> the refused save wrote nothing', $notesBefore === mdCount($tmp . '/memory/notes'), (string) mdCount($tmp . '/memory/notes'));
+check('admin API -> the refused save wrote nothing', $notesBefore === mdCount($memoryRoot . '/notes'), (string) mdCount($memoryRoot . '/notes'));
 
 // A definition activated straight from the template is a draft: the verdict says
 // what a runner would refuse, which is the point of pre-filling it.
@@ -1793,7 +1829,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 ]));
 $untitled = jsonBody($r['body']);
 $untitledId = (string) ($untitled['memory']['id'] ?? '');
-$untitledRaw = $tmp . '/memory/workflows/' . $untitledId . '.md';
+$untitledRaw = $memoryRoot . '/workflows/' . $untitledId . '.md';
 check('admin API -> an untitled definition is accepted', 200 === $r['status'] && '' !== $untitledId, $r['body']);
 check('admin API -> an untitled definition keeps the block first', str_starts_with((string) ($untitled['memory']['body'] ?? ''), "```yaml"), $r['body']);
 check('admin API -> an untitled definition gets its verdict', str_contains(implode(' ', $untitled['definition'] ?? []), 'Draft marker'), $r['body']);
@@ -1823,7 +1859,7 @@ check('workflow UI: the page says a runner may execute it', str_contains($r['bod
 
 // The tag keeps the definition in `workflows`: moving it out is refused while it
 // is still active, and the file stays where it was.
-$draftFile = $tmp . '/memory/workflows/' . $draftId . '.md';
+$draftFile = $memoryRoot . '/workflows/' . $draftId . '.md';
 $before = is_file($draftFile) ? (string) file_get_contents($draftFile) : '';
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'id' => $draftId, 'category' => 'notes', 'title' => 'Template draft', 'tags' => ['executable'], 'content' => $filledBody,
@@ -1831,7 +1867,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
 check('admin API -> an active workflow cannot be moved out of workflows', 400 === $r['status'], $r['body']);
 check('admin API -> the refusal says to remove the tag first', str_contains(jsonBody($r['body'])['error'] ?? '', 'remove'), $r['body']);
 check('admin API -> the refused move left the file alone', $before === (string) @file_get_contents($draftFile), 'file');
-check('admin API -> the refused move created no copy', !is_file($tmp . '/memory/notes/' . $draftId . '.md'), 'file');
+check('admin API -> the refused move created no copy', !is_file($memoryRoot . '/notes/' . $draftId . '.md'), 'file');
 
 // Retiring it (removing the tag) is what makes a move legal — and what makes the
 // verdict disappear, because the entry is a note again.
@@ -2073,7 +2109,7 @@ $caseBody = implode("\n\n", [
     "## Zakaj ta konfiguracija\n\n" . str_repeat('Razlog za izbiro komponente in izkusnja pri lokalnem izvajanju modelov. ', 8),
     "## Opombe\n\n- Kupljeno postopoma.\n- Nadgradnja na 16 GB graficne kartice je bila predraga.\n\nKonec zapisa: " . $caseTail,
 ]);
-$caseDir = $tmp . '/memory/facts';
+$caseDir = $memoryRoot . '/facts';
 @mkdir($caseDir, 0775, true);
 $caseFile = $caseDir . '/' . $caseId . '.md';
 @file_put_contents(
@@ -2170,7 +2206,7 @@ check(
 
 section('Admin UI: trash');
 
-$trashDir = $tmp . '/memory/.trash';
+$trashDir = $memoryRoot . '/.trash';
 $trashBefore = mdCount($trashDir);
 check('trash: earlier MCP deletes already went to the trash', $trashBefore > 0, (string) $trashBefore);
 
@@ -2184,7 +2220,7 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'category' => 'facts', 'title' => 'Doomed fact', 'content' => 'This one gets deleted and restored.',
 ]));
 $doomedId = (string) (jsonBody($r['body'])['memory']['id'] ?? '');
-$doomedFile = $tmp . '/memory/facts/' . $doomedId . '.md';
+$doomedFile = $memoryRoot . '/facts/' . $doomedId . '.md';
 check('trash: entry created for deletion', '' !== $doomedId && is_file($doomedFile), $r['body']);
 
 $r = request('DELETE', '/ui/api/memory?category=facts&id=' . rawurlencode($doomedId), ['X-CSRF-Token' => $apiCsrf]);
@@ -2273,7 +2309,7 @@ check('trash: mcp forget_memory -> ok', false === ((jsonBody($r['body']))['resul
 check('trash: mcp forget_memory says it is recoverable', str_contains((string) ($mcpForget['message'] ?? ''), 'restored in the admin UI'), json_encode($mcpForget));
 check('trash: the mcp-deleted file is in the trash', [] !== array_filter(mdList($trashDir), static fn (string $f): bool => str_contains($f, '__facts__' . $mcpTrashId . '.md')), json_encode(mdList($trashDir)));
 clearstatcache();
-check('trash: the mcp-deleted file left its category', !is_file($tmp . '/memory/facts/' . $mcpTrashId . '.md'));
+check('trash: the mcp-deleted file left its category', !is_file($memoryRoot . '/facts/' . $mcpTrashId . '.md'));
 
 // Emptying the trash clears everything, including entries left over from the
 // MCP deletion tests earlier in this run.
@@ -2291,7 +2327,7 @@ section('Admin UI: backup download');
 
 // A file at the memory root that is not a category entry: a faithful copy of the
 // directory must include it.
-@file_put_contents($tmp . '/memory/README.md', "# Memory directory\n\nHuman readable, travels with the backup.\n");
+@file_put_contents($memoryRoot . '/README.md', "# Memory directory\n\nHuman readable, travels with the backup.\n");
 
 // Leave one entry in the trash, so the archive can be shown to carry it.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
@@ -2306,8 +2342,8 @@ $r = request('GET', '/ui/backup');
 check('backup: 200', 200 === $r['status'], (string) $r['status']);
 check('backup: served as a zip', str_contains(strtolower($r['headers']['content-type'] ?? ''), 'application/zip'), $r['headers']['content-type'] ?? '');
 check(
-    'backup: attachment with a dated filename',
-    (bool) preg_match('/^attachment; filename="memorydown-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip"$/', $r['headers']['content-disposition'] ?? ''),
+    'backup: attachment names the account and a timestamp',
+    (bool) preg_match('/^attachment; filename="memorydown-test-user-backup-\d{4}-\d{2}-\d{2}-\d{4}\.zip"$/', $r['headers']['content-disposition'] ?? ''),
     $r['headers']['content-disposition'] ?? ''
 );
 check('backup: never cached', 'no-store' === ($r['headers']['cache-control'] ?? ''), $r['headers']['cache-control'] ?? '');
@@ -2346,7 +2382,7 @@ if ([] !== $liveNames) {
     $pick = $liveNames[0];
     check(
         'backup: a memory is copied byte for byte',
-        ($archive[$pick] ?? null) === (string) @file_get_contents($tmp . '/' . $pick),
+        ($archive[$pick] ?? null) === (string) @file_get_contents($memoryRoot . '/' . substr($pick, strlen('memory/'))),
         $pick
     );
 }
@@ -2362,11 +2398,352 @@ check(
 check('health: reports the trash size', array_key_exists('memory_trashed', $health['checks'] ?? []), json_encode($health['checks'] ?? []));
 check('health: reports the archive method', in_array($health['checks']['backup_zip'] ?? '', ['deflate', 'store'], true), json_encode($health['checks']['backup_zip'] ?? null));
 check('health: reports the trash writable', true === ($health['checks']['trash_writable'] ?? null), json_encode($health['checks']['trash_writable'] ?? null));
+check('health: reports how many accounts exist', 1 === ($health['checks']['users'] ?? null), json_encode($health['checks']['users'] ?? null));
+
+/* ------------------------------------------------------------------ *
+ *  Accounts: creating, isolating, and revoking them
+ * ------------------------------------------------------------------ */
+
+section('Accounts (users, isolation, revocation)');
+
+$form = static fn (array $fields): array => ['Content-Type' => 'application/x-www-form-urlencoded'];
+
+// --- An admin manages accounts in the UI.
+$r = request('GET', '/ui/users');
+check('users: the admin can open the page', 200 === $r['status'] && str_contains($r['body'], 'New account'), (string) $r['status']);
+check('users: it lists the accounts that exist', str_contains($r['body'], 'test-user'), '');
+
+$create = static function (string $id, string $password, string $role, string $confirm) use ($form, $apiCsrf): array {
+    return request('POST', '/ui/users/create', $form([]), http_build_query([
+        'csrf' => $apiCsrf,
+        'id' => $id,
+        'role' => $role,
+        'password' => $password,
+        'confirm' => $confirm,
+    ]));
+};
+
+$r = $create('other-user', 'other-password', 'user', 'other-password');
+check('users: create -> 302', 302 === $r['status'], (string) $r['status']);
+$store = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+check('users: the account is stored', isset($store['other-user']), json_encode(array_keys((array) $store)));
+check('users: it has the role that was asked for', 'user' === ($store['other-user']['role'] ?? ''));
+check('users: the password is stored only as a hash', !array_key_exists('password', $store['other-user'] ?? []) && str_starts_with((string) ($store['other-user']['password_hash'] ?? ''), '$'));
+
+check('users: duplicate name refused', str_contains($create('other-user', 'other-password', 'user', 'other-password')['headers']['location'] ?? '', 'error=exists'));
+check('users: unusable name refused', str_contains($create('Bad Name', 'other-password', 'user', 'other-password')['headers']['location'] ?? '', 'error=invalid_id'));
+check('users: short password refused', str_contains($create('third-user', 'short', 'user', 'short')['headers']['location'] ?? '', 'error=password_short'));
+check('users: mismatched confirmation refused', str_contains($create('third-user', 'other-password', 'user', 'different')['headers']['location'] ?? '', 'error=password_match'));
+check('users: a refused creation stores nothing', !isset(json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true)['third-user']));
+check('users: an admin cannot demote themselves', str_contains(
+    request('POST', '/ui/users/role', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'test-user', 'role' => 'user']))['headers']['location'] ?? '',
+    'error=self_role'
+));
+check('users: an admin cannot delete themselves', str_contains(
+    request('POST', '/ui/users/delete', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'test-user']))['headers']['location'] ?? '',
+    'error=self_delete'
+));
+
+// --- A published writing of the first account, to prove the API tokens are
+// per account and not one shared key.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'writings', 'title' => 'Isolation post', 'content' => 'Belongs to the first account.', 'public' => true,
+]));
+$isolationWriting = (string) (jsonBody($r['body'])['memory']['id'] ?? '');
+check('accounts: the first account publishes a writing', '' !== $isolationWriting, $r['body']);
+
+$r = request('GET', '/public/writings', ['Authorization' => 'Bearer ' . $publicToken]);
+check('accounts: the first account\'s writings token sees its published writing', str_contains($r['body'], $isolationWriting), $r['body']);
+
+// --- The second account signs in, and gets its own MCP token.
+[$verifier2, $challenge2] = pkcePair();
+$authQuery2 = http_build_query([
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'response_type' => 'code',
+    'scope' => SCOPE,
+    'state' => 'state-other',
+    'code_challenge' => $challenge2,
+    'code_challenge_method' => 'S256',
+    'resource' => $base . '/mcp',
+]);
+
+// The consent page identifies the account: the same username+password pair the
+// admin UI takes, and the account it names is what the token is bound to.
+$r = request('POST', '/oauth/authorize?' . $authQuery2, $form([]), http_build_query([
+    'decision' => 'allow', 'username' => 'other-user', 'password' => 'other-password',
+]));
+$otherLocation = $r['headers']['location'] ?? '';
+check('accounts: the second account can consent', 302 === $r['status'], $otherLocation);
+parse_str((string) parse_url($otherLocation, PHP_URL_QUERY), $otherCallback);
+$otherCode = $otherCallback['code'] ?? '';
+
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'authorization_code',
+    'code' => $otherCode,
+    'code_verifier' => $verifier2,
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'resource' => $base . '/mcp',
+]));
+$otherToken = (string) (jsonBody($r['body'])['access_token'] ?? '');
+check('accounts: a token is issued to the second account', 200 === $r['status'] && '' !== $otherToken, $r['body']);
+
+$otherAuth = ['Authorization' => 'Bearer ' . $otherToken, 'Content-Type' => 'application/json', 'Accept' => 'application/json, text/event-stream'];
+$r = request('POST', '/mcp', $otherAuth, $body);
+check('accounts: the second account initializes', 200 === $r['status'], $r['body']);
+$otherSession = $otherAuth + ['Mcp-Session-Id' => $r['headers']['mcp-session-id'] ?? ''];
+
+$r = request('POST', '/mcp', $otherSession, '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
+check('accounts: the second account sees the same tools', 7 === count(jsonBody($r['body'])['result']['tools'] ?? []), $r['body']);
+
+$r = request('POST', '/mcp', $otherSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => [
+        'content' => 'Only the second account should see this.',
+        'title' => 'Second account secret',
+        'category' => 'facts',
+        'tags' => ['isolation'],
+    ]],
+]));
+$otherId = (string) (jsonBody($r['body'])['result']['structuredContent']['memory']['id'] ?? '');
+check('accounts: the second account can write', '' !== $otherId, $r['body']);
+check(
+    'accounts: its memory lands in its own directory',
+    '' !== $otherId && is_file($tmp . '/users/other-user/memory/facts/' . $otherId . '.md'),
+    $otherId
+);
+check(
+    'accounts: and not in the other account\'s directory',
+    '' !== $otherId && !is_file($memoryRoot . '/facts/' . $otherId . '.md'),
+    $otherId
+);
+
+$r = request('POST', '/mcp', $otherSession, '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_memory","arguments":{"limit":50}}}');
+check('accounts: it does not see the first account\'s memories', !str_contains($r['body'], 'Editor preference'), $r['body']);
+$r = request('POST', '/mcp', $session, '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_memory","arguments":{"limit":50}}}');
+check('accounts: the first account does not see its memories either', !str_contains($r['body'], 'Second account secret'), $r['body']);
+
+// --- Each account's API token reaches only its own corpus.
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $adminCsrf, 'username' => 'other-user', 'password' => 'other-password']));
+check('accounts: the second account signs in to the UI', 302 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $m2);
+$otherCsrf = $m2[1] ?? '';
+check('accounts: its session works', '' !== $otherCsrf);
+
+$r = request('POST', '/ui/settings/token', $form([]), http_build_query(['csrf' => $otherCsrf, 'kind' => 'writings', 'action' => 'rotate']));
+check('accounts: it can mint its own API token', 302 === $r['status'], (string) $r['status']);
+$store = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+$otherWritingsToken = (string) ($store['other-user']['tokens']['writings'] ?? '');
+check('accounts: the token belongs to that account', '' !== $otherWritingsToken && $otherWritingsToken !== $publicToken);
+$r = request('GET', '/public/writings', ['Authorization' => 'Bearer ' . $otherWritingsToken]);
+check(
+    'accounts: its token serves its own (empty) writings, not the first account\'s',
+    200 === $r['status'] && !str_contains($r['body'], $isolationWriting),
+    $r['body']
+);
+
+// --- What a plain user may not do.
+$r = request('GET', '/ui/users');
+check('accounts: a plain user cannot open the users page', 403 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/users/create', $form([]), http_build_query(['csrf' => $otherCsrf, 'id' => 'sneaky', 'role' => 'admin', 'password' => 'sneaky-password', 'confirm' => 'sneaky-password']));
+check('accounts: a plain user cannot create accounts', 403 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui/backup?user=test-user');
+check('accounts: a plain user cannot download another account\'s memory', 403 === $r['status'], (string) $r['status']);
+
+// --- Disabling an account stops everything it holds, immediately.
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $otherCsrf, 'username' => 'test-user', 'password' => 'test-password']));
+check('accounts: the admin signs back in', 302 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $m3);
+$apiCsrf = $m3[1] ?? '';
+check('accounts: the admin session has a fresh csrf token', '' !== $apiCsrf);
+
+$r = request('POST', '/ui/users/enabled', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'other-user', 'enabled' => '0']));
+check('accounts: disabling -> 302', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', 'notice=user_disabled'), (string) $r['status']);
+
+$r = request('POST', '/mcp', $otherSession, '{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{}}');
+check('accounts: a disabled account\'s MCP token stops working', 401 === $r['status'], (string) $r['status']);
+$r = request('GET', '/public/writings', ['Authorization' => 'Bearer ' . $otherWritingsToken]);
+check('accounts: a disabled account\'s API token stops working', 401 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'other-user', 'password' => 'other-password']));
+check('accounts: a disabled account is told so, rather than "wrong password"', 401 === $r['status'] && str_contains($r['body'], 'disabled'), (string) $r['status']);
+
+// Re-enabling does not revive the tokens that were invalidated: the epoch moved.
+$r = request('POST', '/ui/users/enabled', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'other-user', 'enabled' => '1']));
+check('accounts: re-enabling -> 302', 302 === $r['status'], (string) $r['status']);
+$r = request('POST', '/mcp', $otherSession, '{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}');
+check('accounts: the old token stays dead after re-enabling', 401 === $r['status'], (string) $r['status']);
+
+// --- A password reset revokes that account's other credentials too.
+$r = request('POST', '/ui/users/password', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'other-user', 'password' => 'brand-new-password', 'confirm' => 'brand-new-password']));
+check('accounts: password reset -> 302', 302 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'other-user', 'password' => 'other-password']));
+check('accounts: the old password no longer signs in', 401 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'other-user', 'password' => 'brand-new-password']));
+check('accounts: the new password does', 302 === $r['status'], (string) $r['status']);
+
+// --- Deleting an account is recoverable, and takes its credentials with it.
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'test-user', 'password' => 'test-password']));
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $m4);
+$apiCsrf = $m4[1] ?? '';
+
+$r = request('POST', '/ui/users/delete', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'other-user']));
+check('accounts: delete -> 302', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', 'notice=user_deleted'), (string) $r['status']);
+$store = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+check('accounts: the record is gone', !isset($store['other-user']));
+check('accounts: the password hash is gone with it', !str_contains((string) file_get_contents($tmp . '/auth/users.json'), 'brand-new-password'));
+check('accounts: its directory is not deleted but moved aside', !is_dir($tmp . '/users/other-user') && [] !== glob($tmp . '/users/.trash/*__other-user'));
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'other-user', 'password' => 'brand-new-password']));
+check('accounts: a deleted account cannot sign in', 401 === $r['status'], (string) $r['status']);
+
+// --- An unauthenticated visitor cannot reach the admin JSON API at all.
+$savedCookies = $GLOBALS['memorydown_cookies'];
+$GLOBALS['memorydown_cookies'] = [];
+$r = request('GET', '/ui/api/tree');
+check('accounts: the admin API is closed to unauthenticated visitors', 401 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui/api/search?q=two-pane');
+check('accounts: so is admin search', 401 === $r['status'], (string) $r['status']);
+$GLOBALS['memorydown_cookies'] = $savedCookies;
+
+// --- Changing your own password, which is also the consent password.
+$r = request('GET', '/ui/settings');
+check('settings: the account page renders for the signed-in admin', 200 === $r['status'] && str_contains($r['body'], 'Current password'), (string) $r['status']);
+check('settings: it warns that other connections will be signed out', str_contains($r['body'], 'invalidates every'), '');
+
+$r = request('POST', '/ui/settings/password', $form([]), http_build_query([
+    'csrf' => $apiCsrf, 'current' => 'not-my-password', 'password' => 'a-new-admin-password', 'confirm' => 'a-new-admin-password',
+]));
+check('settings: a wrong current password is refused', str_contains($r['headers']['location'] ?? '', 'error=current_password'), (string) ($r['headers']['location'] ?? ''));
+
+$r = request('POST', '/ui/settings/password', $form([]), http_build_query([
+    'csrf' => $apiCsrf, 'current' => 'test-password', 'password' => 'a-new-admin-password', 'confirm' => 'something-else',
+]));
+check('settings: a mismatched confirmation is refused', str_contains($r['headers']['location'] ?? '', 'error=password_match'));
+
+$r = request('POST', '/ui/settings/password', $form([]), http_build_query([
+    'csrf' => $apiCsrf, 'current' => 'test-password', 'password' => 'short', 'confirm' => 'short',
+]));
+check('settings: a short password is refused', str_contains($r['headers']['location'] ?? '', 'error=password_short'));
+
+$r = request('POST', '/ui/settings/password', $form([]), http_build_query([
+    'csrf' => $apiCsrf, 'current' => 'test-password', 'password' => 'a-new-admin-password', 'confirm' => 'a-new-admin-password',
+]));
+check('settings: changing your own password -> 302', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', 'notice=password_changed'), (string) $r['status']);
+
+$r = request('GET', '/ui');
+check('settings: you are still signed in after changing your own password', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
+
+$r = request('POST', '/mcp', $session, '{"jsonrpc":"2.0","id":8,"method":"tools/list","params":{}}');
+check('settings: the MCP token minted before the change stops working', 401 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'test-user', 'password' => 'test-password']));
+check('settings: the previous password no longer signs in', 401 === $r['status'], (string) $r['status']);
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $apiCsrf, 'username' => 'test-user', 'password' => 'a-new-admin-password']));
+check('settings: the new password does', 302 === $r['status'], (string) $r['status']);
+
+// Back where we started, so the logout below exercises the ordinary path.
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $m5);
+$apiCsrf = $m5[1] ?? '';
 
 $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-urlencoded'], http_build_query(['csrf' => $apiCsrf]));
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
 $r = request('GET', '/ui');
 check('GET /ui after logout -> 302 to login', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'));
+
+/* ------------------------------------------------------------------ *
+ *  Fresh install: no accounts, so /ui/setup creates the first admin
+ * ------------------------------------------------------------------ */
+
+section('Accounts: first-run setup');
+
+$freshTmp = sys_get_temp_dir() . '/memorydown-fresh-' . getmypid() . '-' . bin2hex(random_bytes(3));
+mkdir($freshTmp . '/logs', 0775, true);
+$freshProbe = @stream_socket_server('tcp://127.0.0.1:0', $freshErrno, $freshErrstr);
+$freshBase = '';
+$freshProc = null;
+if (false !== $freshProbe) {
+    $freshName = (string) stream_socket_get_name($freshProbe, false);
+    $freshPort = (int) substr($freshName, strrpos($freshName, ':') + 1);
+    fclose($freshProbe);
+    $freshBase = 'http://127.0.0.1:' . $freshPort;
+
+    // No seed credentials at all: this is what a brand new deployment looks like.
+    $freshEnv = [
+        'APP_BASE_URL' => $freshBase,
+        'APP_ENV' => 'testing',
+        'DATA_PATH' => $freshTmp,
+        'LOG_PATH' => $freshTmp . '/logs',
+        'OAUTH_USERNAME' => '',
+        'ADMIN_PASSWORD_HASH' => '',
+        'ADMIN_SETUP_TOKEN' => 'setup-secret',
+        'MEMORY_PATH' => '',
+    ];
+    $freshRestore = [];
+    foreach ($freshEnv as $k => $v) {
+        $freshRestore[$k] = (string) getenv($k);
+        putenv($k . '=' . $v);
+    }
+    $freshProc = proc_open(
+        [$phpBin, '-S', '127.0.0.1:' . $freshPort, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php'],
+        [1 => ['file', $freshTmp . '/fresh.out.log', 'w'], 2 => ['file', $freshTmp . '/fresh.err.log', 'w']],
+        $freshPipes,
+        dirname(__DIR__)
+    );
+    foreach ($freshRestore as $k => $v) {
+        putenv($k . '=' . $v);
+    }
+    $freshCookies = $GLOBALS['memorydown_cookies'];
+    $GLOBALS['memorydown_cookies'] = [];
+}
+
+if (is_resource($freshProc)) {
+    waitForServer($freshBase);
+
+    // A developer's .env can seed an account during boot (the migration prefers
+    // it over the deliberately empty environment above). Clear the store so this
+    // section starts from the state it is actually about: no accounts at all,
+    // which is exactly what a brand new deployment looks like.
+    @unlink($freshTmp . '/auth/users.json');
+
+    $r = request('GET', '/ui', [], null, $freshBase);
+    check('setup: an instance with no accounts goes to setup', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/setup'), $r['headers']['location'] ?? '');
+
+    $r = request('GET', '/ui/setup', [], null, $freshBase);
+    check('setup: the form renders', 200 === $r['status'] && str_contains($r['body'], 'setup_token'), (string) $r['status']);
+    preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $mf);
+    $freshCsrf = $mf[1] ?? '';
+
+    $setupForm = static fn (array $fields): array => ['Content-Type' => 'application/x-www-form-urlencoded'];
+    $r = request('POST', '/ui/setup', $setupForm([]), http_build_query([
+        'csrf' => $freshCsrf, 'setup_token' => 'wrong', 'username' => 'owner', 'password' => 'owner-password', 'confirm' => 'owner-password',
+    ]), $freshBase);
+    check('setup: a wrong setup token is refused', 400 === $r['status'], (string) $r['status']);
+
+    $r = request('POST', '/ui/setup', $setupForm([]), http_build_query([
+        'csrf' => $freshCsrf, 'setup_token' => 'setup-secret', 'username' => 'owner', 'password' => 'owner-password', 'confirm' => 'owner-password',
+    ]), $freshBase);
+    check('setup: it creates the first admin and signs in', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui'), (string) $r['status']);
+
+    $freshStore = json_decode((string) @file_get_contents($freshTmp . '/auth/users.json'), true);
+    check('setup: the account is an admin', 'admin' === ($freshStore['owner']['role'] ?? ''), json_encode(array_keys((array) $freshStore)));
+    check('setup: it was given its own memory root', is_dir($freshTmp . '/users/owner/memory/facts'));
+    check('setup: the memory root explains itself', is_file($freshTmp . '/users/owner/memory/README.md'));
+
+    $r = request('GET', '/ui/users', [], null, $freshBase);
+    check('setup: the first account can manage users straight away', 200 === $r['status'], (string) $r['status']);
+
+    proc_terminate($freshProc);
+    proc_close($freshProc);
+    @exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($freshTmp));
+    $GLOBALS['memorydown_cookies'] = $freshCookies;
+} else {
+    check('setup: a fresh server could be started', false, $freshErrstr ?? 'proc_open failed');
+}
+
 
 /* ------------------------------------------------------------------ *
  *  Summary

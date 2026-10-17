@@ -15,13 +15,24 @@ final class Config
     public readonly string $appVersion;
 
     public readonly string $dataPath;
+    /**
+     * Deprecated: the single-user memory directory this instance used before it
+     * had accounts. Only ever read by the one-time migration, which moves its
+     * corpus under the first account's root.
+     */
     public readonly string $memoryPath;
+    /** Where the per-user directories live: DATA_PATH/users. */
+    public readonly string $usersPath;
     public readonly string $logPath;
+    /** Where per-user MCP transport sessions live: DATA_PATH/sessions/mcp. */
+    public readonly string $mcpSessionsPath;
 
     public readonly int $oauthAccessTokenTtl;
     public readonly int $oauthRefreshTokenTtl;
     public readonly int $oauthCodeTtl;
+    /** Deprecated: seed material for the first account's username. */
     public readonly string $oauthUsername;
+    /** Deprecated: seed material for the first account's password. */
     public readonly string $oauthConsentPassword;
     /** @var list<string> */
     public readonly array $oauthCimdAllowedOrigins;
@@ -29,17 +40,15 @@ final class Config
     public readonly int $mcpSessionTtl;
 
     public readonly bool $uiEnabled;
+    /** Deprecated: seed material for the first account's password hash. */
     public readonly string $adminPasswordHash;
     public readonly string $adminSetupToken;
 
     public readonly bool $indexEnabled;
-    public readonly string $indexPath;
 
     public readonly bool $publicApiEnabled;
-    public readonly string $publicApiToken;
 
     public readonly bool $workflowsApiEnabled;
-    public readonly string $workflowsApiToken;
 
     public readonly bool $rateLimitEnabled;
     public readonly int $rateLimitTokenMax;
@@ -54,7 +63,9 @@ final class Config
         $this->appVersion = (string) $c['app_version'];
         $this->dataPath = (string) $c['data_path'];
         $this->memoryPath = (string) $c['memory_path'];
+        $this->usersPath = (string) ($c['users_path'] ?? $this->dataPath . '/users');
         $this->logPath = (string) $c['log_path'];
+        $this->mcpSessionsPath = (string) ($c['mcp_sessions_path'] ?? $this->dataPath . '/sessions/mcp');
         $this->oauthAccessTokenTtl = (int) $c['oauth_access_token_ttl'];
         $this->oauthRefreshTokenTtl = (int) $c['oauth_refresh_token_ttl'];
         $this->oauthCodeTtl = (int) $c['oauth_code_ttl'];
@@ -68,13 +79,10 @@ final class Config
         $this->adminSetupToken = (string) ($c['admin_setup_token'] ?? '');
 
         $this->indexEnabled = (bool) ($c['index_enabled'] ?? true);
-        $this->indexPath = (string) ($c['index_path'] ?? $this->dataPath . '/index/memory.sqlite');
 
         $this->publicApiEnabled = (bool) ($c['public_api_enabled'] ?? false);
-        $this->publicApiToken = (string) ($c['public_api_token'] ?? '');
 
         $this->workflowsApiEnabled = (bool) ($c['workflows_api_enabled'] ?? false);
-        $this->workflowsApiToken = (string) ($c['workflows_api_token'] ?? '');
 
         $this->rateLimitEnabled = (bool) ($c['rate_limit_enabled'] ?? true);
         $this->rateLimitTokenMax = (int) ($c['rate_limit_token_max'] ?? 30);

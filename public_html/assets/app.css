@@ -392,6 +392,88 @@ body.trash {
 .trash-back { margin: 0; }
 .trash-back a { color: var(--accent); }
 
+/* --------------------------------------------------------- account pages */
+/* Settings and Users reuse the trash shell (top-aligned, scrollable, one
+   column) but stack several cards, because they answer several questions. */
+
+body.settings,
+body.users {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem;
+  overflow: auto;
+}
+
+.page-stack { width: 100%; max-width: 46rem; }
+
+.page-card {
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 2rem;
+}
+
+.page-card + .page-card { margin-top: 1.25rem; }
+.page-card h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
+.page-card h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
+.page-card .account-name { font-weight: 600; overflow-wrap: anywhere; }
+.page-card form { margin: 0 0 .75rem; }
+.page-card form button { margin-top: 0; }
+
+/* One account in the Users list: who it is on the left, what you can do to it
+   on the right. Wraps rather than squeezing, so it stays usable on a phone. */
+.account-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: .9rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.account-who { display: flex; flex-direction: column; gap: .2rem; min-width: 12rem; }
+.account-tags { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; font-size: .8rem; }
+.account-actions { display: flex; flex-direction: column; gap: .5rem; align-items: flex-end; }
+
+.pill {
+  display: inline-block;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.pill-accent { background: var(--accent-weak); color: var(--accent); }
+.pill-danger { background: var(--danger-weak); color: var(--danger); }
+
+.inline-form { display: flex; gap: .35rem; align-items: center; flex-wrap: wrap; }
+.inline-form input:not([type="checkbox"]),
+.inline-form select { width: auto; padding: .35rem .5rem; }
+
+.token-block { border-top: 1px solid var(--border); padding: .9rem 0; }
+.token-block:first-of-type { border-top: 0; }
+
+.token-value,
+.mono-inline {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .84rem;
+  overflow-wrap: anywhere;
+}
+
+.token-value {
+  margin-top: .4rem;
+  padding: .45rem .55rem;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+
+.account-more { margin-top: .35rem; }
+.account-more summary { cursor: pointer; color: var(--muted); }
+.account-more[open] summary { margin-bottom: .5rem; }
+
 /* Links that sit alongside the drawer buttons (Backup, Trash). */
 .drawer-link {
   display: block;

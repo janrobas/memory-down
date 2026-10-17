@@ -6,13 +6,15 @@ namespace MemoryDown\Auth;
 
 use MemoryDown\Config;
 use MemoryDown\Support\RateLimiter;
+use MemoryDown\Users\User;
+use MemoryDown\Users\UserStore;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Log\LoggerInterface;
 
 /**
- * The OAuth 2.1 authorization server MemoryDown itself runs (single-user).
+ * The OAuth 2.1 authorization server MemoryDown itself runs.
  *
  * Implements the authorization-code flow with PKCE (S256), refresh-token
  * rotation, RFC 9207 issuer identification, dynamic client registration (DCR,
@@ -25,7 +27,14 @@ use Psr\Log\LoggerInterface;
  *   POST   /oauth/token                           (token endpoint)
  *   POST   /oauth/register                        (RFC 7591 DCR)
  *
- * Public clients only (token_endpoint_auth_method "none" + PKCE) in V1.
+ * Public clients only (token_endpoint_auth_method "none" + PKCE).
+ *
+ * There is still one authorization server per instance, shared by every
+ * account: the consent page asks WHO is consenting (username + password,
+ * checked against the account store) and the account becomes the token's `sub`.
+ * That keeps the client's job simple — one discovery, one consent, and the
+ * account it signed in as decides which memory the token can reach — instead of
+ * a per-user endpoint and a per-user discovery document.
  */
 final class AuthorizationServer
 {
@@ -33,6 +42,7 @@ final class AuthorizationServer
 
     public function __construct(
         private readonly Config $config,
+        private readonly UserStore $users,
         private readonly TokenStore $tokens,
         private readonly ClientRegistry $clients,
         private readonly LoggerInterface $logger = new \Psr\Log\NullLogger(),
@@ -127,13 +137,14 @@ final class AuthorizationServer
                 return $this->consentPage($request, $client, $params, 'Invalid decision.');
             }
 
-            $consentError = $this->validateConsent($params);
-            if (null !== $consentError) {
-                $this->logger->warning('oauth.consent.rejected');
+            $consent = $this->consentUser($params);
+            if (null === $consent['user']) {
+                $this->logger->warning('oauth.consent.rejected', ['reason' => $consent['error']]);
 
-                return $this->consentPage($request, $client, $params, $consentError);
+                return $this->consentPage($request, $client, $params, $consent['error']);
             }
 
+            $user = $consent['user'];
             $scope = $this->normalizeScope((string) ($params['scope'] ?? TokenStore::SCOPE));
             $resource = $this->normalizeResource((string) ($params['resource'] ?? $this->config->resourceForPath('/mcp')));
             $codeChallenge = (string) $params['code_challenge'];
@@ -143,9 +154,14 @@ final class AuthorizationServer
                 $codeChallenge,
                 $scope,
                 $resource,
+                $user->id,
+                $user->authEpoch,
             );
 
-            $this->logger->info('oauth.authorize.approved', ['client_id' => $client['client_id']]);
+            $this->logger->info('oauth.authorize.approved', [
+                'client_id' => $client['client_id'],
+                'sub' => $user->id,
+            ]);
 
             $location = $this->appendParams($redirectUri, [
                 'code' => $code,
@@ -269,7 +285,7 @@ final class AuthorizationServer
             $resource = $record['resource'];
         }
 
-        return $this->issueTokens($clientId, $record['scope'], $resource, $codeVerifier, $record['code_challenge']);
+        return $this->issueTokens($clientId, $record['scope'], $resource, $codeVerifier, $record['code_challenge'], $record['sub'], $record['epoch']);
     }
 
     /**
@@ -292,12 +308,23 @@ final class AuthorizationServer
             return ['error' => 'invalid_grant', 'error_description' => 'client_id does not match the refresh token'];
         }
 
+        // The account may have been disabled, deleted or have had its password
+        // changed while this refresh token was still within its (long) lifetime.
+        // The epoch that was stamped on it is what tells us.
+        $user = $this->subject($rotated['sub'], $rotated['epoch']);
+        if (null === $user) {
+            $this->tokens->revokeRefreshToken($rotated['refresh_token']);
+            $this->logger->warning('oauth.refresh.subject_invalid', ['sub' => $rotated['sub']]);
+
+            return ['error' => 'invalid_grant', 'error_description' => 'The account this token belongs to can no longer be used'];
+        }
+
         $resource = $this->normalizeResource((string) ($params['resource'] ?? $rotated['resource']));
         if ('' === $resource) {
             $resource = $rotated['resource'];
         }
 
-        $access = $this->tokens->createAccessToken($clientId, $rotated['scope'], $resource);
+        $access = $this->tokens->createAccessToken($clientId, $rotated['scope'], $resource, $user->id, $user->authEpoch);
 
         return [
             'access_token' => $access,
@@ -314,7 +341,7 @@ final class AuthorizationServer
      *
      * @return array<string, mixed>
      */
-    private function issueTokens(string $clientId, array $scopes, string $resource, string $codeVerifier, string $codeChallenge): array
+    private function issueTokens(string $clientId, array $scopes, string $resource, string $codeVerifier, string $codeChallenge, string $sub, int $epoch): array
     {
         if ('' === $codeVerifier) {
             return ['error' => 'invalid_grant', 'error_description' => 'code_verifier is required for public clients'];
@@ -325,8 +352,18 @@ final class AuthorizationServer
             return ['error' => 'invalid_grant', 'error_description' => 'code_verifier does not match code_challenge'];
         }
 
-        $access = $this->tokens->createAccessToken($clientId, $scopes, $resource);
-        $refresh = $this->tokens->createRefreshToken($clientId, $scopes, $resource);
+        // A code is short-lived but still outlives the moment of consent: the
+        // account can be disabled in between, and then there is nothing to
+        // authorize.
+        $user = $this->subject($sub, $epoch);
+        if (null === $user) {
+            $this->logger->warning('oauth.token.subject_invalid', ['sub' => $sub]);
+
+            return ['error' => 'invalid_grant', 'error_description' => 'The account this authorization belongs to can no longer be used'];
+        }
+
+        $access = $this->tokens->createAccessToken($clientId, $scopes, $resource, $user->id, $user->authEpoch);
+        $refresh = $this->tokens->createRefreshToken($clientId, $scopes, $resource, $user->id, $user->authEpoch);
 
         return [
             'access_token' => $access,
@@ -336,6 +373,20 @@ final class AuthorizationServer
             'refresh_token' => $refresh,
             'resource' => $resource,
         ];
+    }
+
+    /**
+     * The enabled account a `sub`/`epoch` pair still refers to, or null when it
+     * has been disabled, deleted, or has had its credentials changed since.
+     */
+    private function subject(string $sub, int $epoch): ?User
+    {
+        $user = $this->users->get($sub);
+        if (null === $user || !$user->enabled || $user->authEpoch !== $epoch) {
+            return null;
+        }
+
+        return $user;
     }
 
     /* ------------------------------------------------------------------ *
@@ -399,6 +450,7 @@ final class AuthorizationServer
         array $params,
         ?string $error,
     ): ResponseInterface {
+        $unconfigured = $this->users->isEmpty();
         $body = [];
         $body[] = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">';
         $body[] = '<meta name="viewport" content="width=device-width, initial-scale=1">';
@@ -415,7 +467,7 @@ final class AuthorizationServer
         if (null !== $error) {
             $body[] = '<div class="err">' . htmlspecialchars($error, ENT_QUOTES) . '</div>';
         }
-        $body[] = '<p><strong>' . htmlspecialchars((string) $client['client_name'], ENT_QUOTES) . '</strong> requests access to your memory.</p>';
+        $body[] = '<p><strong>' . htmlspecialchars((string) $client['client_name'], ENT_QUOTES) . '</strong> requests access to a MemoryDown account.</p>';
         $body[] = '<p class="muted">Redirect URI: ' . htmlspecialchars((string) ($params['redirect_uri'] ?? ''), ENT_QUOTES) . '</p>';
         if (isset($params['scope'])) {
             $body[] = '<p class="muted">Scopes: ' . htmlspecialchars((string) $params['scope'], ENT_QUOTES) . '</p>';
@@ -423,6 +475,21 @@ final class AuthorizationServer
         if (isset($params['resource'])) {
             $body[] = '<p class="muted">Resource: ' . htmlspecialchars((string) $params['resource'], ENT_QUOTES) . '</p>';
         }
+
+        if ($unconfigured) {
+            // Nothing to consent to yet, and saying so is more useful than a
+            // login form that cannot succeed. No secret is revealed: "no
+            // accounts exist" is not information an attacker can use.
+            $body[] = '<p>The instance has no accounts yet. Create the first admin at '
+                . '<a href="' . htmlspecialchars($this->config->appBaseUrl . '/ui/setup', ENT_QUOTES) . '">'
+                . htmlspecialchars($this->config->appBaseUrl . '/ui/setup', ENT_QUOTES) . '</a>, then start again.</p>';
+            $body[] = '</div></body></html>';
+
+            return $this->html(implode("\n", $body));
+        }
+
+        $body[] = '<p class="muted">Sign in with the account this access is for. The connection will be able to read and write '
+            . 'the memory of that account only.</p>';
         $body[] = '<form method="post" action="' . htmlspecialchars($this->config->appBaseUrl . '/oauth/authorize', ENT_QUOTES) . '">';
         foreach (['client_id', 'redirect_uri', 'response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'resource'] as $keep) {
             if (isset($params[$keep])) {
@@ -430,12 +497,8 @@ final class AuthorizationServer
                 $body[] = '<input type="hidden" name="' . htmlspecialchars($keep, ENT_QUOTES) . '" value="' . htmlspecialchars($value, ENT_QUOTES) . '">';
             }
         }
-        if ('' !== $this->config->oauthUsername) {
-            $body[] = '<input type="text" name="username" placeholder="Username" required>';
-        }
-        if ('' !== $this->config->oauthConsentPassword) {
-            $body[] = '<input type="password" name="consent_password" placeholder="Consent password" required>';
-        }
+        $body[] = '<input type="text" name="username" placeholder="Username" autocomplete="username" required>';
+        $body[] = '<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>';
         $body[] = '<div>';
         $body[] = '<button type="submit" name="decision" value="allow" class="allow">Allow</button>';
         $body[] = '<button type="submit" name="decision" value="deny" class="deny">Deny</button>';
@@ -519,48 +582,36 @@ final class AuthorizationServer
     }
 
     /**
-     * Validate the consent credentials (username and/or password) against the
-     * configured values. Returns an error message, or null on success.
+     * Identify the account consenting, from the username and password typed on
+     * the consent page.
+     *
+     * One credential per person: this is the same username and password the
+     * admin UI asks for, checked against the same record. The message is
+     * deliberately identical for "no such user", "wrong password" and "disabled
+     * account" (except for the disabled case, which is worth saying plainly to
+     * somebody who got the password right — it reveals nothing to anyone else).
      *
      * @param array<string, mixed> $params
+     *
+     * @return array{user: User|null, error: string|null}
      */
-    private function validateConsent(array $params): ?string
+    private function consentUser(array $params): array
     {
-        if ('' !== $this->config->oauthUsername) {
-            $givenUser = (string) ($params['username'] ?? '');
-            if (!hash_equals($this->config->oauthUsername, $givenUser)) {
-                return 'Invalid username or password.';
-            }
-        }
-        if ('' !== $this->config->oauthConsentPassword) {
-            $givenPassword = (string) ($params['consent_password'] ?? '');
-            if (!$this->consentPasswordValid($givenPassword)) {
-                return 'Invalid username or password.';
-            }
+        $username = strtolower(trim((string) ($params['username'] ?? '')));
+        $password = (string) ($params['password'] ?? '');
+        if ('' === $username || '' === $password) {
+            return ['user' => null, 'error' => 'Enter the username and password of a MemoryDown account.'];
         }
 
-        return null;
-    }
-
-    /**
-     * The consent password may be a plaintext value or a bcrypt hash
-     * (generated with password_hash). A bcrypt hash is preferred so the
-     * secret never sits in the environment in plaintext.
-     */
-    private function consentPasswordValid(string $given): bool
-    {
-        $expected = $this->config->oauthConsentPassword;
-        if ('' === $expected) {
-            return true;
+        $user = $this->users->verify($username, $password);
+        if (null === $user) {
+            return ['user' => null, 'error' => 'Invalid username or password.'];
+        }
+        if (!$user->enabled) {
+            return ['user' => null, 'error' => 'That account is disabled.'];
         }
 
-        foreach (['$2y$', '$2a$', '$2b$'] as $prefix) {
-            if (str_starts_with($expected, $prefix)) {
-                return password_verify($given, $expected);
-            }
-        }
-
-        return hash_equals($expected, $given);
+        return ['user' => $user, 'error' => null];
     }
 
     /**

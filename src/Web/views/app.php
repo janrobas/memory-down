@@ -203,6 +203,10 @@ $definitionHead = null === $definition
          nudging the neighbouring buttons; app.js keeps it current after a delete.
          Spacing comes from CSS: an inline-block strips a leading space. -->
     <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<span class="trash-badge" id="trash-count"><?= (int) ($trashCount ?? 0) > 0 ? '(' . (int) $trashCount . ')' : '' ?></span></a>
+    <a class="drawer-link" href="/ui/settings" title="Your password and API tokens">⚙ Settings</a>
+    <?php if (($user ?? null) instanceof \MemoryDown\Users\User && $user->isAdmin()): ?>
+      <a class="drawer-link" href="/ui/users" title="Manage accounts">👥 Users</a>
+    <?php endif; ?>
 
     <div class="theme-picker">
       <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>

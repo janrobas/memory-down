@@ -9,11 +9,10 @@ use Mcp\Server;
 use Mcp\Server\Session\FileSessionStore;
 use Mcp\Server\Transport\Http\Middleware\CorsMiddleware;
 use Mcp\Server\Transport\StreamableHttpTransport;
-use MemoryDown\Auth\BearerAuthMiddleware;
 use MemoryDown\Kernel;
+use MemoryDown\Users\UserServices;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Psr\Log\LoggerInterface;
 
 /**
  * Builds the MCP server (official mcp/sdk) for a single HTTP request.
@@ -23,9 +22,17 @@ use Psr\Log\LoggerInterface;
  *    stored on disk so they survive across PHP-FPM/shared-hosting processes;
  *  - the stateless 2026-07-28 revision — no sessions at all.
  *
- * The bearer-token middleware wraps the transport, so every request (POST,
- * GET stream, DELETE session) is authenticated with the 401 + WWW-Authenticate
- * challenge described by RFC 9728 / the MCP authorization specification.
+ * Authentication happens HERE, before the server is built, rather than in the
+ * transport's middleware chain: with accounts, the tools are constructed around
+ * one user's memory store, so the user has to be known first. The gate produces
+ * the same RFC 9728 401 challenge the middleware used to, and everything after
+ * it runs with the store of the account the bearer token names.
+ *
+ * Two consequences worth knowing:
+ *  - MCP sessions are kept per user (data/sessions/mcp/<id>), so a session id
+ *    belonging to one account cannot be resumed by another;
+ *  - every account is therefore one connector, not one endpoint: the same /mcp
+ *    URL behaves as whoever signed in on the consent page.
  */
 final class McpServerFactory
 {
@@ -66,13 +73,13 @@ Tools:
 - list_memory: see what is stored
 TXT;
 
-    public static function build(ServerRequestInterface $request): Server
+    public static function build(UserServices $services, string $userId): Server
     {
         $kernel = Kernel::get();
         $config = $kernel->config;
         $logger = $kernel->logger;
 
-        $tools = new MemoryTools($kernel->memory, $kernel->search);
+        $tools = new MemoryTools($services->memory, $services->search);
 
         $builder = Server::builder()
             ->setServerInfo(
@@ -84,7 +91,7 @@ TXT;
             ->setInstructions(self::INSTRUCTIONS . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary())
             ->setCapabilities(new ServerCapabilities(tools: true, resources: false, prompts: false))
             ->setSession(new FileSessionStore(
-                $config->dataPath . '/sessions',
+                $config->mcpSessionsPath . DIRECTORY_SEPARATOR . $userId,
                 $config->mcpSessionTtl,
             ));
 
@@ -104,27 +111,32 @@ TXT;
     public static function transport(ServerRequestInterface $request): StreamableHttpTransport
     {
         $kernel = Kernel::get();
-        $logger = $kernel->logger;
 
-        // No DnsRebindingProtectionMiddleware: the endpoint is already gated by
-        // OAuth bearer tokens and served behind a web server that validates
-        // Host. Strict Origin allow-listing would reject ChatGPT's connector,
-        // which may send an Origin header, with HTTP 403.
-        $middleware = [
-            new CorsMiddleware(),
-            new BearerAuthMiddleware($kernel->tokens, $kernel->config, $logger),
-        ];
-
+        // CORS only. Authentication is not middleware any more: the account has
+        // to be known before the tools above are built, so it happens in run().
+        // The 401 is the gate's, unchanged in shape.
+        //
+        // No DnsRebindingProtectionMiddleware either: the endpoint is already
+        // gated by OAuth bearer tokens and served behind a web server that
+        // validates Host. Strict Origin allow-listing would reject ChatGPT's
+        // connector, which may send an Origin header, with HTTP 403.
         return new StreamableHttpTransport(
             request: $request,
-            logger: $logger,
-            middleware: $middleware,
+            logger: $kernel->logger,
+            middleware: [new CorsMiddleware()],
         );
     }
 
     public static function run(ServerRequestInterface $request): ResponseInterface
     {
-        $server = self::build($request);
+        $kernel = Kernel::get();
+
+        $user = $kernel->mcpGate->authenticate($request);
+        if (null === $user) {
+            return $kernel->mcpGate->challenge($request);
+        }
+
+        $server = self::build($kernel->userServices->for($user->id), $user->id);
 
         return $server->run(self::transport($request));
     }

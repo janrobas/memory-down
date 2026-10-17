@@ -17,6 +17,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MemoryDown\Config;
+use MemoryDown\Auth\TokenStore;
 use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
@@ -25,7 +26,12 @@ use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
+use MemoryDown\Support\BearerToken;
 use MemoryDown\Support\RateLimiter;
+use MemoryDown\Users\Migration;
+use MemoryDown\Users\UserDirectories;
+use MemoryDown\Users\UserPaths;
+use MemoryDown\Users\UserStore;
 use MemoryDown\Workflows\WorkflowCatalog;
 
 $passed = 0;
@@ -290,7 +296,7 @@ check(
 section('WorkflowCatalog');
 
 $catalogRoot = $root . '/catalog';
-$catalogStore = new MemoryStore($catalogRoot . '/memory', $catalogRoot . '/auth');
+$catalogStore = new MemoryStore($catalogRoot . '/memory');
 $catalogStore->create(
     "```yaml\nmode: apply\nschedule: \"0 7 * * *\"\ntimezone: Europe/Ljubljana\n```\n\nPreglej posto.\n",
     'Jutranji pregled',
@@ -369,16 +375,21 @@ $minimal = [
 ];
 $config = new Config($minimal);
 check('config: the workflows API is off by default', false === $config->workflowsApiEnabled);
-check('config: the workflows API has no key by default', '' === $config->workflowsApiToken);
+check('config: per-account data lives under data/users by default', '/tmp/data/users' === $config->usersPath);
+check('config: MCP sessions are per account by default', '/tmp/data/sessions/mcp' === $config->mcpSessionsPath);
 check('config: the public writings API is off by default', false === $config->publicApiEnabled);
-$enabled = new Config($minimal + ['workflows_api_enabled' => true, 'workflows_api_token' => 'k']);
-check('config: an explicit flag is honoured', true === $enabled->workflowsApiEnabled && 'k' === $enabled->workflowsApiToken);
+// The API tokens are per account now (admin UI → Settings), never instance-wide
+// environment values: one instance-wide token could not say whose memory to serve.
+check('config: exposes no instance-wide API tokens', !property_exists($config, 'publicApiToken') && !property_exists($config, 'workflowsApiToken'));
+$enabled = new Config($minimal + ['workflows_api_enabled' => true]);
+check('config: an explicit flag is honoured', true === $enabled->workflowsApiEnabled);
 
-// The switch and the key have to be documented where a deployment looks for
-// them; an undocumented variable is a variable nobody sets.
+// The switch has to be documented where a deployment looks for it; an
+// undocumented variable is a variable nobody sets. The token is documented as
+// living in the admin UI instead, so its absence from .env.example is the point.
 $envExample = (string) @file_get_contents(dirname(__DIR__) . '/.env.example');
 check('config: .env.example documents the workflows API switch', str_contains($envExample, 'WORKFLOWS_API_ENABLED=false'), '');
-check('config: .env.example documents the workflows API key', str_contains($envExample, 'WORKFLOWS_API_TOKEN='), '');
+check('config: .env.example no longer carries an instance-wide token', !str_contains($envExample, 'WORKFLOWS_API_TOKEN') && !str_contains($envExample, 'PUBLIC_API_TOKEN'));
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));
@@ -439,7 +450,8 @@ check('unquoted single tag still works', ['diplome'] === $q->tags && ['hello'] =
 section('MemoryStore');
 
 $memRoot = $root . '/memory';
-$store = new MemoryStore($memRoot, $root . '/auth');
+$store = new MemoryStore($memRoot);
+check('a new memory root explains itself', is_file($memRoot . '/README.md') && str_contains((string) file_get_contents($memRoot . '/README.md'), 'Markdown files are the source of truth'));
 $store->create('Canonical body.', 'Canonical', 'facts');
 
 // Files that are not {category}/{id}.md must not be part of the corpus.
@@ -535,7 +547,7 @@ check('legacy: the next save drops the bare heading', 0 === preg_match('/^#[ \t]
 section('MemoryStore: trash');
 
 $trashRoot = $root . '/trash-store';
-$trashStore = new MemoryStore($trashRoot, $root . '/trash-auth');
+$trashStore = new MemoryStore($trashRoot);
 $trashPaths = $trashStore->paths();
 
 check('trash: the trash directory is created at boot', is_dir($trashRoot . '/' . PathValidator::TRASH_DIR));
@@ -655,7 +667,7 @@ check('list filters by public=true', [] === $store->list('writings', 50, null, n
 section('Publications');
 
 $pubRoot = $root . '/pub-memory';
-$pubStore = new MemoryStore($pubRoot, $root . '/pub-auth');
+$pubStore = new MemoryStore($pubRoot);
 $w1 = $pubStore->create('First public writing.', 'First', 'writings', ['blog'], public: true);
 $w2 = $pubStore->create('Second public writing.', 'Second', 'writings', ['blog'], public: true);
 $draft = $pubStore->create('A private draft.', 'Draft', 'writings');
@@ -706,7 +718,7 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
     echo "  SKIP  pdo_sqlite unavailable\n";
 } else {
     $idxRoot = $root . '/index-store';
-    $idxStore = new MemoryStore($idxRoot, $root . '/index-auth');
+    $idxStore = new MemoryStore($idxRoot);
     $idxStore->create('Alpha body about narwhal.', 'Alpha', 'facts', ['alpha-tag']);
     $idxStore->create('Beta body about narwhal too.', 'Beta', 'facts', ['beta-tag'], archived: true);
 
@@ -751,6 +763,247 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
     $r = $index->search('tag:"ŠC"');
     check('quoted tag stays exact (no partial tag)', [] === $r, json_encode($r));
 }
+
+/* ------------------------------------------------------------------ *
+ *  Accounts: records, tokens and the guards that keep an admin reachable
+ * ------------------------------------------------------------------ */
+
+section('Users: UserStore');
+
+$accountsRoot = $root . '/accounts';
+@mkdir($accountsRoot, 0775, true);
+$userStore = UserStore::at($accountsRoot);
+
+/** Whether $fn refuses with an InvalidArgumentException (the store's way of saying no). */
+$refuses = static function (callable $fn): bool {
+    try {
+        $fn();
+    } catch (\InvalidArgumentException) {
+        return true;
+    }
+
+    return false;
+};
+
+check('users: empty to begin with', $userStore->isEmpty() && 0 === $userStore->count());
+
+$validIds = ['alice', 'bob_2', 'a-b-c', 'x90'];
+$invalidIds = ['Al', 'alice?', '../x', 'a/d', '.trash', '-lead', 'ab', str_repeat('a', 33), 'алиса'];
+foreach ($validIds as $id) {
+    check("users: id '{$id}' accepted", UserStore::isValidId($id));
+}
+foreach ($invalidIds as $id) {
+    check('users: id ' . json_encode($id) . ' refused', !UserStore::isValidId($id));
+}
+
+$alice = $userStore->create('alice', 'alice-password', UserStore::ROLE_ADMIN);
+check('users: created as an admin', 'admin' === $alice->role && $alice->enabled && !$userStore->isEmpty());
+check('users: the password verifies', 'alice' === $userStore->verify('alice', 'alice-password')?->id);
+check('users: a wrong password is refused', null === $userStore->verify('alice', 'not-the-password'));
+check('users: an unknown account is refused', null === $userStore->verify('nobody', 'alice-password'));
+check('users: a duplicate id is refused', $refuses(static fn () => $userStore->create('alice', 'another-password')));
+check('users: a short password is refused', $refuses(static fn () => $userStore->create('carol', 'short')));
+check('users: an unknown role is refused', $refuses(static fn () => $userStore->create('carol', 'carol-password', 'superuser')));
+check('users: only a hash is stored', !str_contains((string) file_get_contents($userStore->path()), 'alice-password'));
+
+// API tokens: one per API per account, generated here so nobody picks a weak one.
+$epoch = $userStore->get('alice')->authEpoch;
+$writingsToken = $userStore->rotateToken('alice', UserStore::TOKEN_WRITINGS);
+check('users: a token looks random', 1 === preg_match('/^[0-9a-f]{48}$/', $writingsToken), $writingsToken);
+check('users: rotating a token does not sign the account out', $epoch === $userStore->get('alice')->authEpoch);
+check('users: the token resolves to its account', 'alice' === $userStore->verifyToken(UserStore::TOKEN_WRITINGS, $writingsToken)?->id);
+check('users: it does not work for the other API', null === $userStore->verifyToken(UserStore::TOKEN_WORKFLOWS, $writingsToken));
+check('users: an empty token resolves to nobody', null === $userStore->verifyToken(UserStore::TOKEN_WRITINGS, ''));
+check('users: an unknown token kind is refused', $refuses(static fn () => $userStore->rotateToken('alice', 'passwords')));
+$userStore->clearToken('alice', UserStore::TOKEN_WRITINGS);
+check('users: a cleared token stops working', null === $userStore->verifyToken(UserStore::TOKEN_WRITINGS, $writingsToken));
+
+// The auth epoch is what invalidates sessions and OAuth tokens downstream.
+$userStore->setPassword('alice', 'alice-password-2');
+check('users: a password change bumps the epoch', $userStore->get('alice')->authEpoch > $epoch);
+check('users: the new password verifies', null !== $userStore->verify('alice', 'alice-password-2'));
+check('users: the old password does not', null === $userStore->verify('alice', 'alice-password'));
+
+// An instance with no enabled admin has no way back except editing the file by
+// hand, so the store refuses to get there.
+check('users: the only admin cannot be demoted', $refuses(static fn () => $userStore->setRole('alice', UserStore::ROLE_USER)));
+check('users: the only admin cannot be disabled', $refuses(static fn () => $userStore->setEnabled('alice', false)));
+check('users: the only admin cannot be deleted', $refuses(static fn () => $userStore->delete('alice')));
+check('users: still an enabled admin after those refusals', true === $userStore->get('alice')?->enabled && 1 === $userStore->enabledAdmins());
+
+$userStore->create('bob', 'bob-password');
+check('users: a second account starts as a plain user', 'user' === $userStore->get('bob')?->role);
+$bobToken = $userStore->rotateToken('bob', UserStore::TOKEN_WRITINGS);
+$userStore->setEnabled('bob', false);
+check('users: a disabled account is not resolved by its token', null === $userStore->verifyToken(UserStore::TOKEN_WRITINGS, $bobToken));
+check('users: a disabled account can still be told it is disabled', null !== $userStore->verify('bob', 'bob-password'));
+$userStore->setRole('bob', UserStore::ROLE_ADMIN);
+check('users: a disabled admin does not count as the way back in', $refuses(static fn () => $userStore->setRole('alice', UserStore::ROLE_USER)));
+$userStore->setEnabled('bob', true);
+$userStore->setRole('alice', UserStore::ROLE_USER);
+check('users: with a second enabled admin the first can be demoted', 'user' === $userStore->get('alice')?->role);
+$userStore->setRole('alice', UserStore::ROLE_ADMIN);
+check('users: deleting removes the record', null !== $userStore->delete('bob') && !$userStore->has('bob'));
+check('users: the account left behind is untouched', 'admin' === $userStore->get('alice')?->role && $userStore->get('alice')?->enabled === true);
+
+/* ------------------------------------------------------------------ *
+ *  Accounts: paths, legacy adoption, and the delete that keeps the data
+ * ------------------------------------------------------------------ */
+
+section('Users: paths and directories');
+
+$userPaths = new UserPaths($root . '/users');
+$slashed = static fn (string $path): string => str_replace('\\', '/', $path);
+
+check('paths: memory is per account', str_ends_with($slashed($userPaths->memory('alice')), '/users/alice/memory'), $userPaths->memory('alice'));
+check('paths: the index is per account', str_ends_with($slashed($userPaths->indexPath('alice')), '/users/alice/index/memory.sqlite'));
+check('paths: two accounts never share a directory', $userPaths->memory('alice') !== $userPaths->memory('bob'));
+check('paths: the deleted-accounts directory is a dot directory', str_ends_with($slashed($userPaths->trashRoot()), '/users/.trash'));
+foreach (['../alice', 'Alice', '', '.trash', 'a/b'] as $badId) {
+    check('paths: refuses id ' . json_encode($badId), $refuses(static fn () => $userPaths->memory($badId)));
+}
+
+$directories = new UserDirectories($userPaths);
+
+// A legacy single-user corpus: two categories, a trash, and a root README.
+$legacy = $root . '/legacy-memory';
+@mkdir($legacy . '/facts', 0775, true);
+@mkdir($legacy . '/.trash', 0775, true);
+@mkdir($legacy . '/not-a-category dir', 0775, true);
+file_put_contents($legacy . '/facts/one.md', "# One\n");
+file_put_contents($legacy . '/.trash/20260101T000000Z__facts__gone.md', "# Gone\n");
+file_put_contents($legacy . '/README.md', "# Legacy readme\n");
+
+$adoption = $directories->adoptLegacyCorpus('alice', $legacy);
+check('legacy: a category directory moves', in_array('facts', $adoption['moved'], true) && is_file($userPaths->memory('alice') . '/facts/one.md'));
+check('legacy: the trash moves too', is_dir($userPaths->memory('alice') . '/.trash'));
+check('legacy: a directory that is not a category stays put', is_dir($legacy . '/not-a-category dir'));
+check('legacy: the root README is not memory and is left alone', is_file($legacy . '/README.md') && !is_file($userPaths->memory('alice') . '/README.md'));
+
+$again = $directories->adoptLegacyCorpus('alice', $legacy);
+check('legacy: re-running moves nothing', [] === $again['moved'] && [] === $again['skipped'], json_encode($again));
+
+// Nothing is lost when an account is deleted: the directory is parked.
+$parked = $directories->archive('alice');
+check('archive: the directory moves aside', null !== $parked && is_dir((string) $parked) && !is_dir($userPaths->userRoot('alice')));
+check('archive: it is under .trash and names the account', str_contains($slashed((string) $parked), '/users/.trash/') && str_ends_with((string) $parked, '__alice'), (string) $parked);
+check('archive: every memory travels with it', is_file((string) $parked . '/memory/facts/one.md'));
+check('archive: it can be put back', $directories->restore((string) $parked, 'alice') && is_file($userPaths->memory('alice') . '/facts/one.md'));
+check('archive: an account that never had a directory archives to null', null === $directories->archive('nobody'));
+
+/* ------------------------------------------------------------------ *
+ *  Accounts: the one-time upgrade from a single-user instance
+ * ------------------------------------------------------------------ */
+
+section('Users: migration');
+
+$migRoot = $root . '/migrate';
+@mkdir($migRoot . '/auth', 0775, true);
+@mkdir($migRoot . '/legacy/preferences', 0775, true);
+file_put_contents($migRoot . '/legacy/preferences/p.md', "# Preference\n");
+
+$migUsers = UserStore::at($migRoot . '/auth');
+$migPaths = new UserPaths($migRoot . '/users');
+$migDirs = new UserDirectories($migPaths);
+$migConfig = new Config(array_replace($minimal, [
+    'data_path' => $migRoot,
+    'users_path' => $migRoot . '/users',
+    'memory_path' => $migRoot . '/legacy',
+    'oauth_username' => 'owner',
+    'admin_password_hash' => password_hash('migrated-password', PASSWORD_DEFAULT),
+]));
+$migration = new Migration($migConfig, $migUsers, $migPaths, $migDirs);
+
+$migration->run();
+check('migration: seeds the first admin from the environment', 'admin' === $migUsers->get('owner')?->role);
+check('migration: with the environment password', null !== $migUsers->verify('owner', 'migrated-password'));
+check('migration: adopts the legacy corpus', is_file($migPaths->memory('owner') . '/preferences/p.md'));
+check('migration: the old directory is not left half-moved', !is_dir($migRoot . '/legacy/preferences'));
+check('migration: records that it ran', is_file($migRoot . '/auth/migration.json'));
+
+$migration->run();
+check('migration: running again changes nothing', 1 === $migUsers->count());
+
+// Deleting the account store must not resurrect an admin from stale env vars:
+// seeding happened once, and the way back in is /ui/setup.
+file_put_contents($migRoot . '/auth/users.json', '{}');
+$migration->run();
+check('migration: a cleared account store is not re-seeded', $migUsers->isEmpty());
+
+// Where the environment has no UI password, the hash a previous version wrote
+// on first run is used; and a plaintext consent password is hashed.
+$legacyRoot = $root . '/migrate-legacy-ui';
+@mkdir($legacyRoot . '/auth', 0775, true);
+file_put_contents(
+    $legacyRoot . '/auth/ui.json',
+    json_encode(['admin' => ['password_hash' => password_hash('ui-json-password', PASSWORD_DEFAULT)]])
+);
+$legacyConfig = new Config(array_replace($minimal, [
+    'data_path' => $legacyRoot,
+    'memory_path' => $legacyRoot . '/nothing',
+]));
+$legacyUsers = UserStore::at($legacyRoot . '/auth');
+(new Migration($legacyConfig, $legacyUsers, new UserPaths($legacyRoot . '/users'), new UserDirectories(new UserPaths($legacyRoot . '/users'))))->run();
+check('migration: falls back to the hash a previous version stored', null !== $legacyUsers->verify('admin', 'ui-json-password'));
+
+$consentRoot = $root . '/migrate-consent';
+@mkdir($consentRoot . '/auth', 0775, true);
+$consentConfig = new Config(array_replace($minimal, [
+    'data_path' => $consentRoot,
+    'memory_path' => $consentRoot . '/nothing',
+    'admin_password_hash' => '',
+    'oauth_consent_password' => 'plaintext-consent-password',
+]));
+$consentUsers = UserStore::at($consentRoot . '/auth');
+(new Migration($consentConfig, $consentUsers, new UserPaths($consentRoot . '/users'), new UserDirectories(new UserPaths($consentRoot . '/users'))))->run();
+check('migration: a plaintext consent password is hashed on the way in', null !== $consentUsers->verify('admin', 'plaintext-consent-password'));
+check('migration: and stored only as a hash', !str_contains((string) file_get_contents($consentRoot . '/auth/users.json'), 'plaintext-consent-password'));
+
+// A fresh install has nothing to seed: /ui/setup creates the first admin.
+$emptyRoot = $root . '/migrate-empty';
+@mkdir($emptyRoot . '/auth', 0775, true);
+$emptyConfig = new Config(array_replace($minimal, ['data_path' => $emptyRoot, 'memory_path' => $emptyRoot . '/nothing']));
+$emptyUsers = UserStore::at($emptyRoot . '/auth');
+(new Migration($emptyConfig, $emptyUsers, new UserPaths($emptyRoot . '/users'), new UserDirectories(new UserPaths($emptyRoot . '/users'))))->run();
+check('migration: a fresh install seeds nothing', $emptyUsers->isEmpty() && !is_file($emptyRoot . '/auth/migration.json'));
+
+/* ------------------------------------------------------------------ *
+ *  Auth: tokens are subject-bound
+ * ------------------------------------------------------------------ */
+
+section('Auth: token subjects');
+
+@mkdir($root . '/token-auth', 0775, true);
+$tokenStore = new TokenStore($root . '/token-auth', 3600, 86400, 600);
+$code = $tokenStore->createCode('client-1', 'https://client.test/cb', str_repeat('a', 43), [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+$codeRecord = $tokenStore->consumeCode($code);
+check('tokens: a code carries the account that consented', 'alice' === ($codeRecord['sub'] ?? '') && 3 === ($codeRecord['epoch'] ?? 0), json_encode($codeRecord));
+
+$access = $tokenStore->createAccessToken('client-1', [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+$accessRecord = $tokenStore->validateAccessToken($access);
+check('tokens: an access token carries it too', 'alice' === ($accessRecord['sub'] ?? '') && 3 === ($accessRecord['epoch'] ?? 0), json_encode($accessRecord));
+
+$refresh = $tokenStore->createRefreshToken('client-1', [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+$rotatedToken = $tokenStore->rotateRefreshToken($refresh);
+check('tokens: rotation keeps the account', 'alice' === ($rotatedToken['sub'] ?? '') && 3 === ($rotatedToken['epoch'] ?? 0), json_encode($rotatedToken));
+
+check('tokens: no plaintext token is written to disk', !str_contains((string) file_get_contents($root . '/token-auth/tokens.json'), $access));
+check('tokens: revoking an account drops its records', 2 === $tokenStore->revokeAllForUser('alice'));
+check('tokens: the revoked access token no longer validates', null === $tokenStore->validateAccessToken($access));
+
+/* ------------------------------------------------------------------ *
+ *  HTTP: reading a bearer token
+ * ------------------------------------------------------------------ */
+
+section('Support: bearer tokens');
+
+$httpFactory = new \Nyholm\Psr7\Factory\Psr17Factory();
+$bearerRequest = $httpFactory->createServerRequest('GET', '/mcp');
+check('bearer: absent header is empty', '' === BearerToken::fromRequest($bearerRequest));
+check('bearer: extracted', 'abc123' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'Bearer abc123')));
+check('bearer: scheme is case-insensitive', 'abc123' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'bEaReR   abc123  ')));
+check('bearer: another scheme is not a bearer', '' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'Basic abc123')));
+check('bearer: an empty value is empty', '' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'Bearer ')));
 
 /* ------------------------------------------------------------------ *
  *  Summary

@@ -89,20 +89,35 @@ return [
 
     // Absolute paths (defaults assume the repository layout).
     'data_path' => $__dataPath,
+
+    // Where each account's data lives: DATA_PATH/users/<id>/.
+    'users_path' => rtrim($__env('USERS_PATH', $__dataPath . '/users'), '/\\'),
+
+    // Deprecated: the single-user memory directory of a pre-accounts instance.
+    // Read once by the migration that moves its corpus under the first account.
     'memory_path' => rtrim($__env('MEMORY_PATH', $__dataPath . '/memory'), '/\\'),
 
     'log_path' => rtrim($__env('LOG_PATH', $__dataPath . '/logs'), '/\\'),
+
+    // Per-user MCP transport sessions: DATA_PATH/sessions/mcp/<id>/.
+    'mcp_sessions_path' => rtrim($__env('MCP_SESSIONS_PATH', $__dataPath . '/sessions/mcp'), '/\\'),
 
     // OAuth: token lifetimes in seconds.
     'oauth_access_token_ttl' => (int) $__env('OAUTH_ACCESS_TOKEN_TTL', '3600'),
     'oauth_refresh_token_ttl' => (int) $__env('OAUTH_REFRESH_TOKEN_TTL', (string) (90 * 86400)),
     'oauth_code_ttl' => (int) $__env('OAUTH_CODE_TTL', '600'),
 
-    // Optional: if set, the OAuth consent page requires this username.
+    // Accounts live in data/auth/users.json, created in the admin UI. These are
+    // SEED MATERIAL for the very first admin only, used when no account exists
+    // yet: a single-user instance being upgraded is migrated from them, and on a
+    // fresh install /ui/setup creates the first admin instead. Once an account
+    // exists they are ignored, so changing your password in the UI sticks.
+
+    // Deprecated: becomes the first admin's username (default: "admin").
     'oauth_username' => $__env('OAUTH_USERNAME'),
 
-    // Optional: if set, the OAuth consent page requires this password. May be
-    // a plaintext value or a bcrypt hash (preferred, via password_hash()).
+    // Deprecated: becomes the first admin's password. May be a plaintext value
+    // or a bcrypt hash (preferred, via password_hash()).
     'oauth_consent_password' => $__env('OAUTH_CONSENT_PASSWORD'),
 
     // Comma-separated allowlist of origins whose Client ID Metadata Documents
@@ -124,8 +139,8 @@ return [
         FILTER_VALIDATE_BOOL
     ),
 
-    // bcrypt/argon hash of the admin password. Empty is allowed on first run:
-    // /ui/setup stores a hash in data/auth/ui.json instead.
+    // bcrypt/argon hash of the first admin's password (deprecated seed
+    // material; /ui/setup stores it in data/auth/users.json otherwise).
     'admin_password_hash' => $__env('ADMIN_PASSWORD_HASH'),
 
     // Optional extra secret required by the first-run /ui/setup form.
@@ -133,37 +148,36 @@ return [
 
     // -----------------------------------------------------------------------
     // Full-text search index (disposable SQLite FTS5 cache over the Markdown).
+    // One index per account, inside that account's directory
+    // (DATA_PATH/users/<id>/index/memory.sqlite); deleting it loses nothing.
     // -----------------------------------------------------------------------
     'index_enabled' => filter_var(
         $__env('INDEX_ENABLED', 'true'),
         FILTER_VALIDATE_BOOL
     ),
-    'index_path' => rtrim($__env('INDEX_PATH', $__dataPath . '/index/memory.sqlite'), '/\\'),
 
     // -----------------------------------------------------------------------
     // Public writings API (read-only): serves entries in the "writings"
     // category that carry `public: true`, as Markdown over HTTP. Disabled by
-    // default. When enabled, PUBLIC_API_TOKEN must be set; requests must send
-    // "Authorization: Bearer <token>".
+    // default. Each account has its own token (set in the admin UI under
+    // Settings); requests must send "Authorization: Bearer <token>", and the
+    // token decides whose writings are served.
     // -----------------------------------------------------------------------
     'public_api_enabled' => filter_var(
         $__env('PUBLIC_API_ENABLED', 'false'),
         FILTER_VALIDATE_BOOL
     ),
-    'public_api_token' => $__env('PUBLIC_API_TOKEN'),
 
     // -----------------------------------------------------------------------
     // Workflows API (read-only): serves the "workflows" category — the
     // definitions a runner may execute, plus the drafts and notes beside them —
-    // as JSON, with the stored Markdown body. Disabled by default. When enabled,
-    // WORKFLOWS_API_TOKEN must be set; requests must send
-    // "Authorization: Bearer <token>".
+    // as JSON, with the stored Markdown body. Disabled by default. Per-account
+    // token, exactly like the writings API above.
     // -----------------------------------------------------------------------
     'workflows_api_enabled' => filter_var(
         $__env('WORKFLOWS_API_ENABLED', 'false'),
         FILTER_VALIDATE_BOOL
     ),
-    'workflows_api_token' => $__env('WORKFLOWS_API_TOKEN'),
 
     // -----------------------------------------------------------------------
     // Lightweight per-IP rate limiting for the OAuth token and consent

@@ -7,6 +7,7 @@ namespace MemoryDown\Http;
 use MemoryDown\Config;
 use MemoryDown\Kernel;
 use MemoryDown\Mcp\McpServerFactory;
+use MemoryDown\Support\BearerToken;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7Server\ServerRequestCreator;
 use Psr\Http\Message\ResponseInterface;
@@ -178,8 +179,35 @@ final class App
     /** @return array<string, mixed> */
     private function health(): array
     {
+        $kernel = Kernel::get();
+        $entries = 0;
+        $trashed = 0;
+        $memoryWritable = true;
+        $trashWritable = true;
+        $index = null;
+
+        // The aggregate is over the accounts: there is no single memory
+        // directory any more, and this endpoint has no identity of its own.
+        foreach ($kernel->users->ids() as $id) {
+            $services = $kernel->userServices->for($id);
+            $memory = $kernel->userPaths->memory($id);
+            $entries += $services->memory->count();
+            $trashed += $services->memory->trashCount();
+            $memoryWritable = $memoryWritable && is_writable($memory);
+            $trashWritable = $trashWritable && is_writable($memory . '/' . \MemoryDown\Memory\PathValidator::TRASH_DIR);
+            if (null === $index && $services->search instanceof \MemoryDown\Memory\MemoryIndex) {
+                $status = $services->search->status();
+                // The path is per user, and /health is unauthenticated: report
+                // the engine, never whose index it is.
+                $index = [
+                    'engine' => $status['engine'] ?? 'direct',
+                    'available' => (bool) ($status['available'] ?? false),
+                    'indexed' => (int) ($status['indexed'] ?? 0),
+                ];
+            }
+        }
+
         $dataPath = $this->config->dataPath;
-        $memoryPath = $this->config->memoryPath;
 
         return [
             'status' => 'ok',
@@ -190,21 +218,25 @@ final class App
             'checks' => [
                 'php' => PHP_VERSION,
                 'php_ok' => version_compare(PHP_VERSION, '8.2.0', '>='),
-                'memory_path' => $memoryPath,
-                'memory_writable' => is_writable($memoryPath),
-                'memory_entries' => Kernel::get()->memory->count(),
-                'memory_trashed' => Kernel::get()->memory->trashCount(),
-                // The trash and the backup download live inside the memory root,
-                // so report that it is actually writable — a read-only memory
-                // directory would make every delete fail by design.
-                'trash_writable' => is_writable($memoryPath . '/' . \MemoryDown\Memory\PathValidator::TRASH_DIR),
+                'users' => $kernel->users->count(),
+                'users_path' => $this->config->usersPath,
+                'users_writable' => is_writable($this->config->usersPath),
+                'memory_entries' => $entries,
+                'memory_trashed' => $trashed,
+                'memory_writable' => $memoryWritable,
+                // The trash and the backup download live inside each memory
+                // root, so report that they are actually writable — a read-only
+                // memory directory would make every delete fail by design.
+                'trash_writable' => $trashWritable,
                 'backup_zip' => function_exists('gzdeflate') ? 'deflate' : 'store',
                 'data_writable' => is_writable($dataPath),
                 'sessions_writable' => is_writable($dataPath . '/sessions'),
                 'log_writable' => is_writable($this->config->logPath),
-                'search_index' => Kernel::get()->search instanceof \MemoryDown\Memory\MemoryIndex
-                    ? Kernel::get()->search->status()
-                    : ['engine' => 'direct', 'available' => true],
+                'search_index' => ($index ?? [
+                    'engine' => 'direct',
+                    'available' => true,
+                    'indexed' => 0,
+                ]) + ['enabled' => $this->config->indexEnabled, 'per_user' => true],
             ],
         ];
     }
@@ -212,7 +244,21 @@ final class App
     /** @return array<string, mixed> */
     private function healthMcp(): array
     {
+        $kernel = Kernel::get();
         $versions = static fn (array $cases): array => array_map(static fn ($v): string => $v->value, $cases);
+
+        // The tool set is the same for every account; the schema is built from a
+        // store only because the handlers close over one. With no accounts there
+        // is nothing to serve at /mcp, so the list is empty rather than absent.
+        $ids = $kernel->users->ids();
+        $tools = [];
+        if ([] !== $ids) {
+            $services = $kernel->userServices->for($ids[0]);
+            $tools = array_map(
+                static fn (array $t): string => $t['name'],
+                (new \MemoryDown\Mcp\MemoryTools($services->memory, $services->search))->definitions(),
+            );
+        }
 
         return [
             'status' => 'ok',
@@ -222,12 +268,10 @@ final class App
                 'handshake' => $versions(\Mcp\Schema\Enum\ProtocolVersion::handshakeVersions()),
                 'modern' => $versions(\Mcp\Schema\Enum\ProtocolVersion::modernVersions()),
             ],
-            'tools' => array_map(
-                static fn (array $t): string => $t['name'],
-                (new \MemoryDown\Mcp\MemoryTools(Kernel::get()->memory, Kernel::get()->search))->definitions(),
-            ),
+            'tools' => $tools,
             'session_store' => 'file',
-            'sessions_writable' => is_writable($this->config->dataPath . '/sessions'),
+            'sessions_scope' => 'per user',
+            'sessions_writable' => is_writable($this->config->mcpSessionsPath),
         ];
     }
 
@@ -235,6 +279,7 @@ final class App
     private function healthOauth(): array
     {
         $base = $this->config->appBaseUrl;
+        $kernel = Kernel::get();
 
         return [
             'status' => 'ok',
@@ -270,7 +315,11 @@ final class App
                 'refresh' => $this->config->oauthRefreshTokenTtl,
                 'code' => $this->config->oauthCodeTtl,
             ],
-            'consent_password_enabled' => '' !== $this->config->oauthConsentPassword,
+            // Consent is per account now: the page asks for a username and
+            // password, checked against the account store.
+            'accounts_configured' => !$kernel->users->isEmpty(),
+            'consent_credentials' => 'account store',
+            'tokens_issued' => $kernel->tokens->count(),
         ];
     }
 
@@ -278,25 +327,27 @@ final class App
      *  Public writings API (read-only, token-gated)
      * ------------------------------------------------------------------ */
 
+    /**
+     * The token decides whose writings are served: each account holds its own
+     * token (admin UI → Settings), so publishing is a per-person decision and
+     * one person's key can never read another's corpus.
+     */
     private function publicWritings(ServerRequestInterface $request, string $path): ResponseInterface
     {
         if (!$this->config->publicApiEnabled) {
             return $this->notFound();
         }
 
-        $token = $this->config->publicApiToken;
-        if ('' === $token) {
-            // Enabled but no token: fail closed rather than serving openly.
-            $this->logger->error('public_api.misconfigured', ['reason' => 'empty_token']);
-
-            return $this->json(['error' => 'not_configured'], 503);
-        }
-        if (!$this->bearerMatches($request, $token)) {
+        $user = Kernel::get()->users->verifyToken(
+            \MemoryDown\Users\UserStore::TOKEN_WRITINGS,
+            BearerToken::fromRequest($request),
+        );
+        if (null === $user) {
             return $this->json(['error' => 'unauthorized'], 401)
                 ->withHeader('WWW-Authenticate', 'Bearer realm="MemoryDown writings"');
         }
 
-        $publications = new \MemoryDown\Publish\Publications(Kernel::get()->memory);
+        $publications = new \MemoryDown\Publish\Publications(Kernel::get()->userServices->for($user->id)->memory);
 
         if ('/public/writings' === $path) {
             $query = $request->getQueryParams();
@@ -325,20 +376,16 @@ final class App
             return $this->notFound();
         }
 
-        $token = $this->config->workflowsApiToken;
-        if ('' === $token) {
-            // Enabled but no token: fail closed rather than serving definitions
-            // — instructions and allowed_tools — to anyone who asks.
-            $this->logger->error('workflows_api.misconfigured', ['reason' => 'empty_token']);
-
-            return $this->json(['error' => 'not_configured'], 503);
-        }
-        if (!$this->bearerMatches($request, $token)) {
+        $user = Kernel::get()->users->verifyToken(
+            \MemoryDown\Users\UserStore::TOKEN_WORKFLOWS,
+            BearerToken::fromRequest($request),
+        );
+        if (null === $user) {
             return $this->json(['error' => 'unauthorized'], 401)
                 ->withHeader('WWW-Authenticate', 'Bearer realm="MemoryDown workflows"');
         }
 
-        $catalog = new \MemoryDown\Workflows\WorkflowCatalog(Kernel::get()->memory);
+        $catalog = new \MemoryDown\Workflows\WorkflowCatalog(Kernel::get()->userServices->for($user->id)->memory);
 
         if ('/api/workflows' === $path) {
             $query = $request->getQueryParams();
@@ -357,18 +404,6 @@ final class App
         }
 
         return $this->apiJson($request, ['workflow' => $workflow]);
-    }
-
-    /**
-     * Constant-time check of the "Authorization: Bearer <token>" header.
-     */
-    private function bearerMatches(ServerRequestInterface $request, string $expected): bool
-    {
-        if (1 !== preg_match('/^Bearer\s+(.+)$/i', trim($request->getHeaderLine('Authorization')), $m)) {
-            return false;
-        }
-
-        return hash_equals($expected, trim($m[1]));
     }
 
     /**
