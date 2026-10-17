@@ -1809,6 +1809,17 @@ check('admin API -> executable refused outside workflows', 400 === $r['status'],
 check('admin API -> the refusal names the workflows category', str_contains(jsonBody($r['body'])['error'] ?? '', 'workflows'), $r['body']);
 check('admin API -> the refused save wrote nothing', $notesBefore === mdCount($memoryRoot . '/notes'), (string) mdCount($memoryRoot . '/notes'));
 
+// The premise the editor's provisional row rests on: a memory with an empty body
+// is not created at all, so a stand-in row for it would promise a file that never
+// appears. The editor shows the row under exactly this condition.
+$notesBefore = mdCount($memoryRoot . '/notes');
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes', 'title' => 'Empty body', 'tags' => [], 'content' => "   \n",
+]));
+check('admin API -> an empty body is refused', 400 === $r['status'], $r['body']);
+check('admin API -> the refusal names the content', str_contains(jsonBody($r['body'])['error'] ?? '', 'empty'), $r['body']);
+check('admin API -> the refused empty save wrote nothing', $notesBefore === mdCount($memoryRoot . '/notes'), (string) mdCount($memoryRoot . '/notes'));
+
 // A definition activated straight from the template is a draft: the verdict says
 // what a runner would refuse, which is the point of pre-filling it.
 $draftBody = "```yaml\nmode: dry-run\ntimezone: Europe/Ljubljana\nallowed_tools:\n  - memory.read_memory\n```\n\nTODO: napisi navodila.\n";

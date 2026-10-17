@@ -464,6 +464,21 @@
     }
   }
 
+  // renderTree() rebuilds the list from scratch, which takes the server-rendered
+  // "No memories yet." paragraph with it; recreate it so the message can still
+  // appear after the first client-side render. Appended last: it is a fallback
+  // for an otherwise empty list.
+  function emptyMessage() {
+    var el = document.getElementById('list-empty');
+    if (el) { return el; }
+    el = document.createElement('p');
+    el.className = 'empty muted';
+    el.id = 'list-empty';
+    list.appendChild(el);
+
+    return el;
+  }
+
   function sectionTitle(name, count) {
     var div = document.createElement('div');
     div.className = 'cat-name';
@@ -478,6 +493,7 @@
   }
 
   function renderTree(categories) {
+    showingResults = false;
     list.textContent = '';
     var total = 0;
     categories.forEach(function (group) {
@@ -495,19 +511,25 @@
       section.appendChild(ul);
       list.appendChild(section);
     });
-    var empty = document.getElementById('list-empty');
-    if (empty) {
-      empty.hidden = total > 0;
-      empty.textContent = filterMode === 'archived' ? 'No archived memories.'
-        : filterMode === 'active' ? 'No active memories.'
-        : 'No memories yet.';
-    }
+    var empty = emptyMessage();
+    empty.hidden = total > 0;
+    empty.textContent = filterMode === 'archived' ? 'No archived memories.'
+      : filterMode === 'active' ? 'No active memories.'
+      : 'No memories yet.';
     markActive(fId.value ? fCategory.value : '', fId.value);
     applyCollapsed();
+    renderDraftRow();
+    // The stand-in row counts as something in the list, so the empty message
+    // follows renderDraftRow() rather than the tree alone.
+    empty.hidden = total > 0 || null !== draftState;
   }
 
   function renderResults(results, query) {
+    showingResults = true;
     list.textContent = '';
+    // The provisional row for an unsaved memory belongs to the tree, not to a
+    // flat list of search hits.
+    renderDraftRow();
     // While search results are shown there is one flat group; hide the
     // collapse-all control (it only applies to the category tree).
     if (categoriesHead) { categoriesHead.hidden = true; }
@@ -545,6 +567,83 @@
     });
   }
 
+  /* A brand-new memory has no file until it is saved, so the tree cannot show it
+     and the entry used to appear out of nowhere on the first autosave. A
+     provisional row stands in from the first unsaved change instead; the moment
+     the store assigns an id, refreshTree() draws the real row and this one goes.
+     It sits above the categories rather than inside one: it must stay visible
+     whatever the collapsed state or the Active/Archived filter say, and a
+     category with no entries yet has no group to put it in. */
+  var draftSection = null;
+  var draftState = null;
+  var showingResults = false;
+
+  // What the stand-in should say, or null when there is nothing to stand in for.
+  // Deliberately the conditions save() itself uses: a new entry, actually changed,
+  // with a non-empty body. Anything else would promise a file the store will not
+  // create — an empty body is refused, and an untouched pre-filled template is
+  // not dirty, so it would not be saved either.
+  function draft() {
+    if ('' !== fId.value || '' === fContent.value.trim() || !isDirty()) { return null; }
+    // An unarchived entry has no place in the archived filter — the same rule the
+    // tree applies to its rows.
+    if (filterMode === 'archived') { return null; }
+
+    return { category: fCategory.value, title: fTitle.value.trim() };
+  }
+
+  function sameDraft(a, b) {
+    if (a === b) { return true; }
+    if (!a || !b) { return false; }
+
+    return a.category === b.category && a.title === b.title;
+  }
+
+  function renderDraftRow() {
+    var state = showingResults ? null : draft();
+
+    // Rebuilding the node on every keystroke would drop the scroll position for
+    // nothing: the row only changes when its title or category does.
+    if (draftSection && draftSection.parentNode && sameDraft(draftState, state)) { return; }
+
+    if (draftSection && draftSection.parentNode) { draftSection.parentNode.removeChild(draftSection); }
+    draftSection = null;
+    draftState = state;
+    if (null === state) { return; }
+
+    var section = document.createElement('section');
+    section.className = 'cat draft';
+    section.setAttribute('data-draft', '1');
+    var name = document.createElement('div');
+    name.className = 'cat-name draft-name';
+    name.textContent = 'New memory · ' + state.category;
+    section.appendChild(name);
+    var ul = document.createElement('ul');
+    ul.appendChild(memLink({
+      id: '',
+      category: state.category,
+      title: state.title || 'New memory',
+      new: true
+    }));
+    section.appendChild(ul);
+
+    // It is the open editor, not a link to a file and not a drag source: there is
+    // no id to link to or to move yet.
+    var link = section.querySelector('.mem');
+    if (link) {
+      link.classList.add('draft');
+      link.setAttribute('data-draft', '1');
+      link.removeAttribute('href');
+      link.removeAttribute('draggable');
+    }
+
+    list.insertBefore(section, list.firstChild);
+    draftSection = section;
+
+    // "No memories yet." must not sit underneath the row you are typing.
+    emptyMessage().hidden = true;
+  }
+
   function markActive(category, id) {
     Array.prototype.forEach.call(list.querySelectorAll('.mem'), function (a) {
       var on = a.getAttribute('data-category') === category && a.getAttribute('data-id') === id;
@@ -578,6 +677,8 @@
     if (publicField) { publicField.hidden = category !== 'writings'; }
     syncReservedChips(category);
     prefillWorkflowTemplate(category);
+    // Switching the category of a new memory moves its stand-in row with it.
+    renderDraftRow();
   }
 
   /* The reserved `executable` tag is a permission, so it is offered exactly where
@@ -885,6 +986,17 @@
 
   var saveIdle = debounce(function () { save(); }, AUTOSAVE_MS);
 
+  // A metadata change — a tag chip, Archived, Public — is a deliberate click, not
+  // typing, so it is saved at once. Waiting for the idle timer would leave the
+  // definition verdict (and the sidebar) stale for up to 20 seconds: activating a
+  // workflow with the `executable` chip must say what a runner would do with it
+  // immediately, not after the next autosave.
+  function saveNow() {
+    if (!isDirty()) { return; }
+    saveIdle.cancel();
+    save();
+  }
+
   // Whether the current save() call was triggered by the user (affects empty
   // content handling/messaging). Autosaves stay silent.
   var manualIntent = false;
@@ -1000,6 +1112,8 @@
   list.addEventListener('click', function (event) {
     var link = event.target.closest('.mem');
     if (!link) { return; }
+    // The provisional row is the open editor: it has no id to load.
+    if (link.hasAttribute('data-draft')) { return; }
     event.preventDefault();
     var category = link.getAttribute('data-category');
     var id = link.getAttribute('data-id');
@@ -1030,6 +1144,8 @@
     if (!header) { return; }
     var section = header.closest('.cat');
     if (!section) { return; }
+    // The provisional row is not a category and has no collapse state.
+    if (section.hasAttribute('data-draft')) { return; }
     section.classList.toggle('collapsed');
     rememberCollapsed();
   });
@@ -1107,6 +1223,8 @@
     if (!target || typeof target.closest !== 'function') { return; }
     var link = target.closest('.mem');
     if (!link) { return; }
+    // The provisional row has no id, so there is nothing to move.
+    if (link.hasAttribute('data-draft')) { return; }
     dragSource = { id: link.getAttribute('data-id'), category: link.getAttribute('data-category') };
     link.classList.add('dragging');
     document.body.classList.add('dragging');
@@ -1193,7 +1311,10 @@
   var cursorIndex = -1;
 
   function visibleItems() {
-    return Array.prototype.slice.call(list.querySelectorAll('.mem'));
+    // The provisional row for an unsaved memory is the open editor, not a
+    // memory: it has no id to open or delete, so it stays out of the keyboard
+    // cursor list.
+    return Array.prototype.slice.call(list.querySelectorAll('.mem:not([data-draft])'));
   }
 
   function setCursor(index) {
@@ -1355,6 +1476,9 @@
       writeTags(list);
       syncTagChips();
       onEdit();
+      // Toggling the reserved `executable` chip is what activates a definition, so
+      // it saves straight away (the verdict then follows from the same response).
+      saveNow();
     });
     // Keep chip state in sync when tags are typed by hand.
     fTags.addEventListener('input', syncTagChips);
@@ -1480,12 +1604,8 @@
   }
 
   /* Archive / publish toggles: saved immediately (discrete actions). */
-  fArchived.addEventListener('change', function () {
-    if (isDirty()) { saveIdle.cancel(); save(); }
-  });
-  fPublic.addEventListener('change', function () {
-    if (isDirty()) { saveIdle.cancel(); save(); }
-  });
+  fArchived.addEventListener('change', saveNow);
+  fPublic.addEventListener('change', saveNow);
 
   /* Write / Preview tabs. Clicking one remembers the choice as a preference. */
   Array.prototype.forEach.call(tabs, function (tab) {
@@ -1501,6 +1621,9 @@
     saveIdle();
     autosizeContent();
     if (previewVisible()) { renderPreview(); }
+    // A new memory that has just become saveable shows its stand-in row, with the
+    // title as it is being typed.
+    renderDraftRow();
   }
 
   fContent.addEventListener('input', function () {

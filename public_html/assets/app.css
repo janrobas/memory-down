@@ -710,6 +710,13 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 
 .mem.new { font-weight: 700; }
 
+/* The provisional row for a memory that is not saved yet. It has the shape of a
+   category group, but it is not one: it never collapses and its header is not a
+   control. The dashed row says "this file does not exist yet". */
+.list .cat.draft .cat-name { cursor: default; }
+.list .cat.draft .cat-name:hover { background: transparent; color: var(--muted); }
+.list .cat.draft .mem { border: 1px dashed var(--muted); }
+
 .mem .badge-new {
   display: inline-block;
   margin-left: .4rem;

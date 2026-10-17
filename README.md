@@ -202,12 +202,18 @@ pair the MCP consent page asks for.
 - **Left pane:** live search above memories grouped by category, with an
   **All / Active / Archived** filter. Search accepts `tag:foo` to require a tag
   (e.g. `tag:project-x notes`). Archived memories stay searchable and are shown
-  with an `archived` badge, ranked after active ones.
+  with an `archived` badge, ranked after active ones. A brand-new memory has no
+  file yet, so it appears as a **provisional row** above the categories from the
+  first unsaved change; it is replaced by the real row as soon as the entry is
+  created.
 - **Right pane:** title, category, tags, Markdown editor with a **Preview** tab
   (rendered server-side by `league/commonmark`, raw HTML escaped). The
   **Archived** checkbox archives/restores an entry (kept as frontmatter, never
   deleted). **Autosave** (on switching memories, on blur, and after ~20s idle);
-  `Ctrl/Cmd+S` forces a save. Drag a memory onto a category to move it. Themes
+  `Ctrl/Cmd+S` forces a save. A **tag chip**, **Archived** and **Public** save
+  straight away rather than on the idle timer — toggling the reserved
+  `executable` chip is what activates a workflow, and its verdict has to appear
+  with the click. Drag a memory onto a category to move it. Themes
   (white/dark/retro/green/blue) are remembered in `localStorage`.
 - **Delete** appears next to the title for existing memories. It moves the entry
   to the trash (see below) rather than destroying it.
