@@ -171,9 +171,12 @@ Before implementation, verify the current requirements for:
 - authorization server discovery
 - token validation
 
-The implementation should be appropriate for a single-user personal application.
+The implementation should be appropriate for a small personal application that is
+shared by a few people — one instance per household or team, not a hosted
+multi-tenant service.
 
-Do not build unnecessary multi-tenant functionality.
+Do not build unnecessary multi-tenant functionality: no organisations, no
+self-service sign-up, no per-account quotas or billing.
 
 Never commit secrets.
 
@@ -268,24 +271,31 @@ The memory directory should be simple and human-readable.
 Example:
 
     data/
-      memory/
-        preferences/
-        projects/
-        decisions/
-        workflows/
-        ideas/
-        references/
-        goals/
-        facts/
-        people/
-        context/
-        notes/
-        writings/
-        .trash/          deleted entries, restorable from the admin UI
+      users/
+        alice/           one directory per account; the boundary is the directory
+          memory/
+            preferences/
+            projects/
+            decisions/
+            workflows/
+            ideas/
+            references/
+            goals/
+            facts/
+            people/
+            context/
+            notes/
+            writings/
+            .trash/        deleted entries, restorable from the admin UI
+          index/
+            memory.sqlite  disposable search cache for that account only
+      auth/               accounts, OAuth clients and tokens (never web-readable)
+      sessions/
+      logs/
 
 Example:
 
-    data/memory/preferences/notes-system.md
+    data/users/alice/memory/preferences/notes-system.md
 
 Example content:
 
@@ -306,6 +316,9 @@ Example content:
 The frontmatter format should remain intentionally simple.
 
 Do not create a complicated schema.
+
+The account id is a directory name *and* a login name, so it must be a strict
+slug, and no path may ever be built from it without validation.
 
 ---
 
@@ -550,16 +563,20 @@ Deployment-specific configuration must not be hard-coded.
 Use configuration/environment variables for:
 
 - application base URL
-- memory path
+- runtime paths (data, accounts, logs, MCP sessions)
 - environment
 - OAuth configuration
 - secrets
+- the seed credentials for the very first account only
+
+Accounts, passwords and per-account API tokens are **not** configuration: they
+live in `data/auth/users.json` and are managed in the admin UI.
 
 Example:
 
     APP_BASE_URL=https://memory.example.com
     APP_ENV=production
-    MEMORY_PATH=/absolute/path/to/data/memory
+    DATA_PATH=/absolute/path/to/data
 
 Never commit production secrets.
 
@@ -645,7 +662,7 @@ Do NOT add these to V1:
 - automatic wiki generation
 - frontend
 - mobile app
-- multi-user accounts
+- self-service sign-up
 - billing
 - teams
 - organizations
@@ -658,20 +675,21 @@ These can be considered later.
 
 ### Amendment: admin UI and search index (in scope)
 
-Two items from the list above have since been explicitly taken into scope, under
-the constraints that follow. The rest of the list still stands.
+Three items from the list above have since been explicitly taken into scope,
+under the constraints that follow. The rest of the list still stands.
 
-- **A single-user admin UI** (`/ui`) is in scope: browse, search and edit the
-  Markdown memory store. It must stay server-rendered PHP with optional light,
+- **An admin UI** (`/ui`) is in scope: browse, search and edit the Markdown
+  memory store. It must stay server-rendered PHP with optional light,
   vendored JavaScript — **no frontend framework and no build step** — and remain
-  deployable via FTP on shared hosting. It is protected by a single admin
-  password (hash only; never plaintext) and PHP sessions.
+  deployable via FTP on shared hosting. It is protected by a username and
+  password per account (hash only; never plaintext) and PHP sessions.
 
 - **A full-text search index** is in scope, but **SQLite may only ever be a
   disposable cache**, never canonical storage. Markdown files remain the source
   of truth. The index must be rebuildable from the Markdown at any time, and the
   application must fall back to direct file search when `pdo_sqlite` is absent.
-  Deleting the index must lose nothing.
+  Deleting the index must lose nothing. It is per account, inside that account's
+  directory, so it can never mix two corpora.
 
 - **A read-only public writings API** (`/public/writings`) is in scope, but only
   as a narrowly-scoped publishing surface: it serves entries in the `writings`
@@ -679,24 +697,27 @@ the constraints that follow. The rest of the list still stands.
   must never read or expose anything outside `writings/`, must never write, and
   is disabled by default. Publishing (`public`) is set only in the admin UI, not
   via MCP, so an agent cannot publish on the user's behalf. No rendering, no
-  comments, no multi-user: the consuming website owns display.
+  comments: the consuming website owns display. The token is per account and
+  decides whose corpus is served.
 
 - **A read-only workflows API** (`/api/workflows`) is in scope on the same terms,
   for the other direction: a runner that cannot read the filesystem fetches the
-  definitions over HTTP. `WORKFLOWS_API_ENABLED` (default `false`) and its own
-  `WORKFLOWS_API_TOKEN`; it serves the `workflows` category only, as JSON with the
-  stored Markdown body, reports the `executable` flag and nothing about whether a
-  definition may run. Only `GET` is routed, so there is nothing to write with —
-  it is a second way to *read* the same Markdown, never a second source of truth,
-  and reading a definition authorises nothing.
+  definitions over HTTP. `WORKFLOWS_API_ENABLED` (default `false`) gates it, and
+  the token is per account (admin UI → Settings), like the writings API. It serves
+  the `workflows` category only, as JSON with the stored Markdown body, reports
+  the `executable` flag and nothing about whether a definition may run. Only `GET`
+  is routed, so there is nothing to write with — it is a second way to *read* the
+  same Markdown, never a second source of truth, and reading a definition
+  authorises nothing.
 
 - **A recoverable trash and a backup download** are in scope, under the same
   constraint that Markdown stays canonical. A delete moves the file to
   `memory/.trash/` (restorable in the admin UI, purgeable there, never part of
-  the corpus) instead of unlinking it, and `/ui/backup` streams a zip of the
-  memory directory only — never `data/auth/` or `.env`, so a download can never
-  leak a credential. Both are admin-session-only, and neither introduces a
-  scheduler: taking backups is the user's call, on their own schedule.
+  the corpus) instead of unlinking it, and `/ui/backup` streams a zip of one
+  account's memory directory only — never `data/auth/`, `.env` or another
+  account, so a download can never leak a credential. Both are session-guarded,
+  and neither introduces a scheduler: taking backups is the user's call, on their
+  own schedule.
 
 ### Amendment: workflow definitions (standard v1, in scope)
 
@@ -734,20 +755,68 @@ more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
 - Still out of scope in this area: unattended mutating runs without per-action
   confirmation, embeddings, and any second source of workflow definitions.
 
-Still explicitly **out of scope**: embeddings/vector search, multi-user accounts
-(one instance per person instead), teams, billing, background jobs/queues.
+### Amendment: accounts (in scope)
+
+Multiple accounts are in scope, under the constraints that follow. This replaces
+the earlier "one instance per person" position, and nothing else on the
+out-of-scope list changes.
+
+- **An account is the unit of isolation, and the filesystem is the boundary.**
+  Every account owns `data/users/<id>/` — its memory, its disposable index, its
+  MCP transport sessions. No store, index, path or tool call can reach another
+  account's directory, because none of them is ever rooted anywhere else. The
+  boundary is a directory per account, not an owner column: a missing filter
+  cannot leak what is not on the path.
+- **One credential per person, in `data/auth/users.json`.** The username and
+  password are the same pair for the admin UI (`/ui/login`) and for the OAuth
+  consent page, and passwords are stored as one-way hashes. `data/auth/` is never
+  web-readable and never part of a backup download.
+- **One authorization server per instance.** The consent page identifies the
+  account (username + password); the issued token records that account as its
+  OAuth `sub`. `/mcp` stays a single endpoint: who signed in decides whose memory
+  is served. Protected-resource and authorization-server metadata stay global so
+  clients need no per-account discovery.
+- **Per-account API tokens** for the two read-only publishing APIs, managed in the
+  admin UI. An environment variable cannot name a subject, so
+  `PUBLIC_API_TOKEN`/`WORKFLOWS_API_TOKEN` are gone; the `*_API_ENABLED` switch
+  stays. Only `data/auth/` holds the values, and the admin UI may show them again
+  because the user has to paste them somewhere — the same exposure `.env` had.
+- **Credentials are revocable in one integer.** Every account carries an auth
+  epoch, bumped on a password change, a role change, a disable or a delete;
+  sessions and tokens are stamped with it and refused when it moves. That is what
+  makes "this account's connections stopped working" true immediately on shared
+  hosting, with no daemon and no sweep of session files.
+- **Roles are `admin` and `user`.** Admins manage accounts; users manage their own
+  password, tokens and backup. An admin may **download** any account's memory and
+  nothing else — reading or editing somebody else's entries in the UI is not
+  offered, so the isolation is not undone by a convenience. The last enabled admin
+  can be neither demoted, disabled nor deleted, and no one can do it to
+  themselves.
+- **Deletion is recoverable at every level**: memories go to that account's
+  `memory/.trash/`, a deleted account's directory goes to `data/users/.trash/`.
+- **Seeding is one-shot.** A pre-accounts instance is migrated on first boot from
+  `ADMIN_PASSWORD_HASH`/`OAUTH_CONSENT_PASSWORD`/`OAUTH_USERNAME` and its
+  `MEMORY_PATH` corpus; from then on those variables are ignored (a password
+  changed in the UI must stick) and the only way to create an account is
+  `/ui/setup`, `/ui/users`, or the store itself.
+- **Still out of scope here:** self-service sign-up, per-account quotas, and
+  anything resembling a hosted multi-tenant service. One instance serves a
+  household or a team.
+
+Still explicitly **out of scope**: embeddings/vector search, teams, billing,
+background jobs/queues, self-service account creation.
 
 The first goal is:
 
     ChatGPT
        ↓
-     OAuth
+     OAuth (consent names the account)
        ↓
-      MCP
+      MCP (one endpoint per instance)
        ↓
     remember / search / recall
        ↓
-    Markdown files
+    Markdown files (one directory per account)
 
 ---
 
@@ -773,5 +842,11 @@ V1 is complete when:
 - path traversal is prevented
 - secrets are not exposed
 - deployment is documented
+- accounts exist: an admin creates them, each one owns its own memory directory,
+  and nothing reaches across that line
+- the same username and password open both the admin UI and the MCP consent page
+- a password change, a disable or a delete immediately invalidates that account's
+  sessions, MCP tokens and API tokens
+- a pre-accounts instance upgrades itself on first boot without losing memory
 
 The project should remain small and maintainable.

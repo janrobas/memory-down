@@ -5,6 +5,10 @@
 /data/sessions/
 /data/logs/
 
+# Every account's memory, its trash and its disposable search index. This is the
+# canonical data store: back it up, never commit it.
+/data/users/
+
 # Disposable full-text search index (rebuilt from the Markdown files)
 /data/index/
 
