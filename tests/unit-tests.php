@@ -289,6 +289,37 @@ check(
     [] === WorkflowDefinition::parse("# Naslov\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n")['problems']
 );
 
+// `mode: yolo` is a known mode now: a runner may execute it without asking, but
+// only when its own instance-wide switch is on — which is the runner's business,
+// not something MemoryDown reads or stores (docs/WORKFLOWS.md §7).
+check('workflow: yolo is a known mode', in_array('yolo', WorkflowDefinition::MODES, true), json_encode(WorkflowDefinition::MODES));
+$yolo = WorkflowDefinition::parse("```yaml\nmode: yolo\nschedule: \"* * * * *\"\nallowed_tools:\n  - \"*\"\n```\n\nOdgovori na posto.\n");
+check('definition: mode yolo is accepted', [] === $yolo['problems'], implode(' | ', $yolo['problems']));
+check('definition: a yolo definition is not refused', [] === WorkflowDefinition::activationProblems('workflows', ['executable'], "```yaml\nmode: yolo\n```\n\nNavodila.\n"));
+
+// The wildcard is a list item and stays as written: expanding it is the runner's
+// job at the moment of the call, so the stored definition must not be rewritten.
+check('definition: a quoted wildcard is one list item', ['*'] === ($yolo['config']['allowed_tools'] ?? null), json_encode($yolo['config']['allowed_tools'] ?? null));
+check('definition: a server wildcard is one list item', ['calendar.*'] === (WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools:\n  - calendar.*\n```\n\nNavodila.\n")['config']['allowed_tools'] ?? null));
+check('definition: a bare wildcard list item parses too (this parser is flat)', ['*'] === (WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools:\n  - *\n```\n\nNavodila.\n")['config']['allowed_tools'] ?? null));
+check('definition: no wildcard is expanded into tool names', ['*'] === ($yolo['config']['allowed_tools'] ?? null) && [] === array_diff(array_keys($yolo['config']), WorkflowDefinition::FIELDS));
+
+// One id needs no list: the scalar form is a one-element allowlist, and a
+// genuinely empty value is still a problem.
+$scalarTools = WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools: \"*\"\n```\n\nNavodila.\n");
+check('definition: a scalar wildcard is a one-element list', ['*'] === ($scalarTools['config']['allowed_tools'] ?? null), json_encode($scalarTools['config']['allowed_tools'] ?? null));
+check('definition: a scalar wildcard raises no problem', [] === $scalarTools['problems'], implode(' | ', $scalarTools['problems']));
+check('definition: a scalar tool id is a one-element list', ['calendar.get_events'] === (WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools: calendar.get_events\n```\n\nNavodila.\n")['config']['allowed_tools'] ?? null));
+check(
+    'definition: an empty allowed_tools value is still reported',
+    str_contains($bad("```yaml\nmode: dry-run\nallowed_tools: \"\"\n```\n\nNavodila.\n"), 'allowed_tools')
+);
+
+// The template documents all three modes and the quoting rule for the wildcard.
+check('template: the mode comment names yolo', str_contains(WorkflowDefinition::TEMPLATE_BODY, 'yolo'));
+check('template: the mode comment names the runner switch', str_contains(WorkflowDefinition::TEMPLATE_BODY, 'AIORCH_ENABLE_YOLO'));
+check('template: the tool comment asks for a quoted wildcard', str_contains(WorkflowDefinition::TEMPLATE_BODY, '("*")'));
+
 /* ------------------------------------------------------------------ *
  *  The workflow catalog (read-only API over the workflows category)
  * ------------------------------------------------------------------ */
@@ -390,6 +421,10 @@ check('config: an explicit flag is honoured', true === $enabled->workflowsApiEna
 $envExample = (string) @file_get_contents(dirname(__DIR__) . '/.env.example');
 check('config: .env.example documents the workflows API switch', str_contains($envExample, 'WORKFLOWS_API_ENABLED=false'), '');
 check('config: .env.example no longer carries an instance-wide token', !str_contains($envExample, 'WORKFLOWS_API_TOKEN') && !str_contains($envExample, 'PUBLIC_API_TOKEN'));
+// The runner's unattended-run switch is documented in docs/WORKFLOWS.md, not here:
+// MemoryDown does not read it and holds no runner configuration, so listing it
+// among this application's settings would only suggest it does something.
+check('config: .env.example does not claim the runner switch', !str_contains($envExample, 'AIORCH'));
 
 check('recommended tags include question', in_array('question', RecommendedTags::LIST, true));
 check('recommended tags include snippet', in_array('snippet', RecommendedTags::LIST, true));

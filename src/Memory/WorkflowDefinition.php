@@ -40,8 +40,19 @@ final class WorkflowDefinition
 
     public const MODE_APPLY = 'apply';
 
+    /**
+     * Run every allowed tool at once, with no proposal and no confirmation.
+     *
+     * The most permissive mode is a REQUEST, not an authorisation: the runner
+     * executes it only when its own instance-wide switch is on (the runner's
+     * `AIORCH_ENABLE_YOLO=true`), and otherwise runs the definition as `apply`.
+     * MemoryDown never reads that switch — it holds no runner configuration and
+     * enforces nothing (docs/WORKFLOWS.md §7).
+     */
+    public const MODE_YOLO = 'yolo';
+
     /** @var list<string> */
-    public const MODES = [self::MODE_DRY_RUN, self::MODE_APPLY];
+    public const MODES = [self::MODE_DRY_RUN, self::MODE_APPLY, self::MODE_YOLO];
 
     /**
      * Fields the configuration block may carry. Anything else is reported as
@@ -90,12 +101,16 @@ final class WorkflowDefinition
 timezone: Europe/Ljubljana
 
 # Kako se obnaša: dry-run samo bere in poroča, kaj bi naredil. apply sme
-# spreminjati, vsako mutirajoče dejanje pa potrdiš ti ob klicu.
+# spreminjati, vsako mutirajoče dejanje pa potrdiš ti ob klicu. yolo izvede
+# vsa orodja z allowed_tools takoj, brez predloga in brez potrditve — tudi
+# pošiljanje e-pošte in brisanje. Velja le, če ima izvajalec vklopljeno svoje
+# stikalo (AIORCH_ENABLE_YOLO=true v njegovem okolju); sicer teče kot apply.
 mode: dry-run
 
 # Katera orodja sme klicati. Kar ni na seznamu, izvajalec zavrne. Brez seznama
 # sme le brati. Namesto id-jev lahko vpišeš * (vsa orodja vseh strežnikov) ali
-# calendar.* (vsa orodja enega strežnika).
+# calendar.* (vsa orodja enega strežnika) — * vedno v narekovajih ("*"), ker je
+# sam * v YAML alias. Namesto seznama je dovoljen tudi en sam id.
 allowed_tools:
   - memory.search_memory
   - memory.read_memory
@@ -218,7 +233,7 @@ MD;
 
         $mode = $config['mode'] ?? self::MODE_DRY_RUN;
         if (!is_string($mode) || !in_array($mode, self::MODES, true)) {
-            $problems[] = '"mode" must be ' . implode(' or ', self::MODES) . '; found ' . self::describe($mode) . '.';
+            $problems[] = '"mode" must be one of ' . implode(', ', self::MODES) . '; found ' . self::describe($mode) . '.';
         }
 
         $schedule = $config['schedule'] ?? null;
@@ -232,15 +247,21 @@ MD;
         }
 
         $tools = $config['allowed_tools'] ?? null;
+        if (is_string($tools) && '' !== trim($tools)) {
+            // One id needs no list: `allowed_tools: "*"` is the same as a
+            // one-element list (docs/WORKFLOWS.md §4). Normalised here so every
+            // caller sees one shape; a genuinely empty value is still reported.
+            $tools = $config['allowed_tools'] = [trim($tools)];
+        }
         if (is_array($tools)) {
             foreach ($tools as $tool) {
                 if (!is_string($tool) || '' === trim($tool)) {
-                    $problems[] = '"allowed_tools" must be a list of tool ids (one per "- " line).';
+                    $problems[] = '"allowed_tools" must be a tool id or a list of tool ids (one per "- " line).';
                     break;
                 }
             }
         } elseif (null !== $tools) {
-            $problems[] = '"allowed_tools" must be a list of tool ids (one per "- " line).';
+            $problems[] = '"allowed_tools" must be a tool id or a list of tool ids (one per "- " line).';
         }
 
         if ('' === trim($instructions)) {

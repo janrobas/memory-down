@@ -729,7 +729,10 @@ more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
   `llm_provider`, `llm_model`) lives in a fenced `yaml` block **in the body**,
   because the frontmatter is rebuilt from a fixed key list on every save and would
   silently drop it. The block is the first thing in the body; the title is a
-  separate field, written as the `# …` heading above it.
+  separate field, written as the `# …` heading above it. `mode` is `dry-run`
+  (default), `apply` (every mutating action confirmed by the user) or `yolo` (the
+  allowlist runs unasked); `allowed_tools` takes a list of ids, a single id, or the
+  wildcards `*` and `server.*`.
 - The admin UI pre-fills that block (and the instructions skeleton) when a new
   memory is created in `workflows`, from `WorkflowDefinition::TEMPLATE_BODY` — one
   definition of the shape, not a second copy of it in JavaScript. The template is
@@ -752,8 +755,15 @@ more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
   future C#/.NET Worker Service, not to MemoryDown; MemoryDown keeps serving
   definitions and memory as Markdown only. No new tables, no queue, no worker
   here.
-- Still out of scope in this area: unattended mutating runs without per-action
-  confirmation, embeddings, and any second source of workflow definitions.
+- `mode: yolo` is in scope on one condition: it is a *request*, and the runner
+  executes it only when its own instance-wide switch is on (`AIORCH_ENABLE_YOLO`
+  in the runner's environment). MemoryDown neither reads that switch nor stores it
+  — it is not one of this application's settings — so an unattended run needs two
+  human acts: the mode in the definition (which MCP cannot write) and the switch in
+  the runner's environment. `allowed_tools` stays the ceiling in every mode, and the
+  runner reports each action it took.
+- Still out of scope in this area: embeddings, and any second source of workflow
+  definitions.
 
 ### Amendment: accounts (in scope)
 

@@ -90,12 +90,15 @@ id: jutranji-pregled-poste-1a2b3c
 timezone: Europe/Ljubljana
 
 # Kako se obnaša: dry-run samo bere in poroča, kaj bi naredil. apply sme
-# spreminjati, vsako mutirajoče dejanje pa potrdiš ti ob klicu.
+# spreminjati, vsako mutirajoče dejanje pa potrdiš ti ob klicu. yolo izvede vsa
+# orodja z allowed_tools takoj, brez predloga in brez potrditve — velja le, če
+# ima izvajalec vklopljeno svoje stikalo (AIORCH_ENABLE_YOLO=true, razdelek 7).
 mode: dry-run
 
 # Katera orodja sme klicati. Kar ni na seznamu, izvajalec zavrne. Brez seznama
 # sme le brati. Namesto id-jev lahko vpišeš * (vsa orodja vseh strežnikov) ali
-# calendar.* (vsa orodja enega strežnika).
+# calendar.* (vsa orodja enega strežnika) — * vedno v narekovajih ("*"), ker je
+# sam * v YAML alias. Namesto seznama je dovoljen tudi en sam id.
 allowed_tools:
   - memory.search_memory
   - memory.read_memory
@@ -141,10 +144,10 @@ Pravila oblike:
 
 | Polje | Tip | Privzeto (če manjka) | Pomen |
 | --- | --- | --- | --- |
-| `mode` | `dry-run` \| `apply` | `dry-run` | `dry-run`: samo bralna orodja, vsaka predvidena sprememba se poroča. `apply`: dovoljene so spremembe, vsako mutirajoče orodje zahteva tvojo potrditev ob klicu. |
+| `mode` | `dry-run` \| `apply` \| `yolo` | `dry-run` | `dry-run`: samo bralna orodja, vsaka predvidena sprememba se poroča. `apply`: dovoljene so spremembe, vsako mutirajoče orodje zahteva tvojo potrditev ob klicu. `yolo`: vsa orodja z `allowed_tools` se izvedejo takoj, brez predloga in brez potrditve — **velja le, če ima izvajalec vklopljeno svoje stikalo** (razdelek 7); sicer način teče kot `apply`. |
 | `schedule` | cron (5 polj) | odsotno = samo ročni zagon | Kdaj se izvede, v času `timezone`. |
 | `timezone` | IANA ime | `Europe/Ljubljana` | Časovni pas urnika in poročil. |
-| `allowed_tools` | seznam id-jev (dovoljen je tudi žolček) | odsotno = samo bralna orodja | Katera orodja workflow sploh sme klicati. Kar ni na seznamu, izvajalec zavrne. Namesto posameznih id-jev sta dovoljena `*` (vsa orodja vseh strežnikov) in `<strežnik>.*` (npr. `calendar.*`). |
+| `allowed_tools` | seznam id-jev (dovoljen je tudi žolček) ali en sam id | odsotno = samo bralna orodja | Katera orodja workflow sploh sme klicati. Kar ni na seznamu, izvajalec zavrne. Namesto posameznih id-jev sta dovoljena `*` (vsa orodja vseh strežnikov) in `<strežnik>.*` (npr. `calendar.*`). Namesto seznama je dovoljena tudi skalarna oblika (`allowed_tools: "*"`), ki pomeni enoelementni seznam. |
 | `llm_provider` | ime ponudnika | odsotno = privzeti ponudnik izvajalca | S katerim ponudnikom naj teče. Imena razrešuje izvajalec; neznano ime javi kot napako, ne ugiba. |
 | `llm_model` | id modela | odsotno = privzeti model ponudnika | Kateri model naj teče. |
 
@@ -154,18 +157,25 @@ Dodatna pravila:
   polje nikoli ne razširi dovoljenj.
 - **Polja `enabled`, `require_confirmation` in `auto_approve` ne obstajajo.**
   `enabled` nadomeščata oznaka in arhiviranje; potrditev je lastnost orodja in
-  odločitev uporabnika, ne polje v definiciji; samodejno odobritev bo dodana
-  (če sploh) kot odločitev izvajalca, vezana na vsebino definicije.
+  odločitev uporabnika, ne polje v definiciji; samodejno odobritev izraža
+  `mode: yolo` skupaj s stikalom izvajalca (razdelek 7) — dva človeška dejanja,
+  ne polje.
 - **Blok je ploski seznam `ključ: vrednost`**, brez gnezdenih preslikav. Seznam
   (`allowed_tools`) je ena vrstica `- id` na element; `#` na začetku vrstice je
   komentar; vrednost v narekovajih obdrži presledke (`schedule: "0 7 * * *"`).
+  Če `allowed_tools` vsebuje en sam id (tudi žolček), je dovoljena tudi skalarna
+  oblika — `allowed_tools: calendar.get_events` ali `allowed_tools: "*"` — in
+  šteje kot enoelementni seznam.
 - **`allowed_tools` pozna dva žolčka**: `*` (vsa orodja vseh povezanih strežnikov)
   in `<strežnik>.*` (vsa orodja enega strežnika, npr. `calendar.*`). Razširi ju
   **izvajalec** ob dejanskem Tool Registryju pred zagonom; definicija sama ostane
   besedilo. Žolček je zato edino mesto, kjer definicija sčasoma dobi pravice: kar
   strežnik ponudi kasneje, je z `*` že dovoljeno. Žolček, ki se razširi v **nič**
   (npr. strežnik ni dosegljiv), je napaka in zagon se preskoči — nikoli se ne
-  razume kot "nič ni dovoljeno".
+  razume kot "nič ni dovoljeno". `*` se v seznamu piše **v narekovajih**
+  (`- "*"`): goli `*` je v YAML alias in ga izvajalec z resničnim YAML parserjem
+  zavrne (MemoryDown ga prebere, ker blok bere plosko, in tega ne popravlja).
+  `<strežnik>.*` (npr. `calendar.*`) narekovajev ne potrebuje.
 - **`schedule` sprejme številke** in običajna tričrkovna imena (`*`, `7`,
   `7,12`, `6-9`, `*/4`, `mon-fri`, `jan`).
 - Izvajalec naj za razvrščanje orodij med bralna in mutirajoča uporabi oznake
@@ -235,29 +245,42 @@ predlogov, ki jih človek potrdi, ne prek neposrednega pisanja prek MCP.
 
 ---
 
-## 7. Načina delovanja in potrditve
+## 7. Načini delovanja, stikalo izvajalca in potrditve
 
-| | `dry-run` | `apply` |
-| --- | --- | --- |
-| bralna orodja | izvede | izvede |
-| mutirajoča orodja | **nikoli** — poroča predlog | izvede jih **samo po tvoji potrditvi ob klicu** |
-| kaj dobiš | povzetek, predloge, vprašanja | povzetek + izvedena dejanja |
+| | `dry-run` | `apply` | `yolo` |
+| --- | --- | --- | --- |
+| bralna orodja | izvede | izvede | izvede |
+| mutirajoča orodja | **nikoli** — poroča predlog | izvede jih **samo po tvoji potrditvi ob klicu** | **izvede jih takoj, brez predloga in brez potrditve** |
+| kaj dobiš | povzetek, predloge, vprašanja | povzetek + potrjena dejanja | povzetek + **opravljena** dejanja |
+| učinkovit način, kadar stikalo izvajalca ni vklopljeno | `dry-run` | `apply` (za pisanje `dry-run`, dokler ni kanala) | `apply` |
+
+**`yolo` ni samodejen.** Definicija izrazi *zahtevo*, izvajalec pa jo uresniči
+samo, če ima vklopljeno svoje stikalo — v tem izvajalcu `AIORCH_ENABLE_YOLO=true`
+v **njegovem** okolju (`.env` izvajalca, ne MemoryDowna). Stikalo je instančno:
+privzeto je izklopljeno, brez njega se `mode: yolo` obnaša natanko kot `apply`,
+in definicija ga ne more vklopiti. Odobritev je torej **dvakrat človeška**: z
+načinom v telesu definicije (ki ga prek MCP ni mogoče zapisati, razdelek 5) in s
+stikalom v okolju izvajalca. Stikalo samo ne spremeni ničesar, dokler v definiciji
+ne piše `yolo`.
 
 Trije pojmi, ki jih ne gre mešati:
 
-1. **Dovoljeno** — orodje je na seznamu `allowed_tools`. To je zgornja meja.
-   Žolček (`*`, `calendar.*`) tu ni izjema: izvajalec ga pred zagonom razširi v
-   konkretne id-je in šele ti so dovoljeni.
-2. **Zahteva potrditev** — vsako orodje, ki spreminja stanje (pošiljanje
-   e-pošte, dodajanje/brisanje dogodkov, pisanje v spomin). V v1 **vsako**
-   mutirajoče orodje zahteva potrditev; ni izjeme, ki bi jo definicija lahko
-   zapisala sama.
+1. **Dovoljeno** — orodje je na seznamu `allowed_tools`. To je zgornja meja in
+   velja v vseh treh načinih. Žolček (`*`, `calendar.*`) tu ni izjema: izvajalec
+   ga pred zagonom razširi v konkretne id-je in šele ti so dovoljeni.
+2. **Zahteva potrditev** — orodje, ki spreminja stanje (pošiljanje e-pošte,
+   dodajanje/brisanje dogodkov, pisanje v spomin). V `dry-run` se ne izvede
+   nikoli, v `apply` vedno zahteva tvojo potrditev, v `yolo` se izvede brez nje.
+   `yolo` je edina izjema in je ni mogoče zapisati drugače kot z načinom samim:
+   ni polja, ki bi jo dodalo, in ni drugega načina, ki bi jo vklopil.
 3. **Dejansko potrditev** — tvoja odločitev ob konkretnem klicu. Vezana je na
    predlagano dejanje (kaj, kje, kdaj), ne na orodje na splošno: »da« za en
-   dogodek ne odobri drugega. Shrani jo izvajalec.
+   dogodek ne odobri drugega. Shrani jo izvajalec. V `yolo` tega koraka ni.
 
 Če kanala za potrditve (Telegram) še ni, se `apply` obnaša kot `dry-run` za
-pisanje: mutirajoča dejanja ostanejo predlogi.
+pisanje: mutirajoča dejanja ostanejo predlogi. Enako velja za `yolo`, ki je
+zaradi izklopljenega stikala degradiran v `apply` — tudi tak zagon torej ne
+spremeni ničesar sam, kar mora povedati v poročilu.
 
 ---
 
@@ -281,8 +304,13 @@ odpove, workflowa **ne izvede**, ampak zabeleži in sporoči razlog.
    tega zagona; če se ne razreši v nobeno orodje, je to napaka in zagon se
    preskoči (razdelek 9).
 8. Če je predvideno mutirajoče dejanje: na voljo je potrditev uporabnika (ali je
-   izvajalec v načinu, ki sprememb ne izvaja).
+   izvajalec v načinu, ki sprememb ne izvaja, ali je definicija v `yolo` **in**
+   ima izvajalec vklopljeno svoje stikalo iz razdelka 7).
 9. Definicija ni v nasprotju z varnostnimi pravili iz razdelka 10.
+
+`yolo` ne sprošča nobenega drugega pogoja: kategorija, oznaka, arhiviranje,
+konfiguracijski blok, polja iz razdelka 4 in varnostna pravila iz razdelka 10
+veljajo enako.
 
 Neveljavna, nepopolna ali dvoumna definicija **nikoli** ne povzroči spremembe v
 zunanjem sistemu.
@@ -299,6 +327,8 @@ zunanjem sistemu.
 | Orodje ni v Tool Registryju ali ni dosegljivo | Tega koraka ne izvedi; poročaj **delni** rezultat in napako. Nikoli ne simuliraj rezultata. |
 | Vir podatkov nedosegljiv (e-pošta, koledar) | Ne nadomeščaj podatkov z ugibanjem; javi napako in nadaljuj z drugimi koraki, ki so mogoči. |
 | Orodje ni na `allowed_tools` | Zavrni klic, tudi če bi bil korak smiseln. |
+| Mutirajoče orodje v načinu `yolo` | Izvedi in zabeleži: orodje, argumente (brez skrivnosti) in ključ idempotence. |
+| `mode: yolo`, stikalo izvajalca izklopljeno | Izvedi kot `apply` in v poročilu povej, da je bil način degradiran — nikoli tiho. |
 | Žolček v `allowed_tools` se ne razširi v nobeno orodje | Ne izvedi; javi, kateri žolček ni ujel ničesar (najverjetneje strežnik ni dosegljiv). Ne razumej tega kot "dovoljeno nič". |
 | Enako dejanje je bilo že izvedeno (isti ključ idempotence) | Ne ponovi; javi, da je bilo že izvedeno. |
 | Definicija se med izvajanjem spremeni | Trenutni zagon se zaključi po starih pravilih; nova velja od naslednjega zagona. |
@@ -308,9 +338,11 @@ zunanjem sistemu.
 ## 10. Varnostna načela
 
 - **Privzeto izklopljeno:** nov workflow nima oznake `executable`; ko jo dobi,
-  teče v `dry-run`, dokler `mode` nista zavestno spremenjena.
+  teče v `dry-run`, dokler `mode` ni zavestno spremenjen — in `yolo` ne teče,
+  dokler ni zavestno vklopljeno tudi stikalo v okolju izvajalca.
 - **LLM si ne podeli dovoljenj.** Oznake ne more dodati, aktiviranega workflowa
-  ne more spremeniti (razdelek 5), mutirajoča dejanja pa odobri uporabnik.
+  ne more spremeniti (razdelek 5), mutirajoča dejanja pa odobri uporabnik — v
+  `yolo` tako, da je način zapisal in stikalo vklopil on, ne agent.
 - **Preverjanje je v izvajalcu, ne v navodilih.** Izvajalec preveri dovoljena
   orodja, argumente in pravice za **vsak** klic. Navodila workflowa so
   uporabniška konfiguracija, ne dovoljenje za obhod pravil.
@@ -320,6 +352,24 @@ zunanjem sistemu.
   se je žolček razširil in koliko od njih spreminja stanje (z imeni). V načinu
   `yolo` to velja tudi za destruktivna orodja — brez tega bi bilo "dovoljeno vse"
   nevidno.
+- **`yolo` je človeška poteza, dvakrat.** Način je v telesu, telo pa lahko v
+  admin UI piše samo človek (razdelek 5); stikalo je v okolju izvajalca. Zato
+  `yolo` ne potrebuje ločene shrambe odobritev — meja je ista kot pri oznaki:
+  agent ga ne more ne zapisati ne vklopiti.
+- **Stikalo je globalni preklic.** Ena vrednost v okolju izvajalca ustavi vsak
+  `yolo` zagon na instanci. Izvajalec ob zagonu zabeleži, da je stikalo
+  vklopljeno, sicer bi instanca tiho tekla v najširšem načinu. Stikalo pripada
+  izvajalcu: `AIORCH_ENABLE_YOLO` ni okoljska spremenljivka MemoryDowna in
+  MemoryDown ga ne bere — kdor ga vpiše v njegov `.env`, ne spremeni ničesar.
+- **`yolo` ne odpravi nezaupanja vredne vsebine.** E-pošta, dokumenti in splet
+  ostajajo podatki, ne navodila; v `yolo` to velja še strožje, ker ni človeka, ki
+  bi vsako dejanje potrdil. Workflow, ki iz vsebine sporočila pošilja poverilnice
+  ali skrivnosti, je v nasprotju s tem razdelkom in z razdelkom 3.
+- **Vsak zagon v `yolo` mora biti viden.** Poročilo navede vsako izvedeno
+  mutirajoče dejanje z orodjem, argumenti (brez skrivnosti) in ključem
+  idempotence.
+- **`yolo` ne razširi `allowed_tools`.** Kar ni na seznamu, ostane zavrnjeno tudi
+  v `yolo`; brez seznama sme workflow tudi v `yolo` le brati.
 - **E-pošta, dokumenti in druga zunanja vsebina so nezaupanja vredni podatki.**
   Nikoli niso navodila, ki bi spremenila pravila, razkrila skrivnosti ali
   sprožila dejanja izven naloge workflowa.
@@ -348,16 +398,25 @@ zunanjem sistemu.
 4. **Dovolitev pisanja** — v admin UI dodaš v `allowed_tools` orodja, ki
    spreminjajo stanje, in spremeniš `mode: apply`. Od tu so spremembe možne,
    vsaka pa zahteva tvojo potrditev.
-5. **Pavza** — arhiviraj zapis (checkbox *Archived*) ali odstrani oznako.
+5. **Brez potrditve (`yolo`)** — šele ko `apply` nekaj zagonov deluje
+   predvidljivo, v admin UI spremeniš `mode: yolo` **in** v okolju izvajalca
+   vklopiš `AIORCH_ENABLE_YOLO=true`. Dva koraka, ne eden: način brez stikala
+   teče kot `apply`. Od tu izvajalec izvaja vsa orodja z `allowed_tools` brez
+   vprašanja; edina meja ostane `allowed_tools`. Vrni se tako, da način spremeniš
+   nazaj na `apply` ali `dry-run`, izklopiš stikalo ali arhiviraš zapis.
+6. **Pavza** — arhiviraj zapis (checkbox *Archived*) ali odstrani oznako.
    Arhiviran workflow se ne izvaja, vendar ostane berljiv.
-6. **Sprememba** — urejaš v admin UI. Agent ne more urejati aktiviranega
+7. **Sprememba** — urejaš v admin UI. Agent ne more urejati aktiviranega
    workflowa; spremembo lahko predlaga kot nov osnutek v `workflows` ali `notes`,
    ti pa jo preneseš v definicijo.
-7. **Upokojitev** — odstrani oznako (postane navaden zapisek) ali izbriši zapis
+8. **Upokojitev** — odstrani oznako (postane navaden zapisek) ali izbriši zapis
    v admin UI (gre v `.trash/`, kjer ga je mogoče obnoviti).
 
 Za aktivacijo ni dodatnih korakov v izvajalcu: ni registracije, ni odobritve, ni
-datotek z dovoljenji. Definicija v Markdownu je celotna resnica.
+datotek z dovoljenji. Definicija v Markdownu je celotna resnica. Edina
+izvajalčeva nastavitev je njegovo stikalo za `yolo` (korak 5), ki pa ne odloča o
+posamezni definiciji, ampak o tem, ali sme na tej instanci katera koli teči brez
+potrditev.
 
 ---
 
@@ -369,15 +428,16 @@ ta oblika definicij omogoča brez ugibanja.
 
 Zavestno **ni** v v1 in naj se ne doda brez prave potrebe:
 
-- `auto_approve` / samodejno izvajanje mutirajočih dejanj brez potrditve. Če se
-  kdaj doda, mora biti to odločitev **izvajalca**, podeljena človeku, vezana na
-  zgoščeno vrednost odobrene definicije — tako da sprememba navodil ali
-  `allowed_tools` zahteva novo odobritev. (Mišljen je seznam, kot je **zapisan**:
-  žolček razširi izvajalec ob klicu — glej razdelek 4.)
 - verzioniranje formata (`standard: 1`). Dokler je oblika ena, je nepotrebno;
   doda se, če se kdaj nezdružljivo spremeni.
 - dodatna polja v konfiguracijskem bloku (`limits`, `report`, …). Izvajalec ima
   svoje privzete omejitve in naj jih uveljavlja neodvisno od definicije.
+
+**Kar je bilo tu prej in je zdaj v standardu:** samodejno odobritev
+(`auto_approve`) izraža `mode: yolo` skupaj s stikalom izvajalca (razdelek 7) —
+dva človeška dejanja, ki ju definicija ne more opraviti sama. Ostaja pa pravilo,
+da polja `enabled`, `require_confirmation` in `auto_approve` ne obstajajo, in da
+je meja seznam, kot je **zapisan**: žolček razširi izvajalec ob klicu (razdelek 4).
 
 ---
 
@@ -389,7 +449,8 @@ Zavestno **ni** v v1 in naj se ne doda brez prave potrebe:
   frontmatterja in brez H1, znana polja, `TODO` in placeholder za model),
   parser konfiguracijskega bloka (neznano polje, neveljaven `mode`, 4-poljski in
   izven-obsežni cron, neveljaven časovni pas, prazen seznam, manjkajoča navodila,
-  komentarji in narekovaji), oznaka `executable` proti seznamu človeških oznak.
+  komentarji in narekovaji), oznaka `executable` proti seznamu človeških oznak,
+  način `yolo` kot znan način in skalarna oblika `allowed_tools`.
 - `tests/run-tests.php` (cela veriga: health → odkrivanje → OAuth → token →
   MCP `initialize` → `tools/list` → klici orodij → admin UI): oznaka je zavrnjena
   povsod, kjer bi jo agent lahko nastavil, zapis z oznako prek MCP ni ne
@@ -403,9 +464,16 @@ Zavestno **ni** v v1 in naj se ne doda brez prave potrebe:
   komentar v bloku).
 - Verdikt (kaj bi izvajalec zavrnil) se izračuna ob shranjevanju in ob branju,
   tako v API-ju kot na strani.
+- `mode: yolo` je znan način in definicija z njim ni označena kot neveljavna;
+  skalarna oblika `allowed_tools` šteje kot enoelementni seznam; žolček se v
+  MemoryDownu ne razširja — ostane dobesedno besedilo, ker razširitev naredi
+  izvajalec.
 
 **Ni izmerjeno:**
 
+- Stikala izvajalca (`AIORCH_ENABLE_YOLO`) MemoryDown ne more preizkusiti: ni
+  njegovo okolje in ga ne bere. Kako se `yolo` obnaša brez njega, je stvar
+  izvajalca.
 - Izvajalec ne obstaja. Pogoji iz razdelka 8 so tu **opozorilo**, ne
   uveljavljanje: MemoryDown shrani tudi nepopolno definicijo, ker je osnutek
   normalno stanje (razdelek 11).
@@ -433,6 +501,9 @@ fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`,
 zapis prednapolni admin UI. Z oznako je zapis prek MCP samo za branje, zato ga
 agent ne more ne ustvariti ne spremeniti, verdikt v UI pa ti pove, kaj bi
 izvajalec zavrnil. Privzeto teče v `dry-run` (samo bere in poroča), pisanje
-omogoči `mode: apply`, kjer vsako mutirajoče dejanje potrdi uporabnik. Pavza je
-arhiviranje. Izvajalec sme izvesti le definicijo, ki prestane vse pogoje iz
-razdelka 8 — v nasprotnem primeru javi razlog in ne spremeni ničesar.
+omogoči `mode: apply`, kjer vsako mutirajoče dejanje potrdi uporabnik, `mode:
+yolo` pa izvede vsa orodja z `allowed_tools` takoj, brez predloga in brez
+potrditve — a le, če ima izvajalec vklopljeno svoje stikalo
+(`AIORCH_ENABLE_YOLO=true`), tako da tudi `yolo` odobrita dva človeška dejanja.
+Pavza je arhiviranje. Izvajalec sme izvesti le definicijo, ki prestane vse pogoje
+iz razdelka 8 — v nasprotnem primeru javi razlog in ne spremeni ničesar.

@@ -62,7 +62,9 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   `allowed_tools`, `llm_provider`, `llm_model`) in a small YAML block in the body.
   The tag can only be added in the admin UI, and any entry carrying it is
   read-only through MCP — an agent can propose a workflow, never authorise or
-  rewrite one. See [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+  rewrite one. The most permissive mode, `yolo`, runs the allowlist without
+  asking, and the runner honours it only when its own instance-wide switch is on.
+  See [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 - **Deletes are recoverable:** anything deleted — in the UI or by an agent — goes
   to a `.trash/` folder instead of vanishing, and can be restored until you empty
   it. Deleting an *account* moves its whole directory aside the same way.
@@ -420,15 +422,31 @@ TODO: kaj naj workflow naredi in zakaj.
   key there is dropped by the next autosave; the body survives every write. The
   block must be the first thing in the body — the title is a separate field and
   is written as the `# …` heading above it.
-- **`mode`** is `dry-run` (read-only: it reports what it *would* do) or `apply`
-  (may change things, each mutating action confirmed by you). It defaults to
-  `dry-run`, so a newly activated workflow cannot write anything by accident.
+- **`mode`** is `dry-run` (read-only: it reports what it *would* do), `apply`
+  (may change things, each mutating action confirmed by you) or `yolo` (every
+  tool on `allowed_tools` runs at once, with no proposal and no confirmation —
+  including sending mail and deleting). It defaults to `dry-run`, so a newly
+  activated workflow cannot write anything by accident.
+- **`yolo` is not automatic.** It takes effect only when the *runner* has its own
+  switch on (`AIORCH_ENABLE_YOLO=true` in the runner's environment); without it a
+  `yolo` definition runs exactly as `apply`. That switch belongs to the runner:
+  MemoryDown never reads it, so setting it in this application's `.env` does
+  nothing. It is per instance — one value stops every unattended run — and a
+  definition cannot turn it on, which makes `mode: yolo` and the switch two
+  deliberate human acts rather than one.
 - **`schedule`** is a 5-field cron expression in `timezone` (default
   `Europe/Ljubljana`); omit it for a manual-only workflow. The template leaves it
   commented out, so a new definition starts manual.
 - **`allowed_tools`** is the allowlist of tools the workflow may call. Anything
   not listed is refused, and every tool that changes state needs your explicit
-  confirmation at the moment it is called.
+  confirmation at the moment it is called — except in `yolo`, where the allowlist
+  is the only limit left. Besides individual ids, `*` (every tool of every
+  connected server) and `<server>.*` (e.g. `calendar.*`) are accepted, and a
+  single id needs no list (`allowed_tools: "*"`). Write `*` in quotes
+  (`- "*"`), because a bare `*` is a YAML alias that a runner's YAML parser
+  rejects. A wildcard is the one thing in a definition that widens over time — a
+  tool a server offers tomorrow is already covered by today's `*` — so a run has
+  to report how many tools it matched.
 - **`llm_provider` / `llm_model`** name the model to run with. Left out, the
   runner uses its own defaults.
 - **The template is a draft on purpose**: it still contains `TODO` and a

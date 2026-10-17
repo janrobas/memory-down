@@ -1857,6 +1857,24 @@ check('admin API -> a filled-in definition has no problems left', [] === (jsonBo
 $r = request('GET', '/ui?category=workflows&id=' . rawurlencode($draftId));
 check('workflow UI: the page says a runner may execute it', str_contains($r['body'], 'may execute this definition'), 'page');
 
+// `mode: yolo` with a wildcard allowlist is a definition MemoryDown knows. The
+// verdict stays advisory and the wildcard stays as written: the runner expands it
+// at the call, and only the runner's own switch decides whether the run may act
+// unasked (docs/WORKFLOWS.md §7).
+$yoloBody = "```yaml\nmode: yolo\nschedule: \"* * * * *\"\ntimezone: Europe/Ljubljana\nallowed_tools:\n  - \"*\"\n```\n\nOdgovori na posto.\n";
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => 'Yolo probe', 'tags' => ['executable'], 'content' => $yoloBody,
+]));
+$yoloDoc = jsonBody($r['body']);
+$yoloId = (string) ($yoloDoc['memory']['id'] ?? '');
+check('admin API -> a yolo definition is accepted', 200 === $r['status'] && '' !== $yoloId, $r['body']);
+check('admin API -> a yolo definition has no problems left', [] === ($yoloDoc['definition'] ?? null), $r['body']);
+$yoloRaw = '' !== $yoloId && is_file($memoryRoot . '/workflows/' . $yoloId . '.md') ? (string) file_get_contents($memoryRoot . '/workflows/' . $yoloId . '.md') : '';
+check('admin API -> the mode is stored as written', str_contains($yoloRaw, 'mode: yolo'), $yoloRaw);
+check('admin API -> the wildcard is stored as written, not expanded', str_contains($yoloRaw, '- "*"'), $yoloRaw);
+$r = request('GET', '/ui?category=workflows&id=' . rawurlencode($yoloId));
+check('workflow UI: a yolo definition is not shown as refused', str_contains($r['body'], 'may execute this definition'), 'page');
+
 // The tag keeps the definition in `workflows`: moving it out is refused while it
 // is still active, and the file stays where it was.
 $draftFile = $memoryRoot . '/workflows/' . $draftId . '.md';
