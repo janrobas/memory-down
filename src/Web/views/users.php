@@ -145,7 +145,8 @@ $h = static fn (string $v): string => WebApp::h($v);
                     <button type="submit">Rotate</button>
                   </form>
                   <?php if ('' !== $token['token']): ?>
-                    <form class="inline-form" method="post" action="/ui/users/token">
+                    <form class="inline-form" method="post" action="/ui/users/token"
+                          data-confirm="Clear the <?= $h($kind) ?> token for <?= $h($id) ?>? Whatever is using it stops working immediately, and it cannot be shown again.">
                       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
                       <input type="hidden" name="id" value="<?= $h($id) ?>">
                       <input type="hidden" name="kind" value="<?= $h($kind) ?>">
@@ -162,7 +163,8 @@ $h = static fn (string $v): string => WebApp::h($v);
             </p>
 
             <?php if (!$locked): ?>
-              <form method="post" action="/ui/users/delete">
+              <form method="post" action="/ui/users/delete"
+                    data-confirm="Delete the account <?= $h($id) ?>? Its directory moves to data/users/.trash: nothing in the app can see its memory again, and only a manual restore of that directory over FTP brings it back.">
                 <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
                 <input type="hidden" name="id" value="<?= $h($id) ?>">
                 <button type="submit" class="danger">Delete account</button>

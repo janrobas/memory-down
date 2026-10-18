@@ -419,7 +419,10 @@ body.users {
 .page-card h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
 .page-card .account-name { font-weight: 600; overflow-wrap: anywhere; }
 .page-card form { margin: 0 0 .75rem; }
-.page-card form button { margin-top: 0; }
+/* Inline buttons sit on the baseline of the field beside them, so they carry no
+   top margin; a `.block` button is the whole row and keeps the gap `button.block`
+   puts above it. Matching `.block` here as well would erase that gap. */
+.page-card form button:not(.block) { margin-top: 0; }
 
 /* One account in the Users list: who it is on the left, what you can do to it
    on the right. Wraps rather than squeezing, so it stays usable on a phone. */

@@ -49,7 +49,8 @@ $size = static function (int $bytes): string {
               <input type="hidden" name="name" value="<?= $h($entry['name']) ?>">
               <button type="submit">Restore</button>
             </form>
-            <form method="post" action="/ui/trash/purge">
+            <form method="post" action="/ui/trash/purge"
+                  data-confirm="Delete <?= $h($entry['id']) ?> forever? This cannot be undone.">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="name" value="<?= $h($entry['name']) ?>">
               <button type="submit" class="danger">Delete forever</button>
@@ -59,7 +60,8 @@ $size = static function (int $bytes): string {
       <?php endforeach; ?>
     </ul>
 
-    <form method="post" action="/ui/trash/empty" class="trash-empty">
+    <form method="post" action="/ui/trash/empty" class="trash-empty"
+          data-confirm="Empty the trash? All <?= count($entries) ?> entr<?= 1 === count($entries) ? 'y' : 'ies' ?> are deleted forever, and this cannot be undone.">
       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
       <button type="submit" class="danger block">Empty the trash (delete all <?= count($entries) ?> forever)</button>
     </form>

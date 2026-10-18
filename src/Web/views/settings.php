@@ -105,7 +105,8 @@ $labels = [
             <button type="submit"><?= '' === $entry['token'] ? 'Generate token' : 'Rotate token' ?></button>
           </form>
           <?php if ('' !== $entry['token']): ?>
-            <form class="inline-form" method="post" action="/ui/settings/token">
+            <form class="inline-form" method="post" action="/ui/settings/token"
+                  data-confirm="Clear your <?= $h($label['name']) ?> token? Whatever is using it stops working immediately, and it cannot be shown again.">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="kind" value="<?= $h($kind) ?>">
               <input type="hidden" name="action" value="clear">

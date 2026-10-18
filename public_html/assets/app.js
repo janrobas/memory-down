@@ -14,14 +14,18 @@
 (function () {
   'use strict';
 
+  // Applied on every page, including the ones with no app shell at all (login,
+  // setup, users, settings, trash): the saved theme, and the confirm guard on
+  // every form that destroys something.
+  applyStoredTheme();
+  wireConfirmForms();
+
   var shell = document.querySelector('.app-shell');
   if (!shell) {
-    // Login / setup pages have no shell; still apply the saved theme.
-    applyStoredTheme();
+    // Pages without a shell get only the two things above; nothing below applies
+    // to them.
     return;
   }
-
-  applyStoredTheme();
 
   var csrf = shell.getAttribute('data-csrf') || '';
   var list = document.getElementById('list');
@@ -165,6 +169,23 @@
         menu.hidden = true;
         toggle.setAttribute('aria-expanded', 'false');
       }
+    });
+  }
+
+  /* ----------------------------------------------- confirming destruction */
+
+  // A form carrying data-confirm asks before it is sent, which is the only way
+  // to do this: an inline onsubmit handler would be blocked by the admin CSP
+  // (script-src 'self', no 'unsafe-inline'). Registered on the document, so it
+  // also covers the shell-less pages (users, settings, trash) — and it defers to
+  // the browser's dialog, which is enough for "did you mean this account?".
+  function wireConfirmForms() {
+    document.addEventListener('submit', function (event) {
+      var form = event.target;
+      if (!form || 'FORM' !== form.tagName) { return; }
+      var message = form.getAttribute('data-confirm');
+      if (!message) { return; }
+      if (!window.confirm(message)) { event.preventDefault(); }
     });
   }
 

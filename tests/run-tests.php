@@ -859,6 +859,11 @@ check('settings: rotate workflows token -> 302', 302 === $r['status'], (string) 
 $r = request('GET', '/ui/settings');
 check('settings: page renders', 200 === $r['status'] && str_contains($r['body'], 'API tokens'), (string) $r['status']);
 check('settings: the token is revealed on demand', str_contains($r['body'], 'Show token'), '');
+check(
+    'settings: clearing a token asks for confirmation first',
+    str_contains($r['body'], 'data-confirm="Clear your Writings API token?'),
+    ''
+);
 
 $usersRaw = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
 $publicToken = (string) ($usersRaw['test-user']['tokens']['writings'] ?? '');
@@ -2287,6 +2292,14 @@ check(
     ''
 );
 check('trash: the page links back to the memories', str_contains($r['body'], 'href="/ui"'), '');
+// Purging and emptying destroy a file for good, so both ask first — and the
+// message names what goes, since the trash can hold many entries.
+check(
+    'trash: purging and emptying both ask for confirmation first',
+    str_contains($r['body'], 'data-confirm="Delete ')
+    && str_contains($r['body'], 'data-confirm="Empty the trash?'),
+    ''
+);
 
 $trashName = $trashedNames[0];
 
@@ -2458,6 +2471,15 @@ $store = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), tru
 check('users: the account is stored', isset($store['other-user']), json_encode(array_keys((array) $store)));
 check('users: it has the role that was asked for', 'user' === ($store['other-user']['role'] ?? ''));
 check('users: the password is stored only as a hash', !array_key_exists('password', $store['other-user'] ?? []) && str_starts_with((string) ($store['other-user']['password_hash'] ?? ''), '$'));
+
+// Deleting an account moves a whole directory aside, so the button asks first,
+// naming the account it is about to remove.
+$r = request('GET', '/ui/users');
+check(
+    'users: deleting an account asks for confirmation, naming it',
+    str_contains($r['body'], 'data-confirm="Delete the account other-user?'),
+    ''
+);
 
 check('users: duplicate name refused', str_contains($create('other-user', 'other-password', 'user', 'other-password')['headers']['location'] ?? '', 'error=exists'));
 check('users: unusable name refused', str_contains($create('Bad Name', 'other-password', 'user', 'other-password')['headers']['location'] ?? '', 'error=invalid_id'));
