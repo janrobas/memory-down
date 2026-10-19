@@ -24,6 +24,7 @@ use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
+use MemoryDown\Memory\Slug;
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
 use MemoryDown\Support\BearerToken;
@@ -479,6 +480,25 @@ $q = SearchQuery::parse('tag:diplome hello');
 check('unquoted single tag still works', ['diplome'] === $q->tags && ['hello'] === $q->terms, json_encode($q));
 
 /* ------------------------------------------------------------------ *
+ *  Slug: diacritics are transliterated, never dropped
+ * ------------------------------------------------------------------ */
+
+section('Slug');
+
+check('Slovenian č/š/ž fold to c/s/z', 'clanek-o-soli-in-zivalih' === Slug::fromTitle('Članek o šoli in živalih'), Slug::fromTitle('Članek o šoli in živalih'));
+check('uppercase is lowered first', 'sola' === Slug::fromTitle('ŠOLA'), Slug::fromTitle('ŠOLA'));
+check('title case mixed with accents', 'zelezna-cesta' === Slug::fromTitle('Železna cesta'), Slug::fromTitle('Železna cesta'));
+check('other Latin-1 accents fold', 'uber-strasse' === Slug::fromTitle('Über Straße'), Slug::fromTitle('Über Straße'));
+check('cedilla and tilde fold', 'cudna-noc-nono' === Slug::fromTitle('Čudna noč, ñoño'), Slug::fromTitle('Čudna noč, ñoño'));
+check('punctuation still separates words', 'kaj-pa-ti' === Slug::fromTitle('  Kaj, pa ti?  '), Slug::fromTitle('  Kaj, pa ti?  '));
+check('an unmappable title falls back to "memory"', 'memory' === Slug::fromTitle('🎉🎉'), Slug::fromTitle('🎉🎉'));
+check('empty title falls back to "memory"', 'memory' === Slug::fromTitle(''), Slug::fromTitle(''));
+check('long titles are capped', Slug::MAX_LENGTH >= strlen(Slug::fromTitle(str_repeat('č', 200))), (string) strlen(Slug::fromTitle(str_repeat('č', 200))));
+check('a capped slug never ends in a hyphen', !str_ends_with(Slug::fromTitle(str_repeat('ab ', 100)), '-'), Slug::fromTitle(str_repeat('ab ', 100)));
+check('a slug is always a legal entry id', PathValidator::isId(Slug::fromTitle('Šola: 2. del / ǅepčep')), Slug::fromTitle('Šola: 2. del / ǅepčep'));
+check('a slug is pure ASCII', 1 === preg_match('/^[a-z0-9-]+$/', Slug::fromTitle('ČŠŽćęłñß')), Slug::fromTitle('ČŠŽćęłñß'));
+
+/* ------------------------------------------------------------------ *
  *  MemoryStore: canonical corpus only
  * ------------------------------------------------------------------ */
 
@@ -574,6 +594,17 @@ check('legacy: a bare heading is not the title', '' === ($legacy['title'] ?? 'x'
 check('legacy: a bare heading is stripped from the body', 'Legacy body.' === trim((string) ($legacy['body'] ?? '')), var_export($legacy['body'] ?? null, true));
 $store->update('notes', $legacyId, ['title' => '', 'content' => 'Legacy body.']);
 check('legacy: the next save drops the bare heading', 0 === preg_match('/^#[ \t]*$/m', (string) $store->raw('notes', $legacyId)), (string) $store->raw('notes', $legacyId));
+
+// The filename is the only place accents are folded: the title keeps them, the
+// filename does not (see MemoryDown\Memory\Slug).
+$slovene = $store->create('Telo.', 'Članek o šoli in živalih', 'notes');
+check(
+    'create(): the filename transliterates accents',
+    1 === preg_match('/^clanek-o-soli-in-zivalih-[0-9a-f]{6}$/', (string) $slovene['id']),
+    (string) $slovene['id']
+);
+check('create(): the title keeps its accents', 'Članek o šoli in živalih' === $slovene['title'], json_encode($slovene['title']));
+check('create(): the file exists under the ASCII id', is_file($memRoot . '/notes/' . $slovene['id'] . '.md'));
 
 /* ------------------------------------------------------------------ *
  *  MemoryStore: the trash

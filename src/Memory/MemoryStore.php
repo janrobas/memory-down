@@ -820,14 +820,16 @@ final class MemoryStore
         return false === $ts ? null : $ts;
     }
 
+    /**
+     * A fresh id for a new entry: the title's slug plus six random hex digits.
+     *
+     * The suffix is not decoration: once diacritics are transliterated, two
+     * different titles can produce the same slug ("Šola" / "Sola"), and the
+     * suffix keeps them from fighting over one filename.
+     */
     private function newId(string $title): string
     {
-        $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9]+/', '-', $title) ?? '') ?: 'memory');
-        $slug = trim($slug, '-');
-        $slug = substr($slug, 0, 48);
-        $slug = $slug !== '' ? $slug : 'memory';
-
-        return $slug . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
+        return Slug::fromTitle($title) . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
     }
 
     /**
