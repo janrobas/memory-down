@@ -4,6 +4,13 @@ All notable changes to MemoryDown are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 version lives in `config.php` (`app_version`).
 
+## Releasing
+
+1. Move the `[Unreleased]` entries under a new version heading, bump
+   `app_version` in `config.php`, and commit both together.
+2. Tag that commit: `git tag -a v<version> -m "MemoryDown <version>"`.
+3. Push with tags: `git push --follow-tags`.
+
 ## [Unreleased]
 
 ### Added
