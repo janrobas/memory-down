@@ -56,6 +56,7 @@
   var backdrop = document.getElementById('backdrop');
   var openMemoriesBtn = document.getElementById('open-memories');
   var openMenuBtn = document.getElementById('open-menu');
+  var commandDrawer = document.getElementById('command-drawer');
   var editorForm = document.getElementById('editor-form');
   var editorEmpty = document.getElementById('editor-empty');
   var categoriesHead = document.getElementById('categories-head');
@@ -270,10 +271,17 @@
   function openDrawer(side) {
     shell.classList.remove('drawer-left', 'drawer-right');
     shell.classList.add(side === 'left' ? 'drawer-left' : 'drawer-right');
-    backdrop.hidden = false;
+    // On desktop the right drawer is an anchored dropdown menu, not an overlay:
+    // no scrim, and focus moves into the menu like a real menu should.
+    backdrop.hidden = !isMobile();
     openMemoriesBtn.setAttribute('aria-expanded', String(side === 'left'));
     openMenuBtn.setAttribute('aria-expanded', String(side === 'right'));
     document.body.classList.add('drawer-open');
+
+    if (!isMobile() && side === 'right' && commandDrawer) {
+      var first = commandDrawer.querySelector('.command-group button, .command-group a');
+      if (first) { first.focus(); }
+    }
   }
 
   function closeDrawer() {
@@ -297,6 +305,16 @@
     var closeMenu = document.getElementById('close-menu');
     if (closeMenu) { closeMenu.addEventListener('click', closeDrawer); }
     backdrop.addEventListener('click', closeDrawer);
+
+    // Desktop dropdown: a click anywhere outside the menu (or on the ⋯ button
+    // itself, which has already toggled it) closes it. On mobile the backdrop
+    // does this job instead.
+    document.addEventListener('click', function (event) {
+      if (isMobile() || drawerState() !== 'right') { return; }
+      if (openMenuBtn.contains(event.target)) { return; }
+      if (commandDrawer && commandDrawer.contains(event.target)) { return; }
+      closeDrawer();
+    });
 
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') { closeDrawer(); }

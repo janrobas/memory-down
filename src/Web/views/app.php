@@ -46,7 +46,10 @@ $definitionHead = null === $definition
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
-      <a class="brand" href="/ui" id="brand-home">MemoryDown</a><span class="brand-version">v<?= WebApp::h($appVersion) ?></span>
+      <div class="brand-row">
+        <a class="brand" href="/ui" id="brand-home">MemoryDown</a><span class="brand-version">v<?= WebApp::h($appVersion) ?></span>
+        <button id="new-memory" type="button" class="icon-btn brand-new" title="New memory" aria-label="New memory">+</button>
+      </div>
       <div class="search-wrap">
         <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
         <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search" title="Clear search">×</button>
@@ -56,7 +59,6 @@ $definitionHead = null === $definition
         <button type="button" class="filter-btn" data-filter="all" aria-pressed="false">All</button>
         <button type="button" class="filter-btn" data-filter="archived" aria-pressed="false">Archived</button>
       </div>
-      <button id="new-memory" type="button" class="primary block">+ New memory</button>
       <div class="categories-head" id="categories-head">
         <span class="categories-label">Categories</span>
         <button type="button" id="collapse-toggle" class="icon-btn" title="Collapse all categories" aria-label="Collapse all categories">⊟</button>
@@ -196,42 +198,51 @@ $definitionHead = null === $definition
       <button type="button" id="close-menu" class="icon-btn" title="Close">✕</button>
     </div>
 
-    <button type="button" id="reindex" title="Rebuild the search index" aria-live="polite">⟳ Reindex</button>
+    <div class="command-group">
+      <span class="command-group-label">Memory</span>
+      <button type="button" id="reindex" title="Rebuild the search index" aria-live="polite">⟳ Reindex</button>
 
-    <!-- Plain links: no JavaScript, and the backup is a normal file download. -->
-    <a class="drawer-link" href="/ui/backup" download title="Download every memory as a zip">⭳ Backup</a>
-    <!-- The count sits in a fixed-width slot so its label can change without
-         nudging the neighbouring buttons; app.js keeps it current after a delete.
-         Spacing comes from CSS: an inline-block strips a leading space. -->
-    <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<span class="trash-badge" id="trash-count"><?= (int) ($trashCount ?? 0) > 0 ? '(' . (int) $trashCount . ')' : '' ?></span></a>
-    <a class="drawer-link" href="/ui/settings" title="Your password and API tokens">⚙ Settings</a>
-    <?php if (($user ?? null) instanceof \MemoryDown\Users\User && $user->isAdmin()): ?>
-      <a class="drawer-link" href="/ui/users" title="Manage accounts">👥 Users</a>
-    <?php endif; ?>
-
-    <div class="theme-picker">
-      <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>
-      <div class="theme-menu" id="theme-menu" hidden role="menu">
-        <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
-        <button type="button" role="menuitem" data-theme-value="dark"><span class="swatch dark"></span>Dark</button>
-        <button type="button" role="menuitem" data-theme-value="retro"><span class="swatch retro"></span>Retro orange</button>
-        <button type="button" role="menuitem" data-theme-value="blue"><span class="swatch blue"></span>Blue</button>
-        <div class="theme-group" role="presentation">Spring</div>
-        <button type="button" role="menuitem" data-theme-value="spring-light"><span class="swatch spring-light"></span>Spring — light</button>
-        <button type="button" role="menuitem" data-theme-value="spring-dark"><span class="swatch spring-dark"></span>Spring — dark</button>
-        <div class="theme-group" role="presentation">Summer</div>
-        <button type="button" role="menuitem" data-theme-value="summer-light"><span class="swatch summer-light"></span>Summer — light</button>
-        <button type="button" role="menuitem" data-theme-value="summer-dark"><span class="swatch summer-dark"></span>Summer — dark</button>
-        <div class="theme-group" role="presentation">Autumn</div>
-        <button type="button" role="menuitem" data-theme-value="autumn-light"><span class="swatch autumn-light"></span>Autumn — light</button>
-        <button type="button" role="menuitem" data-theme-value="autumn-dark"><span class="swatch autumn-dark"></span>Autumn — dark</button>
-        <div class="theme-group" role="presentation">Winter</div>
-        <button type="button" role="menuitem" data-theme-value="winter-light"><span class="swatch winter-light"></span>Winter — light</button>
-        <button type="button" role="menuitem" data-theme-value="winter-dark"><span class="swatch winter-dark"></span>Winter — dark</button>
-      </div>
+      <!-- Plain links: no JavaScript, and the backup is a normal file download. -->
+      <a class="drawer-link" href="/ui/backup" download title="Download every memory as a zip">⭳ Backup</a>
+      <!-- The count sits in a fixed-width slot so its label can change without
+           nudging the neighbouring buttons; app.js keeps it current after a delete.
+           Spacing comes from CSS: an inline-block strips a leading space. -->
+      <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<span class="trash-badge" id="trash-count"><?= (int) ($trashCount ?? 0) > 0 ? '(' . (int) $trashCount . ')' : '' ?></span></a>
     </div>
 
-    <button type="button" id="logout" title="Sign out">Logout</button>
+    <div class="command-group">
+      <span class="command-group-label">Account</span>
+      <a class="drawer-link" href="/ui/settings" title="Your password and API tokens">⚙ Settings</a>
+      <?php if (($user ?? null) instanceof \MemoryDown\Users\User && $user->isAdmin()): ?>
+        <a class="drawer-link" href="/ui/users" title="Manage accounts">👥 Users</a>
+      <?php endif; ?>
+      <button type="button" id="logout" title="Sign out">Logout</button>
+    </div>
+
+    <div class="command-group">
+      <span class="command-group-label">Theme</span>
+      <div class="theme-picker">
+        <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>
+        <div class="theme-menu" id="theme-menu" hidden role="menu">
+          <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
+          <button type="button" role="menuitem" data-theme-value="dark"><span class="swatch dark"></span>Dark</button>
+          <button type="button" role="menuitem" data-theme-value="retro"><span class="swatch retro"></span>Retro orange</button>
+          <button type="button" role="menuitem" data-theme-value="blue"><span class="swatch blue"></span>Blue</button>
+          <div class="theme-group" role="presentation">Spring</div>
+          <button type="button" role="menuitem" data-theme-value="spring-light"><span class="swatch spring-light"></span>Spring — light</button>
+          <button type="button" role="menuitem" data-theme-value="spring-dark"><span class="swatch spring-dark"></span>Spring — dark</button>
+          <div class="theme-group" role="presentation">Summer</div>
+          <button type="button" role="menuitem" data-theme-value="summer-light"><span class="swatch summer-light"></span>Summer — light</button>
+          <button type="button" role="menuitem" data-theme-value="summer-dark"><span class="swatch summer-dark"></span>Summer — dark</button>
+          <div class="theme-group" role="presentation">Autumn</div>
+          <button type="button" role="menuitem" data-theme-value="autumn-light"><span class="swatch autumn-light"></span>Autumn — light</button>
+          <button type="button" role="menuitem" data-theme-value="autumn-dark"><span class="swatch autumn-dark"></span>Autumn — dark</button>
+          <div class="theme-group" role="presentation">Winter</div>
+          <button type="button" role="menuitem" data-theme-value="winter-light"><span class="swatch winter-light"></span>Winter — light</button>
+          <button type="button" role="menuitem" data-theme-value="winter-dark"><span class="swatch winter-dark"></span>Winter — dark</button>
+        </div>
+      </div>
+    </div>
   </aside>
 
   <div class="backdrop" id="backdrop" hidden></div>

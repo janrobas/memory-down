@@ -553,11 +553,17 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   border-bottom: 1px solid var(--border);
 }
 
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin-bottom: .6rem;
+}
+
 .brand {
   display: inline-block;
   font-weight: 700;
   letter-spacing: .01em;
-  margin-bottom: .6rem;
   text-decoration: none;
   color: inherit;
   cursor: pointer;
@@ -566,10 +572,19 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 .brand:hover { color: var(--accent); }
 
 .brand-version {
-  margin-left: .4rem;
+  margin-left: 0;
   font-size: .68rem;
   font-weight: 400;
   color: var(--muted);
+}
+
+/* The sidebar's create action: a compact "+" on the brand line instead of a
+   full-width button that pushed the memory list down. */
+.brand-new {
+  margin-left: auto;
+  padding: .2rem .55rem;
+  font-size: 1.15rem;
+  line-height: 1;
 }
 
 /* "Categories" header above the list, with a collapse-all / expand-all toggle. */
@@ -886,7 +901,9 @@ body.dragging .cat.drop-hover .cat-name {
 
 /* On desktop the command drawer is simply an inline toolbar in the top bar:
    its links appear on the right of .editor-topbar. The mobile rules below turn
-   it into a slide-in panel and hide these inline controls behind a menu button. */
+   it into a slide-in panel and hide these inline controls behind a menu button.
+   When scripted (html.js), the desktop toolbar collapses into that same ⋯ menu
+   instead — see the min-width block below. */
 .editor-topbar .icon-btn { display: none; }
 
 /* Desktop: commands sit inline at the top-right of the editor pane. The topbar
@@ -904,9 +921,15 @@ body.dragging .cat.drop-hover .cat-name {
   z-index: 5;
 }
 
+/* A group is only a wrapper: where the menu is a single row it dissolves, so
+   the inline bar still lays its controls out side by side. Its label appears
+   only where the menu is vertical. */
+.command-group { display: contents; }
+.command-group-label { display: none; }
+
 /* Uniform size for every control in the desktop command bar, including the
    theme picker (which otherwise inherits a different padding than buttons). */
-.command-drawer > button,
+.command-drawer .command-group > button,
 .command-drawer .theme-picker > button {
   padding: .4rem .7rem;
   font-size: .82rem;
@@ -924,6 +947,106 @@ body.dragging .cat.drop-hover .cat-name {
 .editor-topbar { padding-right: 19rem; min-height: 2.1rem; }
 
 .backdrop { display: none; }
+
+/* --- Scripted desktop: one ⋯ menu instead of a row of controls ------------- */
+/* Everything here is inert without JavaScript, which keeps the plain inline
+   toolbar above as the no-JS fallback. 821px is the complement of the mobile
+   breakpoint used by the drawer rules below. */
+@media (min-width: 821px) {
+  html.js .editor-topbar { padding-right: 0; }
+
+  /* The ⋯ button replaces the inline bar; ☰ stays a mobile affordance. */
+  html.js .editor-topbar #open-menu {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  html.js .command-drawer {
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: .05rem;
+    height: auto;
+    top: 2.9rem;
+    min-width: 14rem;
+    max-height: min(34rem, calc(100dvh - 5rem));
+    overflow-y: auto;
+    padding: .45rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    z-index: 40;
+  }
+
+  html.js .app-shell.drawer-right .command-drawer { display: flex; }
+
+  html.js .command-group {
+    display: flex;
+    flex-direction: column;
+    gap: .05rem;
+  }
+
+  html.js .command-group-label {
+    display: block;
+    padding: .35rem .6rem .15rem;
+    font-size: .68rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  html.js .command-group + .command-group {
+    margin-top: .3rem;
+    padding-top: .3rem;
+    border-top: 1px solid var(--border);
+  }
+
+  html.js .command-drawer .command-group > button,
+  html.js .command-drawer .drawer-link,
+  html.js .command-drawer .theme-picker > button {
+    width: 100%;
+    padding: .45rem .6rem;
+    font-size: .85rem;
+    text-align: left;
+    border-radius: calc(var(--radius) - 2px);
+  }
+
+  html.js .command-drawer #reindex { min-width: 0; text-align: left; }
+
+  html.js .command-drawer .theme-picker { width: 100%; }
+
+  /* The theme list expands in place instead of opening a nested popup. */
+  html.js .command-drawer .theme-menu {
+    position: static;
+    width: 100%;
+    margin-top: .3rem;
+    box-shadow: none;
+  }
+
+  html.js .command-drawer .theme-menu button { padding: .45rem .6rem; font-size: .85rem; }
+
+  /* With nothing selected the form used to disappear entirely, which was fine
+     while the command bar was a sibling of the form. The ⋯ button lives in the
+     form's top bar, so in the empty state keep that one row and hide the rest —
+     the same trick the mobile rules use below. */
+  html.js .app-shell.is-empty #editor-form {
+    display: flex;
+    height: auto;
+    flex: 0 0 auto;
+  }
+
+  html.js .app-shell.is-empty #editor-form .editor-head {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  html.js .app-shell.is-empty #editor-form .editor-head > *:not(.editor-topbar) { display: none; }
+  html.js .app-shell.is-empty #editor-form .editor-topbar { margin-bottom: 0; }
+  html.js .app-shell.is-empty #editor-form .breadcrumb { display: none; }
+  html.js .app-shell.is-empty #editor-form .editor-body { display: none; }
+}
 
 .title-row {
   display: flex;
@@ -1359,10 +1482,35 @@ body.dragging .cat.drop-hover .cat-name {
     margin-bottom: .3rem;
   }
 
-  .command-drawer > button,
+  /* The same grouped menu as the desktop dropdown, here as a full-height panel. */
+  .command-group {
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+  }
+
+  .command-group + .command-group {
+    margin-top: .1rem;
+    padding-top: .5rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .command-group-label {
+    display: block;
+    padding: 0 .8rem;
+    font-size: .68rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .command-drawer .command-group > button,
   .command-drawer .theme-picker { width: 100%; }
-  .command-drawer > button,
+  .command-drawer .command-group > button,
   .command-drawer .theme-picker > button { padding: .7rem .8rem; font-size: .95rem; text-align: left; }
+  /* The status label reads left in a vertical menu; the id rule that centres it
+     for the inline desktop bar must not win here. */
+  .command-drawer #reindex { text-align: left; }
 
   /* Theme submenu opens downward inside the drawer. */
   .command-drawer .theme-menu { position: static; width: 100%; box-shadow: none; margin-top: .3rem; }
@@ -1385,6 +1533,13 @@ body.dragging .cat.drop-hover .cat-name {
   }
 
   /* Larger, touch-friendly tap targets in the list. */
+  .brand-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
   .mem { padding: .65rem .6rem; font-size: .95rem; }
   .cat-name { padding: .5rem .5rem; }
 }
