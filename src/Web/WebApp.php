@@ -302,6 +302,7 @@ final class WebApp
 
         return $this->html($this->view('app', [
             'title' => 'MemoryDown',
+            'appVersion' => $this->config->appVersion,
             'bodyClass' => 'app',
             'csrf' => $this->auth->csrfToken(),
             'categories' => $this->store()->categories(),

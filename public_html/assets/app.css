@@ -565,6 +565,13 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 
 .brand:hover { color: var(--accent); }
 
+.brand-version {
+  margin-left: .4rem;
+  font-size: .68rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
 /* "Categories" header above the list, with a collapse-all / expand-all toggle. */
 .categories-head {
   display: flex;

@@ -12,6 +12,7 @@
  * @var list<string>|null               $definition  what a runner would refuse, for an activated workflow
  * @var array<string, mixed>            $engine
  * @var int                             $trashCount
+ * @var string                          $appVersion
  */
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Web\WebApp;
@@ -45,7 +46,7 @@ $definitionHead = null === $definition
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
-      <a class="brand" href="/ui" id="brand-home">MemoryDown</a>
+      <a class="brand" href="/ui" id="brand-home">MemoryDown</a><span class="brand-version">v<?= WebApp::h($appVersion) ?></span>
       <div class="search-wrap">
         <input id="search" type="search" class="search" placeholder="Search memories… (tag:foo)" autocomplete="off" aria-label="Search memories">
         <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search" title="Clear search">×</button>

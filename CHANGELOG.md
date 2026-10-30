@@ -29,6 +29,10 @@ version lives in `config.php` (`app_version`).
 - `/health` now reports `log_bytes` and `disk_free_bytes`.
 - Dependabot configuration for Composer and GitHub Actions.
 
+### Changed
+- The admin UI shows the running version (`app_version`) next to the
+  MemoryDown brand, in smaller muted letters.
+
 ## [1.0.0]
 
 Everything up to and including the multi-account release.
