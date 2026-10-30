@@ -835,7 +835,7 @@ $r = request('GET', '/ui');
 check('GET /ui authenticated -> 200 shell', 200 === $r['status'] && str_contains($r['body'], 'app-shell'), (string) $r['status']);
 check(
     'GET /ui shell -> shows the app version next to the brand',
-    str_contains($r['body'], 'class="brand-version"') && str_contains($r['body'], 'v1.0.0'),
+    str_contains($r['body'], 'class="brand-version"') && str_contains($r['body'], 'v1.0.1'),
     '',
 );
 check(

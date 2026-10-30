@@ -85,7 +85,7 @@ return [
     'app_env' => $__env('APP_ENV', 'development'),
 
     'app_name' => 'MemoryDown',
-    'app_version' => '1.0.0',
+    'app_version' => '1.0.1',
 
     // Absolute paths (defaults assume the repository layout).
     'data_path' => $__dataPath,

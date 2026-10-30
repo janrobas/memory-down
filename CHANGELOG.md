@@ -13,6 +13,8 @@ version lives in `config.php` (`app_version`).
 
 ## [Unreleased]
 
+## [1.0.1]
+
 ### Added
 - RFC 7009 token revocation endpoint (`POST /oauth/revoke`), advertised in the
   authorization-server metadata; the response is always 200 so it never acts
