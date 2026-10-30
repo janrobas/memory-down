@@ -20,3 +20,8 @@
 
 # Stray literal "$tmp" directory (e.g. from an unexpanded shell variable)
 /$tmp/
+
+# FTP deploy tool (ftp-deploy skill) state - never commit remote layout info.
+# The deploy config itself (.ftpdeploy.json) IS committed: it holds no secrets,
+# so a fresh clone on any machine knows where to deploy.
+/.ftp-deploy/

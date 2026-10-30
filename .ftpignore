@@ -1,0 +1,20 @@
+# FTP deploy (ftp-deploy skill): everything below lives only on the server
+# or locally, never in the sync.
+#
+# Runtime data, accounts, tokens and logs are per-server state and are also
+# listed in "protected" in .ftpdeploy.json so no deploy can delete them.
+data/
+data_new/
+
+# Local-only.
+tests/
+.github/
+*.log
+
+# Secrets: uploaded once, by hand, via `ftp_sync.py push .env .env`.
+.env
+
+# The deploy tool's own files are skipped automatically; listed for clarity.
+.ftp-deploy/
+.ftpdeploy.json
+.ftpignore

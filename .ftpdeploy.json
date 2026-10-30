@@ -1,0 +1,20 @@
+{
+  "profile": "neoserv",
+  "remote_dir": "/memory.janrobas.com",
+  "local_dir": ".",
+  "ignore": ".ftpignore",
+  "protected": [
+    ".env",
+    "data/**",
+    "data_new/**"
+  ],
+  "ensure_dirs": [
+    "data/users",
+    "data/auth",
+    "data/sessions",
+    "data/logs"
+  ],
+  "verify_url": "https://memory.janrobas.com/health",
+  "verify_expect": "\"status\":\"ok\"",
+  "build": "composer install --no-dev --optimize-autoloader"
+}
