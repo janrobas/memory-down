@@ -18,8 +18,14 @@ final class Response
 {
     /**
      * Apply security headers to a response.
+     *
+     * Strict-Transport-Security is opt-in: it is only added when the deployment
+     * has explicitly switched it on (see `HSTS_ENABLED`), because a browser
+     * that has seen the header will refuse plain HTTP to that host for the
+     * whole max-age — turning it on for an HTTP-only site would be a mistake,
+     * and this class cannot see which transport actually carried the request.
      */
-    public static function secure(ResponseInterface $response): ResponseInterface
+    public static function secure(ResponseInterface $response, bool $hstsEnabled = false): ResponseInterface
     {
         $isHtml = str_contains($response->getHeaderLine('Content-Type'), 'text/html');
         $isAdmin = $response->hasHeader(\MemoryDown\Web\WebApp::ADMIN_HEADER);
@@ -37,11 +43,17 @@ final class Response
             default => "default-src 'none'",
         };
 
-        return $response
+        $response = $response
             ->withHeader('X-Content-Type-Options', 'nosniff')
             ->withHeader('X-Frame-Options', 'DENY')
             ->withHeader('Referrer-Policy', 'no-referrer')
             ->withHeader('Content-Security-Policy', $policy);
+
+        if ($hstsEnabled) {
+            $response = $response->withHeader('Strict-Transport-Security', 'max-age=31536000');
+        }
+
+        return $response;
     }
 
     /**

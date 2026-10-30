@@ -190,4 +190,27 @@ return [
     'rate_limit_token_max' => (int) $__env('RATE_LIMIT_TOKEN_MAX', '30'),
     'rate_limit_consent_max' => (int) $__env('RATE_LIMIT_CONSENT_MAX', '10'),
     'rate_limit_window' => (int) $__env('RATE_LIMIT_WINDOW', '60'),
+
+    // The same limiter also protects the admin UI's own password entry points:
+    // the sign-in form and the first-run setup form. Sessions are a poor
+    // boundary for brute force (dropping the cookie resets the counter), so
+    // these are per client IP, like the OAuth endpoints above.
+    'rate_limit_login_max' => (int) $__env('RATE_LIMIT_LOGIN_MAX', '10'),
+    'rate_limit_setup_max' => (int) $__env('RATE_LIMIT_SETUP_MAX', '5'),
+
+    // -----------------------------------------------------------------------
+    // HTTP hardening and housekeeping
+    // -----------------------------------------------------------------------
+
+    // Send Strict-Transport-Security on every response. Off by default: enable
+    // only when the deployment is permanently HTTPS, because a browser that
+    // has seen the header refuses plain HTTP to that host for the whole
+    // max-age (one year).
+    'hsts_enabled' => filter_var(
+        $__env('HSTS_ENABLED', 'false'),
+        FILTER_VALIDATE_BOOL
+    ),
+
+    // Rotate app.log once it grows past this many bytes (one .1 file kept).
+    'log_max_bytes' => (int) $__env('LOG_MAX_BYTES', '5242880'),
 ];

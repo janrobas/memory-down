@@ -71,7 +71,7 @@ final class Kernel
             }
         }
 
-        $this->logger = new FileLogger($config->logPath . '/app.log', $config->appName);
+        $this->logger = new FileLogger($config->logPath . '/app.log', $config->appName, '', $config->logMaxBytes);
 
         $this->users = Users\UserStore::at($config->dataPath . '/auth');
         $this->userPaths = new Users\UserPaths($config->usersPath);

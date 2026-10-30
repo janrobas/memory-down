@@ -7,7 +7,8 @@ declare(strict_types=1);
  *
  * Covers the pieces where a small regression is easy to miss and expensive:
  * frontmatter parsing (including Windows CRLF line endings), path-traversal
- * guards, and the search-query directive parser. Run with:
+ * guards, the search-query directive parser, refresh-token rotation/reuse
+ * detection, and log rotation. Run with:
  *
  *     php tests/unit-tests.php
  *
@@ -28,6 +29,7 @@ use MemoryDown\Memory\Slug;
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
 use MemoryDown\Support\BearerToken;
+use MemoryDown\Support\FileLogger;
 use MemoryDown\Support\RateLimiter;
 use MemoryDown\Users\Migration;
 use MemoryDown\Users\UserDirectories;
@@ -1056,6 +1058,79 @@ check('tokens: rotation keeps the account', 'alice' === ($rotatedToken['sub'] ??
 check('tokens: no plaintext token is written to disk', !str_contains((string) file_get_contents($root . '/token-auth/tokens.json'), $access));
 check('tokens: revoking an account drops its records', 2 === $tokenStore->revokeAllForUser('alice'));
 check('tokens: the revoked access token no longer validates', null === $tokenStore->validateAccessToken($access));
+
+/* ------------------------------------------------------------------ *
+ *  Auth: refresh-token rotation, reuse detection and revocation
+ * ------------------------------------------------------------------ */
+
+section('Auth: refresh reuse');
+
+@mkdir($root . '/token-reuse', 0775, true);
+$reuseStore = new TokenStore($root . '/token-reuse', 3600, 86400, 600);
+
+$r0 = $reuseStore->createRefreshToken('client-1', [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+$r1 = $reuseStore->rotateRefreshToken($r0);
+check(
+    'reuse: rotation issues a different token',
+    null !== $r1 && ($r1['refresh_token'] ?? '') !== '' && ($r1['refresh_token'] ?? '') !== $r0,
+    json_encode($r1)
+);
+check('reuse: a first rotation is not flagged as reuse', false === $reuseStore->refreshReuseDetected);
+
+$replay = $reuseStore->rotateRefreshToken($r0);
+check('reuse: replaying the consumed token fails', null === $replay);
+check('reuse: the replay is flagged as reuse', true === $reuseStore->refreshReuseDetected);
+$family = $reuseStore->rotateRefreshToken((string) $r1['refresh_token']);
+check(
+    'reuse: the replacement died with the family',
+    null === $family && false === $reuseStore->refreshReuseDetected,
+    json_encode($family)
+);
+
+$r2 = $reuseStore->createRefreshToken('client-1', [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+$r3 = $reuseStore->rotateRefreshToken($r2);
+check('reuse: a fresh family rotates normally', null !== $r3 && false === $reuseStore->refreshReuseDetected);
+check('reuse: explicit revocation reports a live token', true === $reuseStore->revokeRefreshToken((string) $r3['refresh_token']));
+$tail = $reuseStore->rotateRefreshToken((string) $r3['refresh_token']);
+check('reuse: explicit revocation kills the token', null === $tail && false === $reuseStore->refreshReuseDetected);
+
+// A token that never existed is a plain miss, never "reuse" — the distinction
+// matters because reuse triggers a family revocation and a louder log line.
+$reuseStore->rotateRefreshToken(TokenStore::randomToken());
+check('reuse: an unknown token is a plain miss', false === $reuseStore->refreshReuseDetected);
+$revokedAccess = $reuseStore->createAccessToken('client-1', [TokenStore::SCOPE], 'https://md.test/mcp', 'alice', 3);
+check('reuse: revoking an access token reports it existed', true === $reuseStore->revokeAccessToken($revokedAccess));
+check('reuse: a revoked access token is a miss now', false === $reuseStore->revokeAccessToken($revokedAccess));
+check('reuse: it no longer validates', null === $reuseStore->validateAccessToken($revokedAccess));
+
+/* ------------------------------------------------------------------ *
+ *  Support: log rotation
+ * ------------------------------------------------------------------ */
+
+section('Support: log rotation');
+
+$logDir = $root . '/logrot';
+@mkdir($logDir, 0775, true);
+$logFile = $logDir . '/app.log';
+// One JSON line is ~130 bytes; a 300-byte cap means the third line triggers a
+// rotation, so early lines land in .1 and later ones in the active file.
+$rotLogger = new FileLogger($logFile, 'test', '', 300);
+foreach (range(0, 3) as $i) {
+    $rotLogger->info('line-' . $i . ' ' . str_repeat('x', 20));
+}
+$rotated = is_file($logFile . '.1') ? (string) file_get_contents($logFile . '.1') : '';
+$activeLog = is_file($logFile) ? (string) file_get_contents($logFile) : '';
+check('logrot: the file rotated when it outgrew the cap', '' !== $rotated);
+check('logrot: the active file stays under the cap', (int) @filesize($logFile) <= 300, (string) @filesize($logFile));
+check('logrot: early lines live in the rotated file', str_contains($rotated, 'line-0') && str_contains($rotated, 'line-1'), substr($rotated, 0, 120));
+check('logrot: the active file carries the latest lines', str_contains($activeLog, 'line-2') && str_contains($activeLog, 'line-3'), $activeLog);
+check('logrot: one generation is kept', !is_file($logFile . '.2'));
+
+$never = new FileLogger($logDir . '/never.log', 'test', '', 0);
+foreach (range(0, 9) as $i) {
+    $never->info('no-rotation-' . $i);
+}
+check('logrot: maxBytes 0 means never rotate', is_file($logDir . '/never.log') && !is_file($logDir . '/never.log.1'));
 
 /* ------------------------------------------------------------------ *
  *  HTTP: reading a bearer token

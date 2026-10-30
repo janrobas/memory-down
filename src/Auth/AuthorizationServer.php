@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MemoryDown\Auth;
 
 use MemoryDown\Config;
+use MemoryDown\Support\ClientIp;
 use MemoryDown\Support\RateLimiter;
 use MemoryDown\Users\User;
 use MemoryDown\Users\UserStore;
@@ -25,6 +26,7 @@ use Psr\Log\LoggerInterface;
  *   GET /.well-known/openid-configuration         (OIDC discovery)
  *   GET/POST /oauth/authorize                     (consent)
  *   POST   /oauth/token                           (token endpoint)
+ *   POST   /oauth/revoke                          (RFC 7009 revocation)
  *   POST   /oauth/register                        (RFC 7591 DCR)
  *
  * Public clients only (token_endpoint_auth_method "none" + PKCE).
@@ -69,6 +71,8 @@ final class AuthorizationServer
             'authorization_endpoint' => $base . '/oauth/authorize',
             'token_endpoint' => $base . '/oauth/token',
             'registration_endpoint' => $base . '/oauth/register',
+            'revocation_endpoint' => $base . '/oauth/revoke',
+            'revocation_endpoint_auth_methods_supported' => ['none'],
             'response_types_supported' => ['code'],
             'grant_types_supported' => ['authorization_code', 'refresh_token'],
             'token_endpoint_auth_methods_supported' => ['none'],
@@ -300,6 +304,13 @@ final class AuthorizationServer
 
         $rotated = $this->tokens->rotateRefreshToken($refresh);
         if (null === $rotated) {
+            if ($this->tokens->refreshReuseDetected) {
+                // OAuth 2.1 theft detection: a token that was already rotated
+                // was presented again. The family has been revoked; the reply
+                // stays a plain invalid_grant so the caller learns nothing.
+                $this->logger->warning('oauth.refresh.reuse_detected', ['client_id' => $clientId]);
+            }
+
             return ['error' => 'invalid_grant', 'error_description' => 'Refresh token is invalid or expired'];
         }
         if ($rotated['client_id'] !== $clientId) {
@@ -387,6 +398,53 @@ final class AuthorizationServer
         }
 
         return $user;
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  Revocation (RFC 7009)
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Revoke an access or refresh token.
+     *
+     * Public clients authenticate with no client secret, so no client
+     * authentication is required here: the presented token is its own proof.
+     * The response is always 200 with an empty body, whether or not the token
+     * existed — anything else would be an oracle, telling the caller which
+     * token values are live. Rate limiting keeps the same promise: an
+     * over-limit request is silently accepted rather than answered with a 429
+     * that would reveal the request was dropped.
+     */
+    public function handleRevoke(ServerRequestInterface $request): ResponseInterface
+    {
+        if (!$this->withinRateLimit('token', $request, $this->config->rateLimitTokenMax)) {
+            $this->logger->warning('oauth.revoke.rate_limited_dropped');
+
+            return $this->response(200)->withHeader('Cache-Control', 'no-store');
+        }
+
+        $params = $this->params($request);
+        $token = (string) ($params['token'] ?? '');
+
+        if ('' === $token) {
+            return $this->json(['error' => 'invalid_request', 'error_description' => 'token is required'], 400);
+        }
+
+        $hint = (string) ($params['token_type_hint'] ?? '');
+        if ('refresh_token' === $hint) {
+            $this->tokens->revokeRefreshToken($token);
+        } elseif ('access_token' === $hint) {
+            $this->tokens->revokeAccessToken($token);
+        } else {
+            // No hint: try both. The token belongs to exactly one namespace
+            // (the hashes are keyed separately), so nothing is over-revoked.
+            $this->tokens->revokeAccessToken($token);
+            $this->tokens->revokeRefreshToken($token);
+        }
+
+        $this->logger->info('oauth.token.revoked', ['hint' => $hint]);
+
+        return $this->response(200)->withHeader('Cache-Control', 'no-store');
     }
 
     /* ------------------------------------------------------------------ *
@@ -643,9 +701,7 @@ final class AuthorizationServer
      */
     private function clientKey(ServerRequestInterface $request): string
     {
-        $params = $request->getServerParams();
-
-        return (string) ($params['REMOTE_ADDR'] ?? 'unknown');
+        return ClientIp::of($request);
     }
 
     private function tooMany(): ResponseInterface

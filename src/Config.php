@@ -53,7 +53,13 @@ final class Config
     public readonly bool $rateLimitEnabled;
     public readonly int $rateLimitTokenMax;
     public readonly int $rateLimitConsentMax;
+    public readonly int $rateLimitLoginMax;
+    public readonly int $rateLimitSetupMax;
     public readonly int $rateLimitWindow;
+
+    public readonly bool $hstsEnabled;
+
+    public readonly int $logMaxBytes;
 
     public function __construct(array $c)
     {
@@ -87,7 +93,13 @@ final class Config
         $this->rateLimitEnabled = (bool) ($c['rate_limit_enabled'] ?? true);
         $this->rateLimitTokenMax = (int) ($c['rate_limit_token_max'] ?? 30);
         $this->rateLimitConsentMax = (int) ($c['rate_limit_consent_max'] ?? 10);
+        $this->rateLimitLoginMax = (int) ($c['rate_limit_login_max'] ?? 10);
+        $this->rateLimitSetupMax = (int) ($c['rate_limit_setup_max'] ?? 5);
         $this->rateLimitWindow = (int) ($c['rate_limit_window'] ?? 60);
+
+        $this->hstsEnabled = (bool) ($c['hsts_enabled'] ?? false);
+
+        $this->logMaxBytes = (int) ($c['log_max_bytes'] ?? 5 * 1024 * 1024);
     }
 
     public function isProduction(): bool

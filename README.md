@@ -31,11 +31,13 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   immediately.
 - **MCP over Streamable HTTP**, serving both the `initialize` handshake
   (through `2025-11-25`) and the stateless `2026-07-28` revision.
-- **OAuth 2.1** authorization-code + PKCE (S256), refresh-token rotation,
-  RFC 9207 issuer identification, dynamic client registration (DCR), RFC 9728
-  protected-resource metadata and RFC 8414 authorization-server metadata. One
-  authorization server serves the whole instance; *which* account a connection
-  reaches is decided on the consent page.
+- **OAuth 2.1** authorization-code + PKCE (S256), refresh-token rotation with
+  reuse detection (replaying a rotated token revokes its whole family),
+  RFC 7009 revocation, RFC 9207 issuer identification, dynamic client
+  registration (DCR), RFC 9728 protected-resource metadata and RFC 8414
+  authorization-server metadata. One authorization server serves the whole
+  instance; *which* account a connection reaches is decided on the consent
+  page.
 - **Seven MCP tools:** `remember`, `recall`, `search_memory`, `read_memory`,
   `update_memory`, `forget_memory`, `list_memory`. All categories except
   `writings` are read **and** write; `writings` is read-only through MCP.
@@ -120,6 +122,7 @@ Back up `data/` and `.env`, then upload the new files. **Never overwrite
 (deleting `data/auth/` forces every MCP client to re-authenticate). Run
 `composer install --no-dev --optimize-autoloader` if dependencies changed. To
 roll back, restore the previous code files; `data/` and `.env` are untouched.
+What changed between versions is tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 <details>
 <summary>Upgrading from a version without accounts</summary>
@@ -178,10 +181,14 @@ in the hosting panel or php.ini win over `.env`.
 | `INDEX_ENABLED` | `true` | Build the SQLite FTS5 search index (one per account) |
 | `PUBLIC_API_ENABLED` | `false` | Serve published writings read-only at `/public/writings` |
 | `WORKFLOWS_API_ENABLED` | `false` | Serve the `workflows` category read-only at `/api/workflows` |
-| `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limiting on the OAuth token + consent endpoints |
+| `RATE_LIMIT_ENABLED` | `true` | Per-IP rate limiting on the OAuth token + consent endpoints and the admin sign-in + setup forms |
 | `RATE_LIMIT_TOKEN_MAX` | `30` | Max token requests per IP per window |
 | `RATE_LIMIT_CONSENT_MAX` | `10` | Max consent submissions per IP per window |
+| `RATE_LIMIT_LOGIN_MAX` | `10` | Max admin sign-in submissions per IP per window |
+| `RATE_LIMIT_SETUP_MAX` | `5` | Max first-run setup submissions per IP per window |
 | `RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds |
+| `HSTS_ENABLED` | `false` | Send `Strict-Transport-Security` on every response (enable only on permanently-HTTPS deployments) |
+| `LOG_MAX_BYTES` | `5242880` | Rotate `app.log` once it grows past this many bytes (one `.1` file kept) |
 
 There is **no setting for accounts, passwords or API tokens**: they live in
 `data/auth/users.json` and are managed in the admin UI, so a leaked copy of
@@ -548,6 +555,7 @@ every account.
 | `/.well-known/oauth-authorization-server` / `/.well-known/openid-configuration` | RFC 8414 / OIDC discovery |
 | `/oauth/authorize` | Consent page (sign in as the account to connect) |
 | `/oauth/token` | Token endpoint |
+| `/oauth/revoke` | Revocation endpoint (RFC 7009; always answers 200) |
 | `/oauth/register` | Dynamic client registration (RFC 7591) |
 
 Clients register via **DCR** (like a typical MCP server) and run the
@@ -577,13 +585,14 @@ built-in memory.
 curl -s https://memory.example.com/health
 composer test              # unit tests + full protocol chain
 php tests/unit-tests.php   # frontmatter (incl. CRLF), path guards, accounts, migration, search query, rate limiter
-php tests/run-tests.php    # chain: health → discovery → 401 → DCR → consent → token → MCP → tools → accounts → traversal
+php tests/run-tests.php    # chain: health → discovery → 401 → DCR → consent → token → MCP → tools → accounts → revocation → rate limits → traversal
 ```
 
 `/health` reports `checks.users` (how many accounts exist) and
-`checks.search_index.engine` as `sqlite-fts5` (indexed) or `direct` (fallback).
-`/health/mcp` lists the tools and reports whether MCP session storage is
-writable.
+`checks.search_index.engine` as `sqlite-fts5` (indexed) or `direct` (fallback),
+plus `checks.log_bytes` and `checks.disk_free_bytes` so a filling disk is
+visible before it breaks anything. `/health/mcp` lists the tools and reports
+whether MCP session storage is writable.
 
 `/health` reports `checks.search_index.engine` as `sqlite-fts5` (indexed) or
 `direct` (fallback).
@@ -611,6 +620,16 @@ writable.
   a role, disabling or deleting an account invalidates every session, MCP token
   and API token it held, without a sweep and without a daemon. Re-enabling an
   account does not revive them.
+- **Refresh tokens are rotated** on every use, and presenting one that was
+  already rotated revokes its whole family — the replacement stops working too.
+  The error returned is the same plain `invalid_grant`, so the replay is never
+  confirmed to the caller.
+- **`POST /oauth/revoke` (RFC 7009)** always answers `200`, whether or not the
+  token existed, so it can never be used to test which token values are live.
+- **HSTS** (`Strict-Transport-Security`) is off by default: set
+  `HSTS_ENABLED=true` only on a deployment that is permanently HTTPS, because a
+  browser that has seen the header will refuse plain HTTP to that host for a
+  year.
 - Deleting is soft at both levels: memories move to `memory/.trash/`, accounts
   move to `data/users/.trash/`, and a broken trash directory fails the delete
   rather than silently unlinking the file.
@@ -626,17 +645,23 @@ writable.
 - All responses carry security headers; the admin pages use a `script-src 'self'`
   CSP, every other route keeps `default-src 'none'`.
 - The consent page always requires a password, so it is never click-through-only.
-- The OAuth token and consent endpoints are rate-limited per IP (file-backed,
-  no daemon); disable with `RATE_LIMIT_ENABLED=false`.
+- The OAuth token and consent endpoints, and the admin sign-in and first-run
+  setup forms, are rate-limited per IP (file-backed, no daemon). The IP limit
+  covers what the session-based login lockout cannot — an attacker dropping the
+  cookie — so both stay in place. Disable with `RATE_LIMIT_ENABLED=false`.
+- `app.log` rotates itself at `LOG_MAX_BYTES` (one `.1` file kept), and
+  `/health` reports `log_bytes` and `disk_free_bytes`, so a full disk shows up
+  in diagnostics before it breaks a save.
 - `.env` and other dotfiles/config are denied by the root `.htaccess`, and the
   preferred deployment keeps them outside `public_html/` entirely.
 
 ## Limitations
 
 - Keyword/BM25 search — no embeddings or vector search.
-- Public OAuth clients only (`none` + PKCE); no revocation endpoint. Revoking is
-  done by disabling the account or changing its password, which invalidates its
-  tokens at once.
+- Public OAuth clients only (`none` + PKCE). Revoking a single connection is
+  done at the RFC 7009 revocation endpoint; revoking *everything* an account
+  holds is done by disabling the account or changing its password, which
+  invalidates its tokens at once.
 - Accounts are single-owner: one instance per household/team, not a hosted
   multi-tenant service. There is no self-service sign-up (an admin creates
   accounts) and no per-account quotas.
@@ -648,6 +673,10 @@ writable.
   older PHP; use 8.2+, or pin `platform.php` to the host version.
 - **Search shows `engine: direct`** — `pdo_sqlite` is not enabled; the app still
   works, searching files directly.
+- **The disk is filling up** — `/health` reports `log_bytes` and
+  `disk_free_bytes`. The log rotates itself at `LOG_MAX_BYTES` (one `.1` file
+  kept); everything else that grows is memory, so prune entries or empty the
+  trash.
 - **`/ui` returns `internal_error`** — check `data/logs/app.log`; usually
   `data/sessions/` or the account's `data/users/<username>/` not writable, or
   `vendor/` not uploaded.

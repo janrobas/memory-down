@@ -12,7 +12,8 @@ declare(strict_types=1);
  *   -> 401 + WWW-Authenticate -> DCR -> consent -> code -> token -> refresh
  *   -> MCP initialize (handshake era) -> tools/list -> tool calls
  *   -> MCP server/discover (modern era, 2026-07-28) -> tools/call
- *   -> path traversal attempts
+ *   -> path traversal attempts -> accounts -> revocation & reuse
+ *   -> admin login/setup rate limiting
  *
  * Usage:  php tests/run-tests.php [--base-url http://127.0.0.1:PORT] [--keep-server]
  *
@@ -105,6 +106,11 @@ if (!$keepServer) {
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('PUBLIC_API_ENABLED=true');
     putenv('WORKFLOWS_API_ENABLED=true');
+    // The main chain signs in many times; the per-IP login limit (default 10)
+    // gets its own dedicated-server section, so this instance gets a generous
+    // cap. HSTS is on here so the header is assertable in this chain.
+    putenv('RATE_LIMIT_LOGIN_MAX=100');
+    putenv('HSTS_ENABLED=true');
 
     // The child `php -S` server inherits the current PHP configuration (its
     // php.ini / loaded extensions). We deliberately do NOT add `-d extension=`
@@ -334,6 +340,10 @@ $r = request('GET', '/health');
 check('GET /health -> 200', 200 === $r['status']);
 check('GET /health -> status ok', 'ok' === (jsonBody($r['body'])['status'] ?? null));
 check('GET /health -> memory path writable', true === (jsonBody($r['body'])['checks']['memory_writable'] ?? false));
+$healthBody = jsonBody($r['body']);
+check('GET /health -> reports the log size', array_key_exists('log_bytes', $healthBody['checks'] ?? []) && ($healthBody['checks']['log_bytes'] ?? -1) >= 0, json_encode($healthBody['checks'] ?? []));
+check('GET /health -> reports free disk space', ($healthBody['checks']['disk_free_bytes'] ?? null) > 0, json_encode($healthBody['checks']['disk_free_bytes'] ?? null));
+check('GET /health -> HSTS when enabled', 'max-age=31536000' === ($r['headers']['strict-transport-security'] ?? ''), json_encode($r['headers']));
 
 $r = request('GET', '/health/mcp');
 $mcp = jsonBody($r['body']);
@@ -380,6 +390,7 @@ check('AS metadata: code_challenge_methods_supported includes S256', in_array('S
 check('AS metadata: token_endpoint_auth_methods_supported includes none', in_array('none', $as['token_endpoint_auth_methods_supported'] ?? [], true));
 check('AS metadata: CIMD not advertised (DCR primary, like Calendar)', !array_key_exists('client_id_metadata_document_supported', $as));
 check('AS metadata: registration_endpoint present', isset($as['registration_endpoint']));
+check('AS metadata: revocation_endpoint advertised', ($as['revocation_endpoint'] ?? '') === $base . '/oauth/revoke');
 check('AS metadata: iss parameter supported (RFC 9207)', true === ($as['authorization_response_iss_parameter_supported'] ?? false));
 
 $r = request('GET', '/.well-known/openid-configuration');
@@ -2706,6 +2717,132 @@ $r = request('GET', '/ui');
 check('GET /ui after logout -> 302 to login', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'));
 
 /* ------------------------------------------------------------------ *
+ *  OAuth: revocation endpoint (RFC 7009) and refresh reuse detection
+ * ------------------------------------------------------------------ */
+
+section('OAuth: revocation & refresh reuse');
+
+// The settings change above bumped the admin's auth epoch, so every earlier
+// token is dead by design — this section runs its own consent flow with the
+// current password.
+[$revVerifier, $revChallenge] = pkcePair();
+$revQuery = http_build_query([
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'response_type' => 'code',
+    'scope' => SCOPE,
+    'state' => 'state-revoke',
+    'code_challenge' => $revChallenge,
+    'code_challenge_method' => 'S256',
+    'resource' => $base . '/mcp',
+]);
+$r = request('POST', '/oauth/authorize?' . $revQuery, $form([]), http_build_query([
+    'decision' => 'allow', 'username' => 'test-user', 'password' => 'a-new-admin-password',
+]));
+$revLocation = $r['headers']['location'] ?? '';
+check('revoke: consent for a fresh connection', 302 === $r['status'] && '' !== $revLocation, $revLocation);
+parse_str((string) parse_url($revLocation, PHP_URL_QUERY), $revCallback);
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'authorization_code',
+    'code' => (string) ($revCallback['code'] ?? ''),
+    'code_verifier' => $revVerifier,
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'resource' => $base . '/mcp',
+]));
+$revToken = jsonBody($r['body']);
+check('revoke: tokens issued', 200 === $r['status'] && isset($revToken['access_token'], $revToken['refresh_token']), $r['body']);
+$revAccess = (string) ($revToken['access_token'] ?? '');
+$revRefresh = (string) ($revToken['refresh_token'] ?? '');
+
+// An access token, revoked: the resource refuses it afterwards.
+$r = request('POST', '/oauth/revoke', $form([]), http_build_query(['token' => $revAccess, 'token_type_hint' => 'access_token']));
+check('revoke: access token -> 200 with an empty body', 200 === $r['status'] && '' === $r['body'], (string) $r['status']);
+$r = request('POST', '/mcp', ['Authorization' => 'Bearer ' . $revAccess, 'Content-Type' => 'application/json', 'Accept' => 'application/json, text/event-stream'], $body);
+check('revoke: the revoked access token is refused at /mcp', 401 === $r['status'], (string) $r['status']);
+
+// The endpoint never reveals whether a token existed.
+$r = request('POST', '/oauth/revoke', $form([]), http_build_query(['token' => 'not-a-real-token-000000', 'token_type_hint' => 'access_token']));
+check('revoke: an unknown token is also 200 (no oracle)', 200 === $r['status'], (string) $r['status']);
+$r = request('POST', '/oauth/revoke', $form([]), http_build_query([]));
+check('revoke: a missing token is a 400', 400 === $r['status'], (string) $r['status']);
+
+// Explicit revocation of a refresh token: rotation stops immediately.
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'refresh_token', 'refresh_token' => $revRefresh, 'client_id' => $clientId,
+]));
+$revRotated = jsonBody($r['body']);
+check('revoke: the refresh token rotates', 200 === $r['status'] && isset($revRotated['refresh_token']), $r['body']);
+$revReplacement = (string) ($revRotated['refresh_token'] ?? '');
+
+$r = request('POST', '/oauth/revoke', $form([]), http_build_query(['token' => $revReplacement, 'token_type_hint' => 'refresh_token']));
+check('revoke: refresh token -> 200', 200 === $r['status'], (string) $r['status']);
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'refresh_token', 'refresh_token' => $revReplacement, 'client_id' => $clientId,
+]));
+check(
+    'revoke: the revoked refresh token no longer rotates',
+    400 === $r['status'] && 'invalid_grant' === (jsonBody($r['body'])['error'] ?? ''),
+    $r['body']
+);
+
+// Reuse detection (OAuth 2.1): a fresh family, rotated once, then replayed.
+// The replay must kill the replacement too, and the reply stays a plain
+// invalid_grant so the caller learns nothing.
+[$rev2Verifier, $rev2Challenge] = pkcePair();
+$rev2Query = http_build_query([
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'response_type' => 'code',
+    'scope' => SCOPE,
+    'state' => 'state-reuse',
+    'code_challenge' => $rev2Challenge,
+    'code_challenge_method' => 'S256',
+    'resource' => $base . '/mcp',
+]);
+$r = request('POST', '/oauth/authorize?' . $rev2Query, $form([]), http_build_query([
+    'decision' => 'allow', 'username' => 'test-user', 'password' => 'a-new-admin-password',
+]));
+$rev2Location = $r['headers']['location'] ?? '';
+check('revoke: consent for the reuse probe', 302 === $r['status'] && '' !== $rev2Location, $rev2Location);
+parse_str((string) parse_url($rev2Location, PHP_URL_QUERY), $rev2Callback);
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'authorization_code',
+    'code' => (string) ($rev2Callback['code'] ?? ''),
+    'code_verifier' => $rev2Verifier,
+    'client_id' => $clientId,
+    'redirect_uri' => $redirectUri,
+    'resource' => $base . '/mcp',
+]));
+$rev2Token = jsonBody($r['body']);
+check('revoke: reuse-probe tokens issued', 200 === $r['status'] && isset($rev2Token['refresh_token']), $r['body']);
+$rev2Refresh = (string) ($rev2Token['refresh_token'] ?? '');
+
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'refresh_token', 'refresh_token' => $rev2Refresh, 'client_id' => $clientId,
+]));
+$rev2Rotated = jsonBody($r['body']);
+check('revoke: reuse-probe refresh rotates', 200 === $r['status'] && isset($rev2Rotated['refresh_token']), $r['body']);
+$rev2Replacement = (string) ($rev2Rotated['refresh_token'] ?? '');
+
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'refresh_token', 'refresh_token' => $rev2Refresh, 'client_id' => $clientId,
+]));
+check(
+    'revoke: replaying the rotated token is refused as invalid_grant',
+    400 === $r['status'] && 'invalid_grant' === (jsonBody($r['body'])['error'] ?? ''),
+    $r['body']
+);
+$r = request('POST', '/oauth/token', $form([]), http_build_query([
+    'grant_type' => 'refresh_token', 'refresh_token' => $rev2Replacement, 'client_id' => $clientId,
+]));
+check(
+    'revoke: the replay killed the replacement (family revoked)',
+    400 === $r['status'] && 'invalid_grant' === (jsonBody($r['body'])['error'] ?? ''),
+    $r['body']
+);
+
+/* ------------------------------------------------------------------ *
  *  Fresh install: no accounts, so /ui/setup creates the first admin
  * ------------------------------------------------------------------ */
 
@@ -2795,6 +2932,172 @@ if (is_resource($freshProc)) {
     check('setup: a fresh server could be started', false, $freshErrstr ?? 'proc_open failed');
 }
 
+/* ------------------------------------------------------------------ *
+ *  Rate limiting: admin sign-in and first-run setup (per IP)
+ * ------------------------------------------------------------------ */
+
+section('Rate limiting: admin login & setup');
+
+// Dedicated servers: the buckets are per IP and per window, so the limits here
+// are small while the main chain (which signs in many times) is untouched.
+$rlTmp = sys_get_temp_dir() . '/memorydown-ratelimit-' . getmypid() . '-' . bin2hex(random_bytes(3));
+mkdir($rlTmp . '/logs', 0775, true);
+
+// --- Login limit: a seeded instance, so /ui/login is reachable directly.
+$rlLoginProbe = @stream_socket_server('tcp://127.0.0.1:0', $rlErrno, $rlErrstr);
+$rlLoginProc = null;
+$rlLoginBase = '';
+$rlCookies = $GLOBALS['memorydown_cookies'];
+if (false !== $rlLoginProbe) {
+    $rlLoginName = (string) stream_socket_get_name($rlLoginProbe, false);
+    $rlLoginPort = (int) substr($rlLoginName, strrpos($rlLoginName, ':') + 1);
+    fclose($rlLoginProbe);
+    $rlLoginBase = 'http://127.0.0.1:' . $rlLoginPort;
+
+    $rlLoginEnv = [
+        'APP_BASE_URL' => $rlLoginBase,
+        'APP_ENV' => 'testing',
+        'DATA_PATH' => $rlTmp,
+        'LOG_PATH' => $rlTmp . '/logs',
+        'OAUTH_USERNAME' => 'rl-user',
+        'ADMIN_PASSWORD_HASH' => password_hash('rl-password', PASSWORD_DEFAULT),
+        'MEMORY_PATH' => '',
+        'RATE_LIMIT_LOGIN_MAX' => '3',
+        'RATE_LIMIT_SETUP_MAX' => '5',
+        'RATE_LIMIT_WINDOW' => '60',
+    ];
+    $rlRestore = [];
+    foreach ($rlLoginEnv as $rlKey => $rlValue) {
+        $rlRestore[$rlKey] = (string) getenv($rlKey);
+        putenv($rlKey . '=' . $rlValue);
+    }
+    $rlLoginProc = proc_open(
+        [$phpBin, '-S', '127.0.0.1:' . $rlLoginPort, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php'],
+        [1 => ['file', $rlTmp . '/login.out.log', 'w'], 2 => ['file', $rlTmp . '/login.err.log', 'w']],
+        $rlPipes,
+        dirname(__DIR__)
+    );
+    foreach ($rlRestore as $rlKey => $rlValue) {
+        putenv($rlKey . '=' . $rlValue);
+    }
+    $GLOBALS['memorydown_cookies'] = [];
+}
+
+if (is_resource($rlLoginProc)) {
+    waitForServer($rlLoginBase);
+
+    $r = request('GET', '/ui/login', [], null, $rlLoginBase);
+    preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $rlM);
+    $rlCsrf = $rlM[1] ?? '';
+    check('ratelimit: the login page opens on the dedicated server', 200 === $r['status'] && '' !== $rlCsrf, (string) $r['status']);
+
+    $rlForm = static fn (array $fields): array => ['Content-Type' => 'application/x-www-form-urlencoded'];
+    for ($attempt = 1; $attempt <= 3; ++$attempt) {
+        $r = request('POST', '/ui/login', $rlForm([]), http_build_query([
+            'csrf' => $rlCsrf, 'username' => 'rl-user', 'password' => 'wrong-password',
+        ]), $rlLoginBase);
+        check("ratelimit: wrong password #{$attempt} -> 401", 401 === $r['status'], (string) $r['status']);
+    }
+    $r = request('POST', '/ui/login', $rlForm([]), http_build_query([
+        'csrf' => $rlCsrf, 'username' => 'rl-user', 'password' => 'wrong-password',
+    ]), $rlLoginBase);
+    check('ratelimit: the next attempt is rate limited', 429 === $r['status'], (string) $r['status']);
+    check('ratelimit: the refusal carries Retry-After', '60' === ($r['headers']['retry-after'] ?? ''), $r['headers']['retry-after'] ?? '');
+    check('ratelimit: the refusal says to wait', str_contains($r['body'], 'Too many attempts'), '');
+    // The limit is on attempts, not on outcomes: the right password is refused
+    // too while the window is full.
+    $r = request('POST', '/ui/login', $rlForm([]), http_build_query([
+        'csrf' => $rlCsrf, 'username' => 'rl-user', 'password' => 'rl-password',
+    ]), $rlLoginBase);
+    check('ratelimit: even the right password is refused while limited', 429 === $r['status'], (string) $r['status']);
+
+    proc_terminate($rlLoginProc);
+    proc_close($rlLoginProc);
+    $GLOBALS['memorydown_cookies'] = $rlCookies;
+} else {
+    check('ratelimit: a login server could be started', false, $rlErrstr ?? 'proc_open failed');
+}
+
+// --- Setup limit: a fresh instance with no accounts, so /ui/setup is live.
+$rlSetupProbe = @stream_socket_server('tcp://127.0.0.1:0', $rlErrno2, $rlErrstr2);
+$rlSetupProc = null;
+$rlSetupBase = '';
+if (false !== $rlSetupProbe) {
+    $rlSetupName = (string) stream_socket_get_name($rlSetupProbe, false);
+    $rlSetupPort = (int) substr($rlSetupName, strrpos($rlSetupName, ':') + 1);
+    fclose($rlSetupProbe);
+    $rlSetupBase = 'http://127.0.0.1:' . $rlSetupPort;
+
+    $rlSetupEnv = [
+        'APP_BASE_URL' => $rlSetupBase,
+        'APP_ENV' => 'testing',
+        'DATA_PATH' => $rlTmp,
+        'LOG_PATH' => $rlTmp . '/logs',
+        'OAUTH_USERNAME' => '',
+        'ADMIN_PASSWORD_HASH' => '',
+        'ADMIN_SETUP_TOKEN' => 'rl-setup-secret',
+        'MEMORY_PATH' => '',
+        'RATE_LIMIT_LOGIN_MAX' => '10',
+        'RATE_LIMIT_SETUP_MAX' => '3',
+        'RATE_LIMIT_WINDOW' => '60',
+    ];
+    $rlRestore2 = [];
+    foreach ($rlSetupEnv as $rlKey => $rlValue) {
+        $rlRestore2[$rlKey] = (string) getenv($rlKey);
+        putenv($rlKey . '=' . $rlValue);
+    }
+    $rlSetupProc = proc_open(
+        [$phpBin, '-S', '127.0.0.1:' . $rlSetupPort, '-t', dirname(__DIR__) . '/public_html', dirname(__DIR__) . '/public_html/index.php'],
+        [1 => ['file', $rlTmp . '/setup.out.log', 'w'], 2 => ['file', $rlTmp . '/setup.err.log', 'w']],
+        $rlPipes2,
+        dirname(__DIR__)
+    );
+    foreach ($rlRestore2 as $rlKey => $rlValue) {
+        putenv($rlKey . '=' . $rlValue);
+    }
+    $GLOBALS['memorydown_cookies'] = [];
+}
+
+if (is_resource($rlSetupProc)) {
+    waitForServer($rlSetupBase);
+    // A developer's .env may have seeded an account during boot (the migration
+    // prefers it over the deliberately empty environment above). This section
+    // is about a brand new instance, so clear the store like the fresh-setup
+    // section does.
+    @unlink($rlTmp . '/auth/users.json');
+
+    $r = request('GET', '/ui/setup', [], null, $rlSetupBase);
+    preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $rlM2);
+    $rlSetupCsrf = $rlM2[1] ?? '';
+    check('ratelimit: the setup page opens on the dedicated server', 200 === $r['status'] && '' !== $rlSetupCsrf, (string) $r['status']);
+
+    $rlForm2 = static fn (array $fields): array => ['Content-Type' => 'application/x-www-form-urlencoded'];
+    for ($attempt = 1; $attempt <= 3; ++$attempt) {
+        $r = request('POST', '/ui/setup', $rlForm2([]), http_build_query([
+            'csrf' => $rlSetupCsrf, 'setup_token' => 'wrong', 'username' => 'owner', 'password' => 'owner-password', 'confirm' => 'owner-password',
+        ]), $rlSetupBase);
+        check("ratelimit: wrong setup token #{$attempt} -> 400", 400 === $r['status'], (string) $r['status']);
+    }
+    $r = request('POST', '/ui/setup', $rlForm2([]), http_build_query([
+        'csrf' => $rlSetupCsrf, 'setup_token' => 'wrong', 'username' => 'owner', 'password' => 'owner-password', 'confirm' => 'owner-password',
+    ]), $rlSetupBase);
+    check('ratelimit: the next setup attempt is rate limited', 429 === $r['status'], (string) $r['status']);
+    check('ratelimit: the setup refusal carries Retry-After', '60' === ($r['headers']['retry-after'] ?? ''), $r['headers']['retry-after'] ?? '');
+    check('ratelimit: the setup refusal says to wait', str_contains($r['body'], 'Too many attempts'), '');
+    check(
+        'ratelimit: the refused attempts created nothing',
+        !isset(json_decode((string) @file_get_contents($rlTmp . '/auth/users.json'), true)['owner']),
+        ''
+    );
+
+    proc_terminate($rlSetupProc);
+    proc_close($rlSetupProc);
+    $GLOBALS['memorydown_cookies'] = $rlCookies;
+} else {
+    check('ratelimit: a setup server could be started', false, $rlErrstr2 ?? 'proc_open failed');
+}
+
+@exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($rlTmp));
 
 /* ------------------------------------------------------------------ *
  *  Summary

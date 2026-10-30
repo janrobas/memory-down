@@ -185,18 +185,50 @@ final class TokenStore
     }
 
     /**
+     * Set when the most recent {@see rotateRefreshToken} call recognized a
+     * replay of a token that was already rotated: the presented token's whole
+     * family has been revoked (OAuth 2.1 theft detection), and the rotation
+     * still reports failure. The flag lets the token endpoint log the event at
+     * a higher severity without changing the response — the response must stay
+     * a plain invalid_grant, because saying "this was a reused token" is
+     * information only the thief needs.
+     */
+    public bool $refreshReuseDetected = false;
+
+    /**
      * Atomically consume a refresh token and issue its replacement
      * (OAuth 2.1 refresh-token rotation for public clients).
+     *
+     * Presenting a token that was already consumed is treated as theft: the
+     * replacement it produced — and every replacement that came after it — is
+     * revoked on the spot, so the whole family dies with the replayed token.
      *
      * @return array{refresh_token: string, client_id: string, scope: string[], resource: string, sub: string, epoch: int}|null
      */
     public function rotateRefreshToken(string $refreshToken): ?array
     {
+        $this->refreshReuseDetected = false;
+
         $oldKey = 'refresh_' . self::hash($refreshToken);
+        $usedKey = 'used_' . self::hash($refreshToken);
         $record = null;
         $newToken = '';
 
-        $this->store->mutate(function (array $data) use ($oldKey, &$record, &$newToken): array {
+        $this->store->mutate(function (array $data) use ($oldKey, $usedKey, &$record, &$newToken): array {
+            if (isset($data[$usedKey]) && is_array($data[$usedKey])) {
+                // A token that was already rotated is presented again: the
+                // token (or its family) may have been stolen. Revoke every
+                // replacement it ever produced, so the family dies with it.
+                $replacedBy = (string) ($data[$usedKey]['replaced_by'] ?? '');
+                unset($data[$usedKey]);
+                if ('' !== $replacedBy) {
+                    $data = $this->revokeRefreshFamily($data, $replacedBy);
+                }
+                $this->refreshReuseDetected = true;
+
+                return $data;
+            }
+
             if (!isset($data[$oldKey]) || !is_array($data[$oldKey])) {
                 return $data;
             }
@@ -210,7 +242,8 @@ final class TokenStore
             $record = $entry;
 
             $newToken = self::randomToken();
-            $data['refresh_' . self::hash($newToken)] = [
+            $newHash = self::hash($newToken);
+            $data['refresh_' . $newHash] = [
                 'type' => 'refresh',
                 'client_id' => (string) ($entry['client_id'] ?? ''),
                 'scope' => is_array($entry['scope'] ?? null) ? $entry['scope'] : [],
@@ -218,6 +251,13 @@ final class TokenStore
                 'sub' => (string) ($entry['sub'] ?? ''),
                 'epoch' => (int) ($entry['epoch'] ?? 0),
                 'created_at' => time(),
+                'expires_at' => time() + $this->refreshTtl,
+            ];
+            // The tombstone makes a replay of the consumed token detectable,
+            // and points at the replacement so the family can be revoked.
+            $data[$usedKey] = [
+                'type' => 'used_refresh',
+                'replaced_by' => $newHash,
                 'expires_at' => time() + $this->refreshTtl,
             ];
 
@@ -238,14 +278,70 @@ final class TokenStore
         ];
     }
 
-    public function revokeAccessToken(string $token): void
+    /**
+     * Revoke a refresh-token family from $firstHash onward, following the
+     * "replaced_by" tombstones each rotation leaves behind.
+     *
+     * The walk is bounded so a corrupt store can never loop; anything beyond
+     * the bound is left to expire on its own.
+     *
+     * @param array<string, mixed> $data
+     *
+     * @return array<string, mixed>
+     */
+    private function revokeRefreshFamily(array $data, string $firstHash): array
     {
-        $this->store->remove('access_' . self::hash($token));
+        $next = $firstHash;
+        for ($i = 0; $i < 32 && '' !== $next; ++$i) {
+            $replacedBy = (string) ($data['used_' . $next]['replaced_by'] ?? '');
+            unset($data['refresh_' . $next], $data['used_' . $next]);
+            $next = $replacedBy;
+        }
+
+        return $data;
     }
 
-    public function revokeRefreshToken(string $token): void
+    /**
+     * @return bool whether a live access token of that value existed
+     */
+    public function revokeAccessToken(string $token): bool
     {
-        $this->store->remove('refresh_' . self::hash($token));
+        $key = 'access_' . self::hash($token);
+        $found = false;
+        $this->store->mutate(static function (array $data) use ($key, &$found): array {
+            if (isset($data[$key])) {
+                unset($data[$key]);
+                $found = true;
+            }
+
+            return $data;
+        });
+
+        return $found;
+    }
+
+    /**
+     * Revoke a refresh token and its whole family (every replacement a
+     * rotation of it ever produced).
+     *
+     * @return bool whether a live refresh token of that value existed
+     */
+    public function revokeRefreshToken(string $token): bool
+    {
+        $hash = self::hash($token);
+        $found = false;
+        $this->store->mutate(function (array $data) use ($hash, &$found): array {
+            if (!isset($data['refresh_' . $hash]) && !isset($data['used_' . $hash])) {
+                return $data;
+            }
+            // Whether a live token existed, even though a dangling tombstone
+            // (nothing but a rotation marker left) is swept just the same.
+            $found = isset($data['refresh_' . $hash]);
+
+            return $this->revokeRefreshFamily($data, $hash);
+        });
+
+        return $found;
     }
 
     /**

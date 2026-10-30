@@ -57,7 +57,7 @@ final class App
         $response = $this->dispatch($request)
             ->withHeader('X-Request-Id', $this->logger->requestId());
 
-        Response::emit(Response::secure($response));
+        Response::emit(Response::secure($response, $this->config->hstsEnabled));
     }
 
     private function createRequest(): ServerRequestInterface
@@ -85,6 +85,7 @@ final class App
                 in_array($path, ['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'], true) && 'GET' === $method => $this->json(Kernel::get()->auth->authorizationServerMetadata(), 200, 300),
                 '/oauth/authorize' === $path => Kernel::get()->auth->handleAuthorize($request),
                 '/oauth/token' === $path && 'POST' === $method => Kernel::get()->auth->handleToken($request),
+                '/oauth/revoke' === $path && 'POST' === $method => Kernel::get()->auth->handleRevoke($request),
                 '/oauth/register' === $path && 'POST' === $method => Kernel::get()->auth->handleRegister($request),
                 '/mcp' === $path && in_array($method, ['POST', 'GET', 'DELETE'], true) => McpServerFactory::run($request),
                 '/' === $path && 'POST' === $method => McpServerFactory::run($request),
@@ -208,6 +209,8 @@ final class App
         }
 
         $dataPath = $this->config->dataPath;
+        $appLog = $this->config->logPath . '/app.log';
+        $diskFree = is_callable('disk_free_space') ? @disk_free_space($dataPath) : false;
 
         return [
             'status' => 'ok',
@@ -232,6 +235,10 @@ final class App
                 'data_writable' => is_writable($dataPath),
                 'sessions_writable' => is_writable($dataPath . '/sessions'),
                 'log_writable' => is_writable($this->config->logPath),
+                // How full the log and the disk are: the two things that end a
+                // shared-hosting install quietly if nobody is watching.
+                'log_bytes' => is_file($appLog) ? (int) @filesize($appLog) : 0,
+                'disk_free_bytes' => false !== $diskFree ? (int) $diskFree : null,
                 'search_index' => ($index ?? [
                     'engine' => 'direct',
                     'available' => true,
@@ -296,6 +303,7 @@ final class App
             'endpoints' => [
                 'authorize' => $base . '/oauth/authorize',
                 'token' => $base . '/oauth/token',
+                'revoke' => $base . '/oauth/revoke',
                 'register' => $base . '/oauth/register',
             ],
             'supported' => [

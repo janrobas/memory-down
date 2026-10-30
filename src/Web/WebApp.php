@@ -12,6 +12,8 @@ use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\SearchEngine;
 use MemoryDown\Memory\WorkflowDefinition;
+use MemoryDown\Support\ClientIp;
+use MemoryDown\Support\RateLimiter;
 use MemoryDown\Support\ZipWriter;
 use MemoryDown\Users\User;
 use MemoryDown\Users\UserDirectories;
@@ -136,6 +138,7 @@ final class WebApp
         private readonly UserDirectories $directories,
         private readonly TokenStore $tokens,
         private readonly LoggerInterface $logger,
+        private readonly ?RateLimiter $limiter = null,
     ) {
         $this->factory = new Psr17Factory();
         $this->auth = new WebAuth($config, $users, $logger);
@@ -152,6 +155,7 @@ final class WebApp
             $kernel->userDirectories,
             $kernel->tokens,
             $kernel->logger,
+            $kernel->rateLimiter,
         );
     }
 
@@ -338,6 +342,19 @@ final class WebApp
             return $this->redirect('/ui/setup');
         }
 
+        // The session-based lockout in WebAuth is one boundary, but it lives in
+        // a cookie an attacker can simply drop; this per-IP limit is the one
+        // that cannot be reset by the client.
+        if (!$this->withinUiRateLimit('login', $request, $this->config->rateLimitLoginMax)) {
+            return $this->html($this->view('login', [
+                'title' => 'Sign in',
+                'bodyClass' => 'auth',
+                'csrf' => $this->auth->csrfToken(),
+                'username' => '',
+                'error' => 'Too many attempts. Wait a moment and try again.',
+            ]), 429)->withHeader('Retry-After', (string) max(1, $this->config->rateLimitWindow));
+        }
+
         $body = $request->getParsedBody() ?? [];
         $username = trim($this->str($body['username'] ?? null));
 
@@ -398,6 +415,21 @@ final class WebApp
     {
         if ($this->auth->isConfigured()) {
             return $this->redirect('/ui/login');
+        }
+
+        // The setup form is the one moment an instance has no accounts at all
+        // and nothing else to protect it; the ADMIN_SETUP_TOKEN is a good
+        // secret, but a rate limit means guessing it is slow even when it is
+        // weak or unset.
+        if (!$this->withinUiRateLimit('setup', $request, $this->config->rateLimitSetupMax)) {
+            return $this->html($this->view('setup', [
+                'title' => 'Set up MemoryDown',
+                'bodyClass' => 'auth',
+                'csrf' => $this->auth->csrfToken(),
+                'needsToken' => '' !== $this->config->adminSetupToken,
+                'username' => $this->suggestedUsername(),
+                'error' => 'Too many attempts. Wait a moment and try again.',
+            ]), 429)->withHeader('Retry-After', (string) max(1, $this->config->rateLimitWindow));
         }
 
         $body = $request->getParsedBody() ?? [];
@@ -1347,6 +1379,31 @@ final class WebApp
         }
 
         return $this->auth->checkCsrf($token);
+    }
+
+    /**
+     * Apply a per-IP fixed-window limit for a UI endpoint (login / setup).
+     * Returns true when the request is allowed — including when limiting is
+     * disabled or the bucket cannot be written, the same fail-open policy the
+     * OAuth endpoints use.
+     */
+    private function withinUiRateLimit(string $bucket, ServerRequestInterface $request, int $max): bool
+    {
+        if (null === $this->limiter) {
+            return true;
+        }
+
+        if ($this->limiter->allow(
+            $bucket . ':' . ClientIp::of($request),
+            $max,
+            $this->config->rateLimitWindow,
+        )) {
+            return true;
+        }
+
+        $this->logger->warning('admin.ui_rate_limited', ['endpoint' => $bucket]);
+
+        return false;
     }
 
     /**
