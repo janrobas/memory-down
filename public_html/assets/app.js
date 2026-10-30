@@ -57,6 +57,11 @@
   var openMemoriesBtn = document.getElementById('open-memories');
   var openMenuBtn = document.getElementById('open-menu');
   var commandDrawer = document.getElementById('command-drawer');
+  var topbarTools = document.getElementById('topbar-tools');
+  var themePicker = document.getElementById('theme-picker');
+  var themeGroup = document.getElementById('group-theme');
+  var accountGroup = document.getElementById('group-account');
+  var logoutBtn = document.getElementById('logout');
   var editorForm = document.getElementById('editor-form');
   var editorEmpty = document.getElementById('editor-empty');
   var categoriesHead = document.getElementById('categories-head');
@@ -262,6 +267,26 @@
 
   function isMobile() { return window.matchMedia(MOBILE).matches; }
 
+  // Theme and Logout are server-rendered inside the drawer so the unscripted
+  // inline toolbar keeps them. On desktop the menu should hold navigation only,
+  // so they move into the top bar beside the ⋯ button; on mobile they move back
+  // into the drawer, whose panel scrolls.
+  function placeTopbarTools() {
+    if (!topbarTools || !themePicker || !themeGroup || !accountGroup || !logoutBtn) { return; }
+
+    if (isMobile()) {
+      if (themePicker.parentNode !== themeGroup) { themeGroup.appendChild(themePicker); }
+      if (logoutBtn.parentNode !== accountGroup) { accountGroup.appendChild(logoutBtn); }
+      themeGroup.style.display = '';
+      return;
+    }
+
+    if (themePicker.parentNode !== topbarTools) { topbarTools.appendChild(themePicker); }
+    if (logoutBtn.parentNode !== topbarTools) { topbarTools.appendChild(logoutBtn); }
+    // The Theme group has nothing left in it on desktop.
+    themeGroup.style.display = 'none';
+  }
+
   function drawerState() {
     return shell.classList.contains('drawer-left') ? 'left'
       : shell.classList.contains('drawer-right') ? 'right'
@@ -316,13 +341,27 @@
       closeDrawer();
     });
 
+    // The theme popup stops its own clicks from bubbling, so closing the ⋯ menu
+    // behind it has to be wired on the toggle itself: the two popups are
+    // alternatives, never open at once.
+    var themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+      themeToggle.addEventListener('click', function () {
+        if (!isMobile()) { closeDrawer(); }
+      });
+    }
+
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') { closeDrawer(); }
     });
 
     // Opening the drawer must not stay open when the viewport grows to desktop.
+    // Theme/Logout also have to swap between the top bar and the drawer.
     var mq = window.matchMedia(MOBILE);
-    var onChange = function () { if (!mq.matches) { closeDrawer(); } };
+    var onChange = function () {
+      if (!mq.matches) { closeDrawer(); }
+      placeTopbarTools();
+    };
     if (mq.addEventListener) { mq.addEventListener('change', onChange); }
     else if (mq.addListener) { mq.addListener(onChange); }
 
@@ -1737,6 +1776,7 @@
   snapshot(currentPayload());
 
   themeSwitcher();
+  placeTopbarTools();
   wireLogout();
   wireReindex();
   wireDrawers();

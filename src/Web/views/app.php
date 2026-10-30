@@ -100,6 +100,11 @@ $definitionHead = null === $definition
           <span class="breadcrumb" id="breadcrumb"><?= '' !== $selId ? WebApp::h($selCategory) . '<span class="sep">/</span>' . WebApp::h($selId) : 'New memory' ?></span>
           <span class="spacer"></span>
 
+          <?php /* Theme and Logout live in the drawer markup (so the no-JS fallback
+                   keeps them in the inline toolbar) and app.js moves them out here
+                   on desktop, where the menu should only hold navigation. */ ?>
+          <span class="topbar-tools" id="topbar-tools"></span>
+
           <button type="button" id="open-menu" class="icon-btn" aria-controls="command-drawer" aria-expanded="false" title="Menu">⋯</button>
         </div>
 
@@ -210,7 +215,7 @@ $definitionHead = null === $definition
       <a class="drawer-link" href="/ui/trash" title="Deleted memories, restorable">🗑 Trash<span class="trash-badge" id="trash-count"><?= (int) ($trashCount ?? 0) > 0 ? '(' . (int) $trashCount . ')' : '' ?></span></a>
     </div>
 
-    <div class="command-group">
+    <div class="command-group" id="group-account">
       <span class="command-group-label">Account</span>
       <a class="drawer-link" href="/ui/settings" title="Your password and API tokens">⚙ Settings</a>
       <?php if (($user ?? null) instanceof \MemoryDown\Users\User && $user->isAdmin()): ?>
@@ -219,9 +224,9 @@ $definitionHead = null === $definition
       <button type="button" id="logout" title="Sign out">Logout</button>
     </div>
 
-    <div class="command-group">
+    <div class="command-group" id="group-theme">
       <span class="command-group-label">Theme</span>
-      <div class="theme-picker">
+      <div class="theme-picker" id="theme-picker">
         <button type="button" id="theme-toggle" aria-haspopup="true" aria-expanded="false" title="Theme">Theme ▾</button>
         <div class="theme-menu" id="theme-menu" hidden role="menu">
           <button type="button" role="menuitem" data-theme-value="light"><span class="swatch light"></span>White</button>
