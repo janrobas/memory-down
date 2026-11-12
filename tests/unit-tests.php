@@ -323,6 +323,75 @@ check('template: the mode comment names yolo', str_contains(WorkflowDefinition::
 check('template: the mode comment names the runner switch', str_contains(WorkflowDefinition::TEMPLATE_BODY, 'AIORCH_ENABLE_YOLO'));
 check('template: the tool comment asks for a quoted wildcard', str_contains(WorkflowDefinition::TEMPLATE_BODY, '("*")'));
 
+// Optional conditions and context a runner supports: they may skip a run or
+// preload unread mail, and they never widen what a definition may do. Absent or
+// empty means the runner's default, so only a genuinely wrong value is reported.
+$conditions = static fn (string $extra): array => WorkflowDefinition::parse("```yaml\nmode: dry-run\n" . $extra . "```\n\nNavodila.\n");
+check(
+    'conditions: run_if unread_mail is accepted',
+    [] === $conditions("run_if: unread_mail\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nrun_if: unread_mail\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: run_if unread_mail_any is accepted',
+    [] === $conditions("run_if: unread_mail_any\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nrun_if: unread_mail_any\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: an unknown run_if value is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nrun_if: new_mail\n```\n\nNavodila.\n"), 'run_if')
+);
+check(
+    'conditions: an empty run_if means always and is accepted',
+    [] === $conditions("run_if: \"\"\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nrun_if: \"\"\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: mail_context unread is accepted',
+    [] === $conditions("mail_context: unread\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nmail_context: unread\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: an unknown mail_context value is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nmail_context: all\n```\n\nNavodila.\n"), 'mail_context')
+);
+check(
+    'conditions: a mailbox name is accepted',
+    [] === $conditions("mailbox: INBOX\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nmailbox: INBOX\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: an absent mailbox is valid (runner default)',
+    [] === $conditions('')['problems'],
+    $bad("```yaml\nmode: dry-run\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: an empty mailbox is valid (runner default)',
+    [] === $conditions("mailbox: \"\"\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nmailbox: \"\"\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: a non-string mailbox is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nmailbox:\n  - INBOX\n```\n\nNavodila.\n"), 'mailbox')
+);
+$allConditions = "```yaml\n"
+    . "mode: dry-run\n"
+    . "run_if: unread_mail\n"
+    . "mail_context: unread\n"
+    . "mailbox: INBOX\n"
+    . "```\n\n"
+    . "Preglej posto in porocaj.\n";
+check(
+    'conditions: all three valid keys raise no "Unknown field" problem',
+    [] === preg_grep('/Unknown field/', WorkflowDefinition::parse($allConditions)['problems']),
+    $bad($allConditions)
+);
+check(
+    'conditions: an activated definition with all three has no problems',
+    [] === WorkflowDefinition::activationProblems('workflows', ['executable'], $allConditions),
+    $bad($allConditions)
+);
+
 /* ------------------------------------------------------------------ *
  *  The workflow catalog (read-only API over the workflows category)
  * ------------------------------------------------------------------ */

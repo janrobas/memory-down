@@ -148,6 +148,9 @@ Pravila oblike:
 | `schedule` | cron (5 polj) | odsotno = samo ročni zagon | Kdaj se izvede, v času `timezone`. |
 | `timezone` | IANA ime | `Europe/Ljubljana` | Časovni pas urnika in poročil. |
 | `allowed_tools` | seznam id-jev (dovoljen je tudi žolček) ali en sam id | odsotno = samo bralna orodja | Katera orodja workflow sploh sme klicati. Kar ni na seznamu, izvajalec zavrne. Namesto posameznih id-jev sta dovoljena `*` (vsa orodja vseh strežnikov) in `<strežnik>.*` (npr. `calendar.*`). Namesto seznama je dovoljena tudi skalarna oblika (`allowed_tools: "*"`), ki pomeni enoelementni seznam. |
+| `run_if` | `unread_mail` \| `unread_mail_any` | odsotno ali prazno = vedno | Pogoj, kdaj naj se zagon sploh začne: `unread_mail` = od zadnjega uspešnega zagona je prišla neprebrana pošta, `unread_mail_any` = v predalu je katera koli neprebrana pošta. Izvajalec to preveri **v kodi pred klicem modela**; če pogoj ne velja, zagona ne začne in ne pokliče modela. To je pogoj, ne dovoljenje — ne razširi `allowed_tools` in ne spremeni `mode`. |
+| `mail_context` | `unread` | odsotno ali prazno = brez prednaložene pošte | Kaj naj izvajalec pripravi v poziv: `unread` = neprebrana sporočila v `mailbox`. Izvajalec jih vstavi v poziv **pred klicem modela**. Pošta ostaja nezaupanja vreden podatek, ne navodila (razdelek 10); polje ne podeli nobenega orodja. |
+| `mailbox` | ime ali pot predala | odsotno ali prazno = `INBOX` | Kateri predal naj izvajalec bere za `run_if` in `mail_context`. Vrednost, ki ni besedilo (npr. seznam), je napaka. |
 | `llm_provider` | ime ponudnika | odsotno = privzeti ponudnik izvajalca | S katerim ponudnikom naj teče. Imena razrešuje izvajalec; neznano ime javi kot napako, ne ugiba. |
 | `llm_model` | id modela | odsotno = privzeti model ponudnika | Kateri model naj teče. |
 
@@ -294,7 +297,12 @@ odpove, workflowa **ne izvede**, ampak zabeleži in sporoči razlog.
 3. Ni arhiviran (arhiviran = pavza).
 4. Telo vsebuje natanko en konfiguracijski blok in ta se parsira.
 5. Vrednosti polj so veljavne (`mode` znan, `schedule` veljaven cron,
-   `timezone` veljavno IANA ime).
+   `timezone` veljavno IANA ime, `run_if` in `mail_context` iz nabora dovoljenih
+   vrednosti, `mailbox` besedilo). Neveljavne vrednosti:
+   - `run_if` ni niti prazen niti eden od `unread_mail`, `unread_mail_any`;
+   - `mail_context` ni niti prazen niti `unread`;
+   - `mailbox` ni besedilo (npr. seznam) — prazno ali odsotno pomeni privzeti
+     predal `INBOX` in ni napaka.
 6. Navodila za blokom so neprazna in ne vsebujejo oznak osnutka (`TODO`,
    `FIXME`, `…`, `<placeholder>`). Oznake osnutka se iščejo v **celem telesu**,
    tudi v vrednostih konfiguracijskega bloka: `<model-id>`, ki je ostal v bloku,
@@ -311,6 +319,12 @@ odpove, workflowa **ne izvede**, ampak zabeleži in sporoči razlog.
 `yolo` ne sprošča nobenega drugega pogoja: kategorija, oznaka, arhiviranje,
 konfiguracijski blok, polja iz razdelka 4 in varnostna pravila iz razdelka 10
 veljajo enako.
+
+`run_if` in `mail_context` sta **pogoja in kontekst, ne dovoljenji**: izvajalec
+`run_if` preveri v kodi pred klicem modela (če ne velja, modela ne pokliče),
+`mail_context` pa uporabi kot vhodni podatek v pozivu. Nobeno od teh polj ne
+razširi `allowed_tools`, ne spremeni `mode` in ne podeli orodja. MemoryDown jih
+samo prebere in morebitno neveljavno vrednost javi kot opozorilo.
 
 Neveljavna, nepopolna ali dvoumna definicija **nikoli** ne povzroči spremembe v
 zunanjem sistemu.
@@ -449,8 +463,11 @@ je meja seznam, kot je **zapisan**: žolček razširi izvajalec ob klicu (razdel
   frontmatterja in brez H1, znana polja, `TODO` in placeholder za model),
   parser konfiguracijskega bloka (neznano polje, neveljaven `mode`, 4-poljski in
   izven-obsežni cron, neveljaven časovni pas, prazen seznam, manjkajoča navodila,
-  komentarji in narekovaji), oznaka `executable` proti seznamu človeških oznak,
-  način `yolo` kot znan način in skalarna oblika `allowed_tools`.
+  komentarji in narekovaji), pogoji in kontekst (`run_if` z obema dovoljenima
+  vrednostma in z neznano vrednostjo, `mail_context: unread` in neznana
+  vrednost, `mailbox: INBOX`, odsoten in prazen `mailbox`, definicija z vsemi
+  tremi veljavnimi polji brez »Unknown field«), oznaka `executable` proti seznamu
+  človeških oznak, način `yolo` kot znan način in skalarna oblika `allowed_tools`.
 - `tests/run-tests.php` (cela veriga: health → odkrivanje → OAuth → token →
   MCP `initialize` → `tools/list` → klici orodij → admin UI): oznaka je zavrnjena
   povsod, kjer bi jo agent lahko nastavil, zapis z oznako prek MCP ni ne
@@ -496,14 +513,16 @@ branje prek API-ja: dostop do definicije ni dovoljenje za izvedbo.
 
 Workflow je Markdown zapis v `workflows` z oznako `executable`, ki jo lahko doda
 samo človek v admin UI — in samo v tej kategoriji. Njegovo telo se začne s prvim
-fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`,
-`llm_provider`, `llm_model`), za njim so navodila v naravnem jeziku; telo za nov
-zapis prednapolni admin UI. Z oznako je zapis prek MCP samo za branje, zato ga
-agent ne more ne ustvariti ne spremeniti, verdikt v UI pa ti pove, kaj bi
-izvajalec zavrnil. Privzeto teče v `dry-run` (samo bere in poroča), pisanje
-omogoči `mode: apply`, kjer vsako mutirajoče dejanje potrdi uporabnik, `mode:
-yolo` pa izvede vsa orodja z `allowed_tools` takoj, brez predloga in brez
-potrditve — a le, če ima izvajalec vklopljeno svoje stikalo
-(`AIORCH_ENABLE_YOLO=true`), tako da tudi `yolo` odobrita dva človeška dejanja.
+fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`, `run_if`,
+`mail_context`, `mailbox`, `llm_provider`, `llm_model`), za njim so navodila v
+naravnem jeziku; `run_if`, `mail_context` in `mailbox` so le pogoj in kontekst
+izvajalca, ne dovoljenja; telo za nov zapis prednapolni admin UI. Z oznako je
+zapis prek MCP samo za branje, zato ga agent ne more ne ustvariti ne spremeniti,
+verdikt v UI pa ti pove, kaj bi izvajalec zavrnil. Privzeto teče v `dry-run`
+(samo bere in poroča), pisanje omogoči `mode: apply`, kjer vsako mutirajoče
+dejanje potrdi uporabnik, `mode: yolo` pa izvede vsa orodja z `allowed_tools`
+takoj, brez predloga in brez potrditve — a le, če ima izvajalec vklopljeno svoje
+stikalo (`AIORCH_ENABLE_YOLO=true`), tako da tudi `yolo` odobrita dva človeška
+dejanja.
 Pavza je arhiviranje. Izvajalec sme izvesti le definicijo, ki prestane vse pogoje
 iz razdelka 8 — v nasprotnem primeru javi razlog in ne spremeni ničesar.

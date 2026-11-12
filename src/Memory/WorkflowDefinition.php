@@ -66,9 +66,34 @@ final class WorkflowDefinition
         'schedule',
         'timezone',
         'allowed_tools',
+        'run_if',
+        'mail_context',
+        'mailbox',
         'llm_provider',
         'llm_model',
     ];
+
+    /**
+     * Accepted values of `run_if`: when a run is worth starting at all.
+     *
+     * `unread_mail` means unread mail since the last successful run,
+     * `unread_mail_any` any unread mail. Absent or empty means always run. This
+     * is a CONDITION, never a permission: it can skip a run, and it cannot make
+     * a tool allowed or a mode more permissive. The runner checks it in code
+     * before any model call; MemoryDown only reports what it would refuse.
+     *
+     * @var list<string>
+     */
+    public const RUN_IF_VALUES = ['unread_mail', 'unread_mail_any'];
+
+    /**
+     * Accepted values of `mail_context`: what the runner may preload into the
+     * prompt. Absent or empty means no prefetched mail. Context only — mail is
+     * untrusted data, never instructions, and this grants no tool.
+     *
+     * @var list<string>
+     */
+    public const MAIL_CONTEXT_VALUES = ['unread'];
 
     /**
      * Markers that make a definition a draft, which a runner never executes.
@@ -114,6 +139,19 @@ mode: dry-run
 allowed_tools:
   - memory.search_memory
   - memory.read_memory
+
+# Neobvezno: kdaj naj se zagon sploh začne. Prazno ali odsotno = vedno.
+# Dovoljeno je unread_mail (neprebrana pošta od zadnjega uspešnega zagona) in
+# unread_mail_any (katera koli neprebrana pošta). Izvajalec to preveri v kodi
+# pred klicem modela. To je pogoj, ne dovoljenje — ne razširi allowed_tools.
+# run_if: unread_mail
+
+# Neobvezno: kaj naj izvajalec pripravi v pozivu. Prazno = nič. Dovoljeno je
+# unread (neprebrana sporočila). Tudi to je le kontekst, ne dovoljenje.
+# mail_context: unread
+
+# Neobvezno: ime ali pot predala. Prazno = privzeti predal izvajalca (INBOX).
+# mailbox: INBOX
 
 # S katerim modelom naj teče. Vpiši pravi id modela.
 llm_provider: opencode-go
@@ -262,6 +300,26 @@ MD;
             }
         } elseif (null !== $tools) {
             $problems[] = '"allowed_tools" must be a tool id or a list of tool ids (one per "- " line).';
+        }
+
+        // Optional conditions and context (docs/WORKFLOWS.md §4). Absent or
+        // empty means the runner's default; none of them grants a tool or
+        // changes mode, so a bad value is reported and nothing else happens.
+        $runIf = $config['run_if'] ?? null;
+        if (null !== $runIf && !self::isEmptyOrOneOf($runIf, self::RUN_IF_VALUES)) {
+            $problems[] = '"run_if" must be one of ' . implode(', ', self::RUN_IF_VALUES) . '; found ' . self::describe($runIf) . '.';
+        }
+
+        $mailContext = $config['mail_context'] ?? null;
+        if (null !== $mailContext && !self::isEmptyOrOneOf($mailContext, self::MAIL_CONTEXT_VALUES)) {
+            $problems[] = '"mail_context" must be one of ' . implode(', ', self::MAIL_CONTEXT_VALUES) . '; found ' . self::describe($mailContext) . '.';
+        }
+
+        // A mailbox is free-form (a name or a path), so only the type is checked:
+        // a list is not a mailbox, and an empty value is the runner's default.
+        $mailbox = $config['mailbox'] ?? null;
+        if (null !== $mailbox && !is_string($mailbox)) {
+            $problems[] = '"mailbox" must be a mailbox name or path such as INBOX; found ' . self::describe($mailbox) . '.';
         }
 
         if ('' === trim($instructions)) {
@@ -442,6 +500,23 @@ MD;
     private static function isTimezone(string $zone): bool
     {
         return in_array($zone, \DateTimeZone::listIdentifiers(\DateTimeZone::ALL_WITH_BC), true);
+    }
+
+    /**
+     * True when an optional choice field is absent, empty (the documented
+     * default) or carries one of the accepted values.
+     *
+     * @param mixed $value
+     * @param list<string> $allowed
+     */
+    private static function isEmptyOrOneOf(mixed $value, array $allowed): bool
+    {
+        if (!is_string($value)) {
+            return false;
+        }
+        $value = trim($value);
+
+        return '' === $value || in_array($value, $allowed, true);
     }
 
     /**
