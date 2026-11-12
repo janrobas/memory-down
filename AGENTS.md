@@ -726,17 +726,19 @@ more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
 
 - A definition lives in the `workflows` category as a normal Markdown entry. Its
   operational configuration (`mode`, `schedule`, `timezone`, `allowed_tools`,
-  `run_if`, `mail_context`, `mailbox`, `llm_provider`, `llm_model`) lives in a
-  fenced `yaml` block **in the body**, because the frontmatter is rebuilt from a
-  fixed key list on every save and would silently drop it. The block is the first
-  thing in the body; the title is a separate field, written as the `# …` heading
-  above it. `mode` is `dry-run` (default), `apply` (every mutating action
-  confirmed by the user) or `yolo` (the allowlist runs unasked); `allowed_tools`
-  takes a list of ids, a single id, or the wildcards `*` and `server.*`.
-  `run_if` (`unread_mail` | `unread_mail_any`), `mail_context` (`unread`) and
-  `mailbox` (a name or path, default `INBOX`) are the runner's conditions and
-  context: they may skip a run or preload unread mail, and none of them can widen
-  permissions, grant a tool or change `mode`.
+  `run_if`, `mail_context`, `mailbox`, `mail_mark_read`, `llm_provider`,
+  `llm_model`) lives in a fenced `yaml` block **in the body**, because the
+  frontmatter is rebuilt from a fixed key list on every save and would silently
+  drop it. The block is the first thing in the body; the title is a separate
+  field, written as the `# …` heading above it. `mode` is `dry-run` (default),
+  `apply` (every mutating action confirmed by the user) or `yolo` (the allowlist
+  runs unasked); `allowed_tools` takes a list of ids, a single id, or the
+  wildcards `*` and `server.*`.
+  `run_if` (`unread_mail` | `unread_mail_any`), `mail_context` (`unread`),
+  `mailbox` (a name or path, default `INBOX`) and `mail_mark_read` (a boolean,
+  default `false`) are the runner's conditions and context: they may skip a run,
+  preload unread mail or mark it read, and none of them can widen permissions,
+  grant a tool or change `mode`.
 - The admin UI pre-fills that block (and the instructions skeleton) when a new
   memory is created in `workflows`, from `WorkflowDefinition::TEMPLATE_BODY` — one
   definition of the shape, not a second copy of it in JavaScript. The template is

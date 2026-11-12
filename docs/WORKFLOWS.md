@@ -151,6 +151,7 @@ Pravila oblike:
 | `run_if` | `unread_mail` \| `unread_mail_any` | odsotno ali prazno = vedno | Pogoj, kdaj naj se zagon sploh začne: `unread_mail` = od zadnjega uspešnega zagona je prišla neprebrana pošta, `unread_mail_any` = v predalu je katera koli neprebrana pošta. Izvajalec to preveri **v kodi pred klicem modela**; če pogoj ne velja, zagona ne začne in ne pokliče modela. To je pogoj, ne dovoljenje — ne razširi `allowed_tools` in ne spremeni `mode`. |
 | `mail_context` | `unread` | odsotno ali prazno = brez prednaložene pošte | Kaj naj izvajalec pripravi v poziv: `unread` = neprebrana sporočila v `mailbox`. Izvajalec jih vstavi v poziv **pred klicem modela**. Pošta ostaja nezaupanja vreden podatek, ne navodila (razdelek 10); polje ne podeli nobenega orodja. |
 | `mailbox` | ime ali pot predala | odsotno ali prazno = `INBOX` | Kateri predal naj izvajalec bere za `run_if` in `mail_context`. Vrednost, ki ni besedilo (npr. seznam), je napaka. |
+| `mail_mark_read` | `true` \| `false` (brez narekovajev) | odsotno = `false` | Ali naj izvajalec sporočila, ki jih uporabi, po obdelavi označi kot prebrana. Vrednost mora biti resnični boolean: `mail_mark_read: "true"` je v YAML besedilo in ga izvajalec zavrne. Polje opisuje vedenje izvajalca, ne podeli orodja in ne spremeni `mode`. |
 | `llm_provider` | ime ponudnika | odsotno = privzeti ponudnik izvajalca | S katerim ponudnikom naj teče. Imena razrešuje izvajalec; neznano ime javi kot napako, ne ugiba. |
 | `llm_model` | id modela | odsotno = privzeti model ponudnika | Kateri model naj teče. |
 
@@ -298,11 +299,14 @@ odpove, workflowa **ne izvede**, ampak zabeleži in sporoči razlog.
 4. Telo vsebuje natanko en konfiguracijski blok in ta se parsira.
 5. Vrednosti polj so veljavne (`mode` znan, `schedule` veljaven cron,
    `timezone` veljavno IANA ime, `run_if` in `mail_context` iz nabora dovoljenih
-   vrednosti, `mailbox` besedilo). Neveljavne vrednosti:
+   vrednosti, `mailbox` besedilo, `mail_mark_read` boolean). Neveljavne
+   vrednosti:
    - `run_if` ni niti prazen niti eden od `unread_mail`, `unread_mail_any`;
    - `mail_context` ni niti prazen niti `unread`;
    - `mailbox` ni besedilo (npr. seznam) — prazno ali odsotno pomeni privzeti
-     predal `INBOX` in ni napaka.
+     predal `INBOX` in ni napaka;
+   - `mail_mark_read` ni niti odsoten niti `true`/`false` (tudi `"true"` v
+     narekovajih je besedilo, ne boolean).
 6. Navodila za blokom so neprazna in ne vsebujejo oznak osnutka (`TODO`,
    `FIXME`, `…`, `<placeholder>`). Oznake osnutka se iščejo v **celem telesu**,
    tudi v vrednostih konfiguracijskega bloka: `<model-id>`, ki je ostal v bloku,
@@ -322,9 +326,11 @@ veljajo enako.
 
 `run_if` in `mail_context` sta **pogoja in kontekst, ne dovoljenji**: izvajalec
 `run_if` preveri v kodi pred klicem modela (če ne velja, modela ne pokliče),
-`mail_context` pa uporabi kot vhodni podatek v pozivu. Nobeno od teh polj ne
-razširi `allowed_tools`, ne spremeni `mode` in ne podeli orodja. MemoryDown jih
-samo prebere in morebitno neveljavno vrednost javi kot opozorilo.
+`mail_context` pa uporabi kot vhodni podatek v pozivu. Enako velja za
+`mailbox` in `mail_mark_read`: določata, kateri predal se bere in ali se
+obdelana sporočila označijo kot prebrana. Nobeno od teh polj ne razširi
+`allowed_tools`, ne spremeni `mode` in ne podeli orodja. MemoryDown jih samo
+prebere in morebitno neveljavno vrednost javi kot opozorilo.
 
 Neveljavna, nepopolna ali dvoumna definicija **nikoli** ne povzroči spremembe v
 zunanjem sistemu.
@@ -465,9 +471,11 @@ je meja seznam, kot je **zapisan**: žolček razširi izvajalec ob klicu (razdel
   izven-obsežni cron, neveljaven časovni pas, prazen seznam, manjkajoča navodila,
   komentarji in narekovaji), pogoji in kontekst (`run_if` z obema dovoljenima
   vrednostma in z neznano vrednostjo, `mail_context: unread` in neznana
-  vrednost, `mailbox: INBOX`, odsoten in prazen `mailbox`, definicija z vsemi
-  tremi veljavnimi polji brez »Unknown field«), oznaka `executable` proti seznamu
-  človeških oznak, način `yolo` kot znan način in skalarna oblika `allowed_tools`.
+  vrednost, `mailbox: INBOX`, odsoten in prazen `mailbox`, `mail_mark_read` s
+  `true`, `false`, odsotnim in neboolean value — tudi z narekovaji — ter
+  definicija z vsemi veljavnimi polji brez »Unknown field«), oznaka `executable`
+  proti seznamu človeških oznak, način `yolo` kot znan način in skalarna oblika
+  `allowed_tools`.
 - `tests/run-tests.php` (cela veriga: health → odkrivanje → OAuth → token →
   MCP `initialize` → `tools/list` → klici orodij → admin UI): oznaka je zavrnjena
   povsod, kjer bi jo agent lahko nastavil, zapis z oznako prek MCP ni ne
@@ -514,9 +522,10 @@ branje prek API-ja: dostop do definicije ni dovoljenje za izvedbo.
 Workflow je Markdown zapis v `workflows` z oznako `executable`, ki jo lahko doda
 samo človek v admin UI — in samo v tej kategoriji. Njegovo telo se začne s prvim
 fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`, `run_if`,
-`mail_context`, `mailbox`, `llm_provider`, `llm_model`), za njim so navodila v
-naravnem jeziku; `run_if`, `mail_context` in `mailbox` so le pogoj in kontekst
-izvajalca, ne dovoljenja; telo za nov zapis prednapolni admin UI. Z oznako je
+`mail_context`, `mailbox`, `mail_mark_read`, `llm_provider`, `llm_model`), za njim
+so navodila v naravnem jeziku; `run_if`, `mail_context`, `mailbox` in
+`mail_mark_read` so le pogoj in kontekst izvajalca, ne dovoljenja; telo za nov
+zapis prednapolni admin UI. Z oznako je
 zapis prek MCP samo za branje, zato ga agent ne more ne ustvariti ne spremeniti,
 verdikt v UI pa ti pove, kaj bi izvajalec zavrnil. Privzeto teče v `dry-run`
 (samo bere in poroča), pisanje omogoči `mode: apply`, kjer vsako mutirajoče

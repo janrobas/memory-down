@@ -69,6 +69,7 @@ final class WorkflowDefinition
         'run_if',
         'mail_context',
         'mailbox',
+        'mail_mark_read',
         'llm_provider',
         'llm_model',
     ];
@@ -152,6 +153,10 @@ allowed_tools:
 
 # Neobvezno: ime ali pot predala. Prazno = privzeti predal izvajalca (INBOX).
 # mailbox: INBOX
+
+# Neobvezno: ali naj izvajalec obdelano pošto označi kot prebrano. Brez te
+# vrstice velja false; vrednost mora biti true ali false, brez narekovajev.
+# mail_mark_read: true
 
 # S katerim modelom naj teče. Vpiši pravi id modela.
 llm_provider: opencode-go
@@ -320,6 +325,14 @@ MD;
         $mailbox = $config['mailbox'] ?? null;
         if (null !== $mailbox && !is_string($mailbox)) {
             $problems[] = '"mailbox" must be a mailbox name or path such as INBOX; found ' . self::describe($mailbox) . '.';
+        }
+
+        // A real boolean, not a string: a runner's YAML parser binds unquoted
+        // true/false to a bool, and a quoted "true" is a string it would refuse.
+        // Absent (or null) means false, which is a valid definition.
+        $markRead = $config['mail_mark_read'] ?? null;
+        if (null !== $markRead && !is_bool($markRead)) {
+            $problems[] = '"mail_mark_read" must be true or false (absent means false); found ' . self::describe($markRead) . '.';
         }
 
         if ('' === trim($instructions)) {

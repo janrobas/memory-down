@@ -15,11 +15,12 @@ version lives in `config.php` (`app_version`).
 
 ### Added
 - Workflow definitions understand the optional runner fields `run_if`
-  (`unread_mail` | `unread_mail_any`), `mail_context` (`unread`) and `mailbox`,
+  (`unread_mail` | `unread_mail_any`), `mail_context` (`unread`), `mailbox` and
+  `mail_mark_read` (a boolean, default `false`),
   so an executable definition that uses them is no longer reported as carrying
   unknown fields. They are conditions/context only: the parse stays advisory,
-  they can skip a run or preload unread mail, and none of them grants a tool or
-  changes `mode` (`docs/WORKFLOWS.md` §4, §8).
+  they can skip a run, preload unread mail or mark it read, and none of them
+  grants a tool or changes `mode` (`docs/WORKFLOWS.md` §4, §8).
 
 ## [1.0.1]
 

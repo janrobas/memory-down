@@ -392,6 +392,47 @@ check(
     $bad($allConditions)
 );
 
+// `mail_mark_read` is a genuine boolean: the runner binds YAML true/false, and
+// an absent value means false. It is behaviour, never a permission.
+$markRead = $conditions("mail_mark_read: true\n");
+check(
+    'conditions: mail_mark_read true is accepted',
+    [] === $markRead['problems'] && true === ($markRead['config']['mail_mark_read'] ?? null),
+    $bad("```yaml\nmode: dry-run\nmail_mark_read: true\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: mail_mark_read false is accepted',
+    [] === $conditions("mail_mark_read: false\n")['problems'],
+    $bad("```yaml\nmode: dry-run\nmail_mark_read: false\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: an absent mail_mark_read means false and is valid',
+    !array_key_exists('mail_mark_read', $conditions('')['config']) && [] === $conditions('')['problems'],
+    $bad("```yaml\nmode: dry-run\n```\n\nNavodila.\n")
+);
+check(
+    'conditions: a non-boolean mail_mark_read is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nmail_mark_read: sometimes\n```\n\nNavodila.\n"), 'mail_mark_read')
+);
+check(
+    'conditions: a quoted mail_mark_read is reported (it is a string, not a bool)',
+    str_contains($bad("```yaml\nmode: dry-run\nmail_mark_read: \"true\"\n```\n\nNavodila.\n"), 'mail_mark_read')
+);
+$mailDefinition = "```yaml\n"
+    . "mode: dry-run\n"
+    . "run_if: unread_mail_any\n"
+    . "mail_context: unread\n"
+    . "mailbox: INBOX\n"
+    . "mail_mark_read: true\n"
+    . "```\n\n"
+    . "Preglej posto in porocaj.\n";
+check(
+    'conditions: a definition with the mail fields raises no "Unknown field" problem',
+    [] === preg_grep('/Unknown field/', WorkflowDefinition::parse($mailDefinition)['problems'])
+    && [] === WorkflowDefinition::activationProblems('workflows', ['executable'], $mailDefinition),
+    $bad($mailDefinition)
+);
+
 /* ------------------------------------------------------------------ *
  *  The workflow catalog (read-only API over the workflows category)
  * ------------------------------------------------------------------ */

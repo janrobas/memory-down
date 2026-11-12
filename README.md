@@ -61,8 +61,8 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Workflow definitions** in `workflows`: a Markdown entry tagged `executable`
   is a definition a runner may execute, with its instructions in natural
   language and its configuration (`mode`, `schedule`, `timezone`,
-  `allowed_tools`, `run_if`, `mail_context`, `mailbox`, `llm_provider`,
-  `llm_model`) in a small YAML block in the body.
+  `allowed_tools`, `run_if`, `mail_context`, `mailbox`, `mail_mark_read`,
+  `llm_provider`, `llm_model`) in a small YAML block in the body.
   The tag can only be added in the admin UI, and any entry carrying it is
   read-only through MCP — an agent can propose a workflow, never authorise or
   rewrite one. The most permissive mode, `yolo`, runs the allowlist without
@@ -463,14 +463,17 @@ TODO: kaj naj workflow naredi in zakaj.
   to report how many tools it matched.
 - **`llm_provider` / `llm_model`** name the model to run with. Left out, the
   runner uses its own defaults.
-- **`run_if`, `mail_context` and `mailbox`** are optional conditions and context
-  the runner applies before it calls the model. `run_if: unread_mail` starts a run
+- **`run_if`, `mail_context`, `mailbox` and `mail_mark_read`** are optional
+  conditions and context the runner applies before it calls the model.
+  `run_if: unread_mail` starts a run
   only when unread mail arrived since the last successful run, `run_if:
   unread_mail_any` when there is any unread mail; `mail_context: unread` asks the
   runner to put unread messages into the prompt; `mailbox` names the folder to
-  read (default `INBOX`). Absent or empty means the runner's default. They are
-  conditions, not permissions: they can skip a run, and they never add a tool to
-  `allowed_tools` or change `mode`.
+  read (default `INBOX`); `mail_mark_read: true` lets the runner mark the messages
+  it used as read (default `false`, and it must be an unquoted `true`/`false` —
+  `"true"` is a YAML string a runner refuses). Absent or empty means the runner's
+  default. They are conditions, not permissions: they can skip a run, and they
+  never add a tool to `allowed_tools` or change `mode`.
 - **The template is a draft on purpose**: it still contains `TODO` and a
   placeholder model, which a runner refuses to execute. Once enabled, the editor
   shows the same verdict you would get — *a runner may execute this definition*,
