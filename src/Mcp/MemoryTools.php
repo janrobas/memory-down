@@ -212,9 +212,10 @@ final class MemoryTools
                 . 'questions about the user\'s personal preferences, facts, history, previous decisions, '
                 . 'projects, people, or anything the user may have asked to remember. Check it before '
                 . 'answering anything personal or past-related, even if the user does not mention memory '
-                . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance. '
-                . 'Results never carry the body, only a SHORT SNIPPET of it: call read_memory with the returned '
-                . 'id to read an entry in full. '
+                . 'explicitly. Matches filenames, titles, frontmatter tags and body text, ranked by relevance, '
+                . 'and ignores diacritics (a search for "posta" finds "pošta"). '
+                . 'Results never carry the body, only a SHORT SNIPPET of it and its size in "chars": call '
+                . 'read_memory with the returned id to read an entry in full. '
                 . 'Archived memories are included but ranked after active ones; pass archived="active" to '
                 . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".',
             'annotations' => new ToolAnnotations(
@@ -522,7 +523,8 @@ final class MemoryTools
             'name' => 'list_memory',
             'description' => 'List memory entries (metadata only, no full bodies), newest first. '
                 . 'Useful for discovering what is stored and obtaining ids for update_memory or forget_memory. '
-                . 'Bodies are never returned here: follow up with read_memory to read one entry in full. '
+                . 'Bodies are never returned here — each entry carries its size in "chars" instead: follow up '
+                . 'with read_memory to read one entry in full. '
                 . 'With no category all categories are listed. Archived memories are included but listed '
                 . 'after active ones; pass archived="active" to exclude them.',
             'annotations' => new ToolAnnotations(
@@ -555,7 +557,9 @@ final class MemoryTools
                     'categories' => $this->store->categories(),
                     'total' => $this->store->count(),
                     'returned' => count($docs),
-                    'memories' => array_map(self::publicDocument(...), $docs),
+                    // Metadata only: the listing is for discovering what exists,
+                    // so each entry ships its size instead of its body.
+                    'memories' => array_map(static fn (array $doc): array => self::publicDocument($doc, false), $docs),
                 ]);
             },
         ];
@@ -590,8 +594,8 @@ final class MemoryTools
             return $payload;
         }
 
-        $payload['note'] = 'These results carry metadata and a short "snippet" only, never the body. '
-            . 'Call read_memory with an id (or its path) to read an entry in full.';
+        $payload['note'] = 'These results carry metadata, a short "snippet" and the body size in "chars" only, '
+            . 'never the body. Call read_memory with an id (or its path) to read an entry in full.';
 
         return $payload;
     }
@@ -646,14 +650,25 @@ final class MemoryTools
     }
 
     /**
+     * The response shape of one entry.
+     *
+     * A metadata call must not ship the body: it is the expensive part and the
+     * caller asked for an overview. What a caller still needs is the size, so
+     * the body is replaced by `chars` rather than dropped silently. Recall and
+     * the single-entry tools load the body deliberately and keep it.
+     *
      * @param array<string, mixed> $doc
      *
      * @return array<string, mixed>
      */
-    private static function publicDocument(array $doc): array
+    private static function publicDocument(array $doc, bool $withBody = true): array
     {
         $public = $doc;
         $public['path'] = $doc['category'] . '/' . $doc['id'] . '.md';
+        if (!$withBody && isset($public['body'])) {
+            $public['chars'] = mb_strlen((string) $public['body']);
+            unset($public['body']);
+        }
         unset($public['source'], $public['updated_ts'], $public['created_ts']);
 
         return $public;

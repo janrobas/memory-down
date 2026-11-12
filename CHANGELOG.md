@@ -21,6 +21,27 @@ version lives in `config.php` (`app_version`).
   unknown fields. They are conditions/context only: the parse stays advisory,
   they can skip a run, preload unread mail or mark it read, and none of them
   grants a tool or changes `mode` (`docs/WORKFLOWS.md` §4, §8).
+- Search results and `list_memory` entries carry `chars`, the size of the body
+  they omit, so an agent can decide whether reading an entry is worth it.
+
+### Changed
+- Search matches text diacritic-insensitively even when the SQLite index is
+  unavailable: the direct Markdown scan folds č/š/ž/ć/đ (and the rest of the
+  Latin-1/Latin Extended-A letters) through the new `MemoryDown\Memory\Text`,
+  which `Slug` now shares instead of keeping its own table. "posta" finds
+  "pošta" and vice versa. The snippet still shows the author's spelling.
+- A search snippet is taken around the first query term the entry actually
+  contains, instead of always around the query's first term — it was returning
+  the opening of the entry whenever that term was absent, or whenever the match
+  existed only through folding.
+- Equal search scores are ordered newest first (by `updated`), matching
+  `MemoryStore::list()`, so two versions of the same text no longer come back in
+  filesystem order.
+
+### Fixed
+- `list_memory` no longer returns entry bodies. Its description always promised
+  metadata only; the bodies were removed and replaced by `chars`. `recall` keeps
+  returning bodies, as documented.
 
 ## [1.0.1]
 

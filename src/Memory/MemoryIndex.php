@@ -148,13 +148,20 @@ final class MemoryIndex implements SearchEngine
             $doc['score'] = round(-1 * (float) $row['rank'], 4);
             $doc['snippet'] = trim((string) $row['snippet']);
             if (!$includeBody) {
+                // The body is elided, so its size is the one fact a caller still
+                // needs: it decides whether reading the entry is cheap.
+                $doc['chars'] = mb_strlen((string) ($doc['body'] ?? ''));
                 unset($doc['body']);
             }
             $results[] = $doc;
         }
 
+        // Same order MemoryStore::list() uses: active first, then best match,
+        // then newest. bm25 can tie exactly on identical text, and without the
+        // timestamp two versions would come back in corpus order.
         usort($results, static fn (array $a, array $b): int => ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
-            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0)));
+            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0))
+            ?: ((int) ($b['updated_ts'] ?? 0) <=> (int) ($a['updated_ts'] ?? 0)));
         $results = array_slice($results, 0, $limit);
 
         foreach ($results as $i => $result) {

@@ -8,6 +8,10 @@ namespace MemoryDown\Memory;
  * Simple full-text search over the Markdown corpus (V1: no embeddings, no
  * index). Scores filename, title, tags and body matches; returns ranked
  * documents with a snippet.
+ *
+ * Matching folds diacritics through {@see Text::fold()}, so "pošta" and
+ * "posta" are the same word here — the same answer the SQLite index gives,
+ * which matters when this class is the fallback rather than the engine.
  */
 final class MemorySearch implements SearchEngine
 {
@@ -46,15 +50,20 @@ final class MemorySearch implements SearchEngine
                 continue;
             }
 
-            $title = strtolower($doc['title'] ?? '');
-            $tagText = strtolower(implode(' ', $doc['tags']));
-            $idText = strtolower($doc['id']);
-            $haystack = $title . ' ' . strtolower((string) $doc['body']) . ' ' . $tagText . ' ' . $idText;
+            $title = Text::fold((string) ($doc['title'] ?? ''));
+            $tagText = Text::fold(implode(' ', $doc['tags']));
+            $idText = Text::fold($doc['id']);
+            $haystack = $title . ' ' . Text::fold((string) $doc['body']) . ' ' . $tagText . ' ' . $idText;
 
             $score = 0;
-            foreach ($q->terms as $needle) {
-                if (substr_count($haystack, $needle) > 0) {
-                    $score += min(substr_count($haystack, $needle), 5);
+            foreach ($q->terms as $term) {
+                $needle = Text::fold($term);
+                if ('' === $needle) {
+                    continue;
+                }
+                $hits = substr_count($haystack, $needle);
+                if ($hits > 0) {
+                    $score += min($hits, 5);
                     if (str_contains($title, $needle)) {
                         $score += 3;
                     }
@@ -74,15 +83,22 @@ final class MemorySearch implements SearchEngine
 
             $result = $doc;
             $result['score'] = $score;
-            $result['snippet'] = $this->snippet((string) $doc['body'], $q->terms[0] ?? $query);
+            $result['snippet'] = $this->snippet((string) $doc['body'], $q->terms, $query);
             if (!$includeBody) {
+                // The body is elided, so its size is the one fact a caller still
+                // needs: it decides whether reading the entry is cheap.
+                $result['chars'] = mb_strlen((string) $doc['body']);
                 unset($result['body']);
             }
             $results[] = $result;
         }
 
+        // Same order MemoryStore::list() uses: active first, then best match,
+        // then newest. Without the timestamp an older and a newer version of the
+        // same text would come back in filesystem order.
         usort($results, static fn (array $a, array $b): int => ((int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false))
-            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0)));
+            ?: (($b['score'] ?? 0) <=> ($a['score'] ?? 0))
+            ?: ((int) ($b['updated_ts'] ?? 0) <=> (int) ($a['updated_ts'] ?? 0)));
         $results = array_slice($results, 0, $limit);
 
         foreach ($results as $i => $result) {
@@ -108,14 +124,44 @@ final class MemorySearch implements SearchEngine
         return true;
     }
 
-    private function snippet(string $body, string $query): string
+    /**
+     * A short excerpt around the first query term the body really contains.
+     *
+     * The excerpt always comes out of the ORIGINAL body, so it shows the
+     * author's spelling ("pošta", not "posta"). Only the offset may be taken
+     * from the folded copy: {@see Text::fold()} maps one character to one
+     * character, so a position in the folded text is a valid character offset
+     * in the original.
+     *
+     * Falling back to the first term of the query regardless of whether it
+     * occurs would hand back the opening of the entry, which tells a caller
+     * nothing about why it matched.
+     *
+     * @param list<string> $terms
+     */
+    private function snippet(string $body, array $terms, string $fallback = ''): string
     {
         $body = trim((string) preg_replace('/\s+/', ' ', $body));
         if ('' === $body) {
             return '';
         }
 
-        $pos = mb_stripos($body, $query);
+        $candidates = [] !== $terms ? $terms : ('' !== $fallback ? [$fallback] : []);
+        $folded = Text::fold($body);
+        $pos = false;
+        foreach ($candidates as $term) {
+            if ('' === $term) {
+                continue;
+            }
+            $pos = mb_stripos($body, $term);
+            if (false === $pos) {
+                $pos = mb_strpos($folded, Text::fold($term));
+            }
+            if (false !== $pos) {
+                break;
+            }
+        }
+
         if (false === $pos || mb_strlen($body) <= 240) {
             return mb_substr($body, 0, 240);
         }

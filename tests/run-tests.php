@@ -660,6 +660,10 @@ $r = request('POST', '/mcp', $session, json_encode([
 ]));
 $search = toolResult(jsonBody($r['body']));
 check('search_memory -> finds the memory', ($search['results'][0]['id'] ?? '') === $memId, json_encode($search));
+check('search_memory -> carries the body size, not the body',
+    !array_key_exists('body', $search['results'][0] ?? [])
+        && mb_strlen((string) ($remembered['memory']['body'] ?? '')) === ($search['results'][0]['chars'] ?? -1),
+    json_encode($search['results'][0] ?? null));
 
 $r = request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 6, 'method' => 'tools/call',
@@ -667,6 +671,7 @@ $r = request('POST', '/mcp', $session, json_encode([
 ]));
 $recall = toolResult(jsonBody($r['body']));
 check('recall -> returns the memory', 1 === count($recall['memories'] ?? []), json_encode($recall));
+check('recall -> still carries the body', str_contains((string) ($recall['memories'][0]['body'] ?? ''), 'concise answers'), $r['body']);
 
 $r = request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 7, 'method' => 'tools/call',
@@ -674,6 +679,11 @@ $r = request('POST', '/mcp', $session, json_encode([
 ]));
 $list = toolResult(jsonBody($r['body']));
 check('list_memory -> lists the entry', in_array($memId, array_column($list['memories'] ?? [], 'id'), true));
+$listed = $list['memories'][0] ?? [];
+check('list_memory -> never returns the body', !array_key_exists('body', $listed), json_encode($listed));
+check('list_memory -> reports the body size as chars',
+    mb_strlen((string) ($remembered['memory']['body'] ?? '')) === ($listed['chars'] ?? -1),
+    json_encode($listed['chars'] ?? null));
 
 $r = request('POST', '/mcp', $session, json_encode([
     'jsonrpc' => '2.0', 'id' => 8, 'method' => 'tools/call',

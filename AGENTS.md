@@ -382,6 +382,12 @@ able to obtain the complete, current text before rewriting it with
 of up to 50 matches in one result is wasteful, and `read_memory` covers the
 single-entry case. `recall` remains the one tool that returns bodies by default.
 
+Matching folds diacritics (č, š, ž, ć, đ and the rest of the Latin letters), so
+`posta` and `pošta` are the same word — the SQLite index does this in FTS5 and
+the direct scan does it through `MemoryDown\Memory\Text`, so the two engines
+cannot answer differently. A metadata result carries `chars`, the size of the
+body it omits, so an agent knows what reading an entry would cost.
+
 Reading is always allowed, including entries in the write-protected `writings`
 category. The body is returned whole by default; `offset`/`max_chars` page
 through a very long entry, and a partial body must never be written back.

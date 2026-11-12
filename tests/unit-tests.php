@@ -21,11 +21,13 @@ use MemoryDown\Config;
 use MemoryDown\Auth\TokenStore;
 use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
+use MemoryDown\Memory\MemorySearch;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\RecommendedTags;
 use MemoryDown\Memory\SearchQuery;
 use MemoryDown\Memory\Slug;
+use MemoryDown\Memory\Text;
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Publish\Publications;
 use MemoryDown\Support\BearerToken;
@@ -887,6 +889,102 @@ $off = new RateLimiter($rlDir, false);
 check('disabled limiter always allows', $off->allow('ip1', 1, 60) && $off->allow('ip1', 1, 60));
 
 /* ------------------------------------------------------------------ *
+ *  Text folding and the direct-scan search (the engine that runs when
+ *  SQLite/FTS5 is unavailable, and the reference for the index)
+ * ------------------------------------------------------------------ */
+
+section('Text: folding');
+
+check('fold: Slovenian letters map to ASCII', 'posta csz' === Text::fold('Pošta ČŠŽ'), Text::fold('Pošta ČŠŽ'));
+check('fold: đ and ć fold as well', 'dak' === Text::fold('đak') && 'cvarak' === Text::fold('ćvarak'), Text::fold('đak'));
+check('fold: the character count is preserved', mb_strlen('ČŠŽ čšž') === mb_strlen(Text::fold('ČŠŽ čšž')), (string) mb_strlen(Text::fold('ČŠŽ čšž')));
+check('fold: plain ASCII only changes case', 'already ascii' === Text::fold('Already Ascii'), Text::fold('Already Ascii'));
+// The offset guarantee the snippet relies on, stated as a test.
+check('fold: an offset found in the folded copy is valid on the original',
+    mb_strpos('Pošta', 'ta') === mb_strpos(Text::fold('Pošta'), 'ta'),
+    var_export(mb_strpos(Text::fold('Pošta'), 'ta'), true));
+
+section('MemorySearch: direct scan');
+
+$searchRoot = $root . '/search-store';
+$searchStore = new MemoryStore($searchRoot);
+$search = new MemorySearch($searchStore);
+
+$accented = $searchStore->create('Prišla je pošta iz Ljubljane.', 'Obvestilo', 'facts');
+$plain = $searchStore->create('To je navadna posta brez sumnikov.', 'Drugo obvestilo', 'facts');
+
+$found = array_column($search->search('posta'), 'id');
+check('search: a plain query finds the accented entry', in_array($accented['id'], $found, true), json_encode($found));
+$found = array_column($search->search('pošta'), 'id');
+check('search: an accented query finds the plain entry', in_array($plain['id'], $found, true), json_encode($found));
+check('search: a query in the wrong case still matches', in_array($accented['id'], array_column($search->search('POŠTA'), 'id'), true), json_encode($found));
+
+// Title matches outrank body matches.
+$bodyMatch = $searchStore->create('Kupili smo novo kolo za izlete.', 'Nakup', 'facts');
+$titleMatch = $searchStore->create('Preveri, kje je in ali je zaklenjeno.', 'Kolo', 'facts');
+$ranked = array_column($search->search('kolo'), 'id');
+check('search: a title match outranks a body match', ($titleMatch['id'] ?? '') === ($ranked[0] ?? null), json_encode($ranked));
+check('search: the body match is still returned', in_array($bodyMatch['id'], $ranked, true), json_encode($ranked));
+
+// A snippet must show WHY the entry matched, not just its opening: the term
+// sits far past the 240-character window.
+$padded = $searchStore->create(
+    str_repeat('Polnilo brez pomena. ', 20) . 'Tu je kljucna posta o projektu. ' . str_repeat('Rep brez pomena. ', 20),
+    'Dolg zapis',
+    'facts',
+);
+$snippetOf = static function (array $results, string $id): string {
+    foreach ($results as $result) {
+        if (($result['id'] ?? '') === $id) {
+            return (string) ($result['snippet'] ?? '');
+        }
+    }
+
+    return '';
+};
+$snippet = $snippetOf($search->search('posta'), (string) $padded['id']);
+check('search: the snippet is centred on the matched term', str_contains($snippet, 'posta'), $snippet);
+check('search: the snippet is not just the opening (it is marked truncated)', str_starts_with($snippet, '...'), $snippet);
+
+// The first term of the query may be absent; then a later one must be used.
+$snippet = $snippetOf($search->search('neobstaja posta'), (string) $padded['id']);
+check('search: an absent first term does not hijack the snippet', str_contains($snippet, 'posta'), $snippet);
+
+// A match found only by folding keeps the author's spelling in the snippet.
+$snippet = $snippetOf($search->search('posta iz ljubljane'), (string) $accented['id']);
+check('search: a folded match shows the original spelling', str_contains($snippet, 'pošta'), $snippet);
+
+// Equal scores: the newer entry wins. Two entries with the same text score the
+// same, so only the timestamp can decide; the stored updated value is set
+// directly instead of sleeping.
+$older = $searchStore->create('Enako besedilo o sidranju.', 'Sidro', 'facts', ['sidro']);
+$newer = $searchStore->create('Enako besedilo o sidranju.', 'Sidro', 'facts', ['sidro']);
+foreach ([[$older, '2026-01-01T00:00:00Z'], [$newer, '2026-06-01T00:00:00Z']] as [$doc, $stamp]) {
+    $file = (string) $searchStore->paths()->file('facts', (string) $doc['id']);
+    $raw = (string) file_get_contents($file);
+    @file_put_contents($file, (string) preg_replace('/^updated: .*$/m', 'updated: ' . $stamp, $raw, 1));
+    clearstatcache(true, $file);
+}
+$tied = $search->search('sidranju');
+check('search: equal scores order the newer entry first',
+    ($newer['id'] ?? '') === ($tied[0]['id'] ?? null) && ($older['id'] ?? '') === ($tied[1]['id'] ?? null),
+    json_encode(array_column($tied, 'id')));
+
+// Metadata results carry the size of the body they omit.
+$first = $tied[0] ?? [];
+$stored = null !== ($first['id'] ?? null) ? $searchStore->read('facts', (string) $first['id']) : null;
+check('search: the body is elided from the result', !array_key_exists('body', $first), json_encode(array_keys($first)));
+check('search: the elided body size is reported as chars',
+    null !== $stored && mb_strlen((string) $stored['body']) === ($first['chars'] ?? -1),
+    json_encode($first['chars'] ?? null));
+
+// includeBody (recall) is unchanged: body in, no chars added.
+$withBodies = $search->search('sidranju', limit: 1, includeBody: true);
+check('search: includeBody still returns the body',
+    isset($withBodies[0]['body']) && !array_key_exists('chars', $withBodies[0]),
+    json_encode(array_keys($withBodies[0] ?? [])));
+
+/* ------------------------------------------------------------------ *
  *  MemoryIndex (SQLite FTS5; skipped when pdo_sqlite is unavailable)
  * ------------------------------------------------------------------ */
 
@@ -940,6 +1038,41 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
     check('quoted tag is case-insensitive (unicode)', 1 === count($r), json_encode($r));
     $r = $index->search('tag:"ŠC"');
     check('quoted tag stays exact (no partial tag)', [] === $r, json_encode($r));
+
+    // The production engine must agree with the direct scan on diacritics: FTS5
+    // unicode61 already drops them, and this pins that we rely on it.
+    $idxStore->create('Prišla je pošta iz Ljubljane.', 'Poštno obvestilo', 'facts');
+    $r = $index->search('posta');
+    check('index: a plain query finds an accented body',
+        1 === count(array_filter($r, static fn (array $d): bool => 'Poštno obvestilo' === ($d['title'] ?? ''))),
+        json_encode(array_column($r, 'title')));
+    $r = $index->search('pošta');
+    check('index: an accented query finds the entry too',
+        1 === count(array_filter($r, static fn (array $d): bool => 'Poštno obvestilo' === ($d['title'] ?? ''))),
+        json_encode(array_column($r, 'title')));
+
+    // Metadata results carry the size of the body they omit.
+    $r = $index->search('narwhal', limit: 1);
+    $indexedDoc = null !== ($r[0]['id'] ?? null) ? $idxStore->read('facts', (string) $r[0]['id']) : null;
+    check('index: the body is elided and its size reported',
+        !array_key_exists('body', $r[0] ?? [])
+            && null !== $indexedDoc
+            && mb_strlen((string) $indexedDoc['body']) === ($r[0]['chars'] ?? -1),
+        json_encode($r[0] ?? null));
+
+    // Identical text gives identical bm25, so only recency can break the tie.
+    $tieOld = $idxStore->create('Enako besedilo o sidranju.', 'Sidro', 'facts');
+    $tieNew = $idxStore->create('Enako besedilo o sidranju.', 'Sidro', 'facts');
+    foreach ([[$tieOld, '2026-01-01T00:00:00Z'], [$tieNew, '2026-06-01T00:00:00Z']] as [$doc, $stamp]) {
+        $file = (string) $idxStore->paths()->file('facts', (string) $doc['id']);
+        $raw = (string) file_get_contents($file);
+        @file_put_contents($file, (string) preg_replace('/^updated: .*$/m', 'updated: ' . $stamp, $raw, 1));
+        clearstatcache(true, $file);
+    }
+    $r = $index->search('sidranju');
+    check('index: equal scores order the newer entry first',
+        ($tieNew['id'] ?? '') === ($r[0]['id'] ?? null) && ($tieOld['id'] ?? '') === ($r[1]['id'] ?? null),
+        json_encode(array_column($r, 'id')));
 }
 
 /* ------------------------------------------------------------------ *

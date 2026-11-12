@@ -50,7 +50,9 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   **Users** at `/ui/users` (admins only: create, disable, reset, promote, delete).
 - **Search:** a disposable SQLite FTS5 index (BM25) per account, rebuilt from the
   Markdown on demand, with automatic fallback to a direct file scan. Archived
-  memories stay indexed and searchable but rank after active ones.
+  memories stay indexed and searchable but rank after active ones. Matching
+  ignores diacritics, so `posta` finds `pošta` either way, and results are
+  ordered by match then by recency.
 - **Read-only public writings API** at `/public/writings`: publish entries in the
   `writings` category (`public: true`) as Markdown over a token-gated GET API, for
   a personal website to consume. Disabled by default; the token is per account.
@@ -506,6 +508,15 @@ Every `.md` file is indexed, including archived memories (archiving sets an
 results carry a ranked **snippet** taken from the index; the `read_memory` MCP
 tool and the admin editor read the file itself, which is where the complete body
 comes from.
+
+Matching is **diacritic-insensitive**: typing `posta` finds `pošta` and the
+other way round. Both engines agree on that — FTS5's `unicode61` tokenizer drops
+diacritics, and the direct scan folds them through `MemoryDown\Memory\Text` —
+but snippets are always cut out of the original Markdown, so they keep the
+spelling that was stored. When a result omits the body (search results and
+`list_memory`), it carries `chars` instead: the entry's size in characters, so
+an agent can tell a 500-character note from an 11,000-character one before
+deciding to read it.
 
 ## Backup, trash & restore
 
