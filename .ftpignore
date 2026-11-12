@@ -9,6 +9,7 @@ data_new/
 # Local-only.
 tests/
 .github/
+TODO.md
 *.log
 
 # Secrets: uploaded once, by hand, via `ftp_sync.py push .env .env`.
