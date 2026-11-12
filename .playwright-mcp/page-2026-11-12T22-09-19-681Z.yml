@@ -1,0 +1,12 @@
+- main [ref=e2]:
+  - heading "MemoryDown" [level=1] [ref=e3]
+  - paragraph [ref=e4]: Sign in to browse and edit your memories.
+  - generic [ref=e5]:
+    - generic [ref=e6]: Username
+    - textbox "Username" [active] [ref=e7]
+    - generic [ref=e8]: Password
+    - textbox "Password" [ref=e9]
+    - button "Sign in" [ref=e10] [cursor=pointer]
+  - paragraph [ref=e11]:
+    - link "About & status" [ref=e12] [cursor=pointer]:
+      - /url: /about

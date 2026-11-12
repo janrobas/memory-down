@@ -296,6 +296,29 @@ body.auth {
 .auth-card form { display: flex; flex-direction: column; }
 .auth-card form [type="submit"] { margin-top: 1.25rem; }
 
+/* A quiet footer inside the sign-in card. The endpoint list is one click away,
+   but it is not what a person signing in came for, so it sits below a hairline
+   rule in the muted colour instead of underlining itself in browser blue. */
+.auth-card p.auth-foot {
+  margin: 1.5rem 0 0;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: .85rem;
+}
+
+.auth-card p.auth-foot a {
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.auth-card p.auth-foot a:hover,
+.auth-card p.auth-foot a:focus-visible {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 label { display: block; font-size: .8rem; color: var(--muted); margin: .75rem 0 .25rem; }
 
 input, select, textarea, button { font: inherit; color: inherit; }
