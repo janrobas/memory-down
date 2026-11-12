@@ -27,8 +27,9 @@ use Psr\Log\LoggerInterface;
  *   POST /oauth/token                                 OAuth token endpoint
  *   POST /oauth/register                              RFC 7591 DCR
  *   POST /mcp, GET /mcp, DELETE /mcp                  MCP (Streamable HTTP)
- *   POST /, GET /                                     MCP at the base URL too
- *   GET  /                                             landing page for humans
+ *   POST /                                            MCP at the base URL too
+ *   GET  /                                            redirect to /ui (humans)
+ *   GET  /about                                       human-facing links & diagnostics
  *   GET  /public/writings[/{id}]                       published writings (bearer)
  *   GET  /api/workflows[/{id}]                         workflow definitions (bearer)
  *
@@ -90,7 +91,16 @@ final class App
                 '/mcp' === $path && in_array($method, ['POST', 'GET', 'DELETE'], true) => McpServerFactory::run($request),
                 '/' === $path && 'POST' === $method => McpServerFactory::run($request),
                 '/' === $path && 'GET' === $method && $this->wantsEventStream($request) => McpServerFactory::run($request),
-                '/' === $path && 'GET' === $method => $this->landingPage(),
+                // A plain browser visit belongs in the admin UI, not on a page of
+                // endpoint links: /ui itself decides between setup, sign-in and
+                // the editor, so one redirect covers all three states. With the
+                // UI disabled there is nothing to sign in to, so the links stay
+                // here instead of sending the visitor to a 404. The MCP verbs
+                // above are matched first and never reach this line.
+                '/' === $path && 'GET' === $method => $this->config->uiEnabled
+                    ? $this->redirectTo('/ui')
+                    : $this->aboutPage(),
+                '/about' === $path && 'GET' === $method => $this->aboutPage(),
                 ('/public/writings' === $path || str_starts_with($path, '/public/writings/')) && 'GET' === $method => $this->publicWritings($request, $path),
                 ('/api/workflows' === $path || str_starts_with($path, '/api/workflows/')) && 'GET' === $method => $this->workflowsApi($request, $path),
                 default => $this->notFound(),
@@ -461,7 +471,7 @@ final class App
         return $response;
     }
 
-    private function landingPage(): ResponseInterface
+    private function aboutPage(): ResponseInterface
     {
         $uiLink = $this->config->uiEnabled
             ? '<li><a href="/ui">Admin UI — browse &amp; edit memories</a></li>'
@@ -503,6 +513,18 @@ HTML;
         $response->getBody()->write($html);
 
         return $response;
+    }
+
+    /**
+     * A temporary redirect the browser must not cache: whether /ui means the
+     * editor, the sign-in page or the first-run setup depends on the session,
+     * and a stored 302 would hide that.
+     */
+    private function redirectTo(string $location): ResponseInterface
+    {
+        return (new Psr17Factory())->createResponse(302)
+            ->withHeader('Location', $location)
+            ->withHeader('Cache-Control', 'no-store');
     }
 
     private function notFound(): ResponseInterface

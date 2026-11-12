@@ -357,8 +357,28 @@ check('GET /health/oauth -> 200', 200 === $r['status']);
 check('GET /health/oauth -> S256 advertised', in_array('S256', $oauth['supported']['pkce_methods'] ?? [], true));
 
 $r = request('GET', '/');
-check('GET / -> landing page (human)', 200 === $r['status'] && str_contains($r['body'], 'MemoryDown'));
+check(
+    'GET / -> redirect to the admin UI for humans',
+    302 === $r['status'] && '/ui' === ($r['headers']['location'] ?? ''),
+    (string) $r['status'] . ' ' . (string) ($r['headers']['location'] ?? '')
+);
+check('GET / -> the redirect is not cacheable', str_contains(strtolower($r['headers']['cache-control'] ?? ''), 'no-store'), (string) ($r['headers']['cache-control'] ?? ''));
 check('GET / -> security headers', 'DENY' === ($r['headers']['x-frame-options'] ?? '') && 'nosniff' === ($r['headers']['x-content-type-options'] ?? ''));
+
+// A browser visit is redirected, but the MCP verbs at the base URL are not:
+// ChatGPT may probe the origin instead of /mcp, so the SSE form must still
+// reach the MCP server (and fail with 401, not a redirect).
+$r = request('GET', '/', ['Accept' => 'text/event-stream']);
+check(
+    'GET / with Accept: text/event-stream still speaks MCP',
+    302 !== $r['status'] && 401 === $r['status'],
+    (string) $r['status']
+);
+
+$r = request('GET', '/about');
+check('GET /about -> 200', 200 === $r['status']);
+check('GET /about -> links to the admin UI', str_contains($r['body'], 'href="/ui"'), $r['body']);
+check('GET /about -> links to the diagnostics', str_contains($r['body'], 'href="/health"'), $r['body']);
 
 $r = request('GET', '/health');
 check('GET /health -> security headers', 'nosniff' === ($r['headers']['x-content-type-options'] ?? ''));
@@ -822,6 +842,7 @@ check('GET /ui unauthenticated -> 302 to login', 302 === $r['status'] && str_con
 
 $r = request('GET', '/ui/login');
 check('GET /ui/login -> 200', 200 === $r['status']);
+check('sign-in page links to the about page', str_contains($r['body'], 'href="/about"'), $r['body']);
 preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $m);
 $adminCsrf = $m[1] ?? '';
 check('admin login page exposes csrf token', '' !== $adminCsrf);
@@ -1149,8 +1170,8 @@ check('admin API delete -> Markdown file removed', !is_file($movedFile));
 
 section('Archive & tag search');
 
-$r = request('GET', '/');
-check('landing page links to admin UI', str_contains($r['body'], 'href="/ui"'), $r['body']);
+$r = request('GET', '/about');
+check('about page links to admin UI', str_contains($r['body'], 'href="/ui"'), $r['body']);
 
 // Two memories sharing a keyword, one active and one archived.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([

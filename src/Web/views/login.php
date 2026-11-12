@@ -19,4 +19,5 @@
     <input type="password" id="password" name="password" required autocomplete="current-password">
     <button type="submit" class="primary block">Sign in</button>
   </form>
+  <p class="muted"><a href="/about">About &amp; status</a></p>
 </main>

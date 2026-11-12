@@ -75,7 +75,8 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   it. Deleting an *account* moves its whole directory aside the same way.
 - **One-click backup** at `/ui/backup`: every Markdown file of one account as a
   zip, with no credentials in it; an admin can download any account's.
-- **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`.
+- **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`, with a human
+  page of links at `/about` (the site root itself opens the admin UI).
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
 
 ## Requirements
@@ -107,7 +108,8 @@ Open http://127.0.0.1:8080/health.
    `data/users/<username>/`).
 5. Copy `.env.example` to `.env`, fill it in, and upload it (see Configuration).
 6. Open `https://your-domain/health` and confirm `{"status":"ok",...}`.
-7. Open `/ui` and create the first account (see Admin UI).
+7. Open the domain root: it redirects to `/ui` and shows the one-time setup
+   (see Admin UI). Diagnostics are at `/health`; `/about` lists the endpoints.
 8. Connect ChatGPT (see below), signing in on the consent page as that account.
 
 If you cannot change the document root, the root `.htaccess` denies everything
@@ -208,6 +210,13 @@ APP_ENV=production
 An Obsidian-style web UI for browsing, searching and editing memories, separate
 from the MCP/OAuth layer. Sign in with your **username and password** — the same
 pair the MCP consent page asks for.
+
+Opening the domain root brings you here: `/` is a redirect to `/ui`, so a plain
+visit lands on the sign-in page (or on the one-time setup, or straight in the
+editor if the session is already signed in). The endpoint list that used to live
+at `/` is now at `/about`, linked from the bottom of the sign-in page. With
+`UI_ENABLED=false` the root keeps showing that list instead, since there is no
+UI to open.
 
 - **Left pane:** live search above memories grouped by category, with an
   **All / Active / Archived** filter. Search accepts `tag:foo` to require a tag

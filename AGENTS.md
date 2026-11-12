@@ -504,6 +504,13 @@ Provide lightweight endpoints such as:
 
 Exact endpoints may differ.
 
+The human-facing page of links lives at `/about`; the site root is not it. A
+plain `GET /` redirects to the admin UI (`/ui`), which resolves to the sign-in
+page, the first-run setup or the editor depending on the session — or shows the
+links page itself when `UI_ENABLED=false`. `POST /` and `GET /` with
+`Accept: text/event-stream` remain the MCP endpoint, because a client may probe
+the base URL instead of `/mcp`.
+
 Diagnostics should help distinguish:
 
 - PHP/runtime problems

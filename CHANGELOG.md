@@ -25,6 +25,13 @@ version lives in `config.php` (`app_version`).
   they omit, so an agent can decide whether reading an entry is worth it.
 
 ### Changed
+- A plain visit to the site root (`GET /`) now redirects to the admin UI at
+  `/ui`, which shows the sign-in page, the one-time setup, or the editor
+  depending on the session. The endpoint list that used to live at `/` moved to
+  `/about`, linked from the bottom of the sign-in page; with `UI_ENABLED=false`
+  the root keeps showing that list, because there is no UI to open. `POST /` and
+  `GET /` with `Accept: text/event-stream` are still the MCP endpoint, so
+  clients that probe the base URL instead of `/mcp` are unaffected.
 - Search matches text diacritic-insensitively even when the SQLite index is
   unavailable: the direct Markdown scan folds č/š/ž/ć/đ (and the rest of the
   Latin-1/Latin Extended-A letters) through the new `MemoryDown\Memory\Text`,
