@@ -195,8 +195,10 @@ check(
 check('workflow: a plain note has no verdict', null === WorkflowDefinition::activationProblems('workflows', [], 'Samo zapisek.'));
 check('workflow: a tagged definition has a verdict', is_array(WorkflowDefinition::activationProblems('workflows', ['executable'], 'x')));
 
-// The template the admin UI pre-fills for a new workflow.
-$template = WorkflowDefinition::TEMPLATE_BODY;
+// The template the admin UI pre-fills for a new workflow. A nowdoc keeps the line
+// endings of the checkout (CRLF on Windows), while the assertions below are written
+// with "\n"; normalising here keeps the test about the template, not about git.
+$template = str_replace("\r\n", "\n", WorkflowDefinition::TEMPLATE_BODY);
 $parsed = WorkflowDefinition::parse($template);
 $problems = implode(' | ', $parsed['problems']);
 
@@ -433,6 +435,32 @@ check(
     [] === preg_grep('/Unknown field/', WorkflowDefinition::parse($mailDefinition)['problems'])
     && [] === WorkflowDefinition::activationProblems('workflows', ['executable'], $mailDefinition),
     $bad($mailDefinition)
+);
+$temperatureDefinition = "```yaml\n"
+    . "mode: dry-run\n"
+    . "llm_provider: deepseek\n"
+    . "llm_model: deepseek-flash\n"
+    . "llm_temperature: 0.2\n"
+    . "```\n\n"
+    . "Povzemi posto.\n";
+check(
+    'model: llm_temperature is a known field and parses as given',
+    [] === WorkflowDefinition::parse($temperatureDefinition)['problems']
+    && '0.2' === (WorkflowDefinition::parse($temperatureDefinition)['config']['llm_temperature'] ?? null),
+    $bad($temperatureDefinition)
+);
+check(
+    'model: llm_temperature outside 0-2 is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nllm_temperature: 3\n```\n\nNavodila.\n"), 'llm_temperature')
+);
+check(
+    'model: a non-numeric llm_temperature is reported',
+    str_contains($bad("```yaml\nmode: dry-run\nllm_temperature: vroce\n```\n\nNavodila.\n"), 'llm_temperature')
+);
+check(
+    'model: the boundaries 0 and 2 are accepted',
+    [] === WorkflowDefinition::parse("```yaml\nmode: dry-run\nllm_temperature: 0\n```\n\nNavodila.\n")['problems']
+    && [] === WorkflowDefinition::parse("```yaml\nmode: dry-run\nllm_temperature: 2\n```\n\nNavodila.\n")['problems']
 );
 
 /* ------------------------------------------------------------------ *

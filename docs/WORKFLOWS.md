@@ -106,6 +106,10 @@ allowed_tools:
 # S katerim modelom naj teče. Vpiši pravi id modela.
 llm_provider: opencode-go
 llm_model: <model-id>
+
+# Neobvezno: kako ustvarjalen naj bo model (0 = zelo zbran, 2 = zelo razpršen).
+# Brez te vrstice velja privzeta vrednost izvajalca; dovoljeno je število 0–2.
+# llm_temperature: 0.2
 ```
 
 ## Namen
@@ -154,6 +158,7 @@ Pravila oblike:
 | `mail_mark_read` | `true` \| `false` (brez narekovajev) | odsotno = `false` | Ali naj izvajalec sporočila, ki jih uporabi, po obdelavi označi kot prebrana. Vrednost mora biti resnični boolean: `mail_mark_read: "true"` je v YAML besedilo in ga izvajalec zavrne. Polje opisuje vedenje izvajalca, ne podeli orodja in ne spremeni `mode`. |
 | `llm_provider` | ime ponudnika | odsotno = privzeti ponudnik izvajalca | S katerim ponudnikom naj teče. Imena razrešuje izvajalec; neznano ime javi kot napako, ne ugiba. |
 | `llm_model` | id modela | odsotno = privzeti model ponudnika | Kateri model naj teče. |
+| `llm_temperature` | število 0–2 | odsotno = privzeta vrednost izvajalca | Kako ustvarjalen naj bo model. Izvajalec vrednost, ki ni število ali je zunaj obsega, zavrne; pri ponudniku z vklopljenim »razmišljanjem« ponudnik temperaturo ignorira (zato jo izvajalec izklopi, če hoče, da velja). |
 
 Dodatna pravila:
 
@@ -472,7 +477,8 @@ je meja seznam, kot je **zapisan**: žolček razširi izvajalec ob klicu (razdel
   komentarji in narekovaji), pogoji in kontekst (`run_if` z obema dovoljenima
   vrednostma in z neznano vrednostjo, `mail_context: unread` in neznana
   vrednost, `mailbox: INBOX`, odsoten in prazen `mailbox`, `mail_mark_read` s
-  `true`, `false`, odsotnim in neboolean value — tudi z narekovaji — ter
+  `true`, `false`, odsotnim in neboolean value — tudi z narekovaji,
+  `llm_temperature` s številom, z vrednostjo zunaj obsega in z besedilom ter
   definicija z vsemi veljavnimi polji brez »Unknown field«), oznaka `executable`
   proti seznamu človeških oznak, način `yolo` kot znan način in skalarna oblika
   `allowed_tools`.
@@ -522,7 +528,8 @@ branje prek API-ja: dostop do definicije ni dovoljenje za izvedbo.
 Workflow je Markdown zapis v `workflows` z oznako `executable`, ki jo lahko doda
 samo človek v admin UI — in samo v tej kategoriji. Njegovo telo se začne s prvim
 fenced `yaml` blokom (`mode`, `schedule`, `timezone`, `allowed_tools`, `run_if`,
-`mail_context`, `mailbox`, `mail_mark_read`, `llm_provider`, `llm_model`), za njim
+`mail_context`, `mailbox`, `mail_mark_read`, `llm_provider`, `llm_model`,
+`llm_temperature`), za njim
 so navodila v naravnem jeziku; `run_if`, `mail_context`, `mailbox` in
 `mail_mark_read` so le pogoj in kontekst izvajalca, ne dovoljenja; telo za nov
 zapis prednapolni admin UI. Z oznako je

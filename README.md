@@ -64,7 +64,7 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
   is a definition a runner may execute, with its instructions in natural
   language and its configuration (`mode`, `schedule`, `timezone`,
   `allowed_tools`, `run_if`, `mail_context`, `mailbox`, `mail_mark_read`,
-  `llm_provider`, `llm_model`) in a small YAML block in the body.
+  `llm_provider`, `llm_model`, `llm_temperature`) in a small YAML block in the body.
   The tag can only be added in the admin UI, and any entry carrying it is
   read-only through MCP — an agent can propose a workflow, never authorise or
   rewrite one. The most permissive mode, `yolo`, runs the allowlist without
@@ -431,6 +431,7 @@ allowed_tools:
   - calendar.get_events
 llm_provider: opencode-go
 llm_model: <model-id>
+# llm_temperature: 0.2
 ```
 
 ## Namen
@@ -472,8 +473,8 @@ TODO: kaj naj workflow naredi in zakaj.
   rejects. A wildcard is the one thing in a definition that widens over time — a
   tool a server offers tomorrow is already covered by today's `*` — so a run has
   to report how many tools it matched.
-- **`llm_provider` / `llm_model`** name the model to run with. Left out, the
-  runner uses its own defaults.
+- **`llm_provider` / `llm_model` / `llm_temperature`** name the model to run with
+  and how creative it may be (0–2). Left out, the runner uses its own defaults.
 - **`run_if`, `mail_context`, `mailbox` and `mail_mark_read`** are optional
   conditions and context the runner applies before it calls the model.
   `run_if: unread_mail` starts a run

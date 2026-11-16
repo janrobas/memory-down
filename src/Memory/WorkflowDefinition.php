@@ -72,6 +72,7 @@ final class WorkflowDefinition
         'mail_mark_read',
         'llm_provider',
         'llm_model',
+        'llm_temperature',
     ];
 
     /**
@@ -161,6 +162,11 @@ allowed_tools:
 # S katerim modelom naj teče. Vpiši pravi id modela.
 llm_provider: opencode-go
 llm_model: <model-id>
+
+# Neobvezno: kako ustvarjalen naj bo model (0 = zelo zbran, 2 = zelo
+# razpršen). Brez te vrstice velja privzeta vrednost izvajalca; dovoljeno je
+# število od 0 do 2, brez narekovajev.
+# llm_temperature: 0.2
 ```
 
 ## Namen
@@ -333,6 +339,19 @@ MD;
         $markRead = $config['mail_mark_read'] ?? null;
         if (null !== $markRead && !is_bool($markRead)) {
             $problems[] = '"mail_mark_read" must be true or false (absent means false); found ' . self::describe($markRead) . '.';
+        }
+
+        // Optional sampling temperature (docs/WORKFLOWS.md §4). The runner parses
+        // it as a number between 0 and 2 and refuses the definition otherwise, so
+        // MemoryDown says the same thing at save time instead of leaving it to the
+        // first run. Absent means the runner's own default.
+        $temperature = $config['llm_temperature'] ?? null;
+        if (null !== $temperature) {
+            if (!is_numeric($temperature)) {
+                $problems[] = '"llm_temperature" must be a number between 0 and 2; found ' . self::describe($temperature) . '.';
+            } elseif ((float) $temperature < 0 || (float) $temperature > 2) {
+                $problems[] = '"llm_temperature" must be between 0 and 2; found ' . self::describe($temperature) . '.';
+            }
         }
 
         if ('' === trim($instructions)) {

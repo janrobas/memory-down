@@ -740,7 +740,7 @@ more: `docs/WORKFLOWS.md` is the normative document (in Slovenian).
 - A definition lives in the `workflows` category as a normal Markdown entry. Its
   operational configuration (`mode`, `schedule`, `timezone`, `allowed_tools`,
   `run_if`, `mail_context`, `mailbox`, `mail_mark_read`, `llm_provider`,
-  `llm_model`) lives in a fenced `yaml` block **in the body**, because the
+  `llm_model`, `llm_temperature`) lives in a fenced `yaml` block **in the body**, because the
   frontmatter is rebuilt from a fixed key list on every save and would silently
   drop it. The block is the first thing in the body; the title is a separate
   field, written as the `# …` heading above it. `mode` is `dry-run` (default),
