@@ -320,6 +320,30 @@ Do not create a complicated schema.
 The account id is a directory name *and* a login name, so it must be a strict
 slug, and no path may ever be built from it without validation.
 
+### The filename follows the title (admin UI only)
+
+Renaming an entry in the admin UI moves the file to the new title's slug and
+rewrites the frontmatter `id` in the same save: `stari-naslov-a1b2c3.md` becomes
+`novi-naslov-a1b2c3.md`. The six-hex suffix is carried over, because it is the
+part that identifies the entry; a target name that is already taken gets a fresh
+suffix rather than overwriting another entry.
+
+This is deliberately narrow:
+
+- **MCP never renames.** `update_memory` keeps the id an agent was handed, so a
+  later tool call cannot land on a file that no longer exists.
+- **A published writing keeps its id** while `public` is set — that id is the URL
+  `/public/writings/{id}` serves, so a retitle must not break its permalink.
+- **Filenames this application did not generate are left alone**, because a file
+  dropped in by hand may be linked from Obsidian. Only `{slug}-{6 hex}` ids move.
+- An empty title never renames anything, and a title whose slug is unchanged
+  (case, punctuation, accents) touches no file.
+
+Anything that stores an id outside MemoryDown — a runner's `category/id`, a
+bookmark, a link inside another note — therefore has to be updated after a
+rename. The search index needs no cooperation: its signature includes each
+file's relative path, so the rename triggers the ordinary lazy rebuild.
+
 ---
 
 ## Memory tools

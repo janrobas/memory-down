@@ -749,6 +749,102 @@ check('create(): the title keeps its accents', 'Članek o šoli in živalih' ===
 check('create(): the file exists under the ASCII id', is_file($memRoot . '/notes/' . $slovene['id'] . '.md'));
 
 /* ------------------------------------------------------------------ *
+ *  MemoryStore: the filename follows the title (admin UI only)
+ * ------------------------------------------------------------------ */
+
+// The admin UI passes rename: true, so a retitled entry moves to a filename
+// built from the new title. The random suffix is carried over, which keeps the
+// part of the id that identifies the entry.
+$renameDoc = $store->create('Prvo telo.', 'Stari naslov', 'notes');
+$renameId = (string) $renameDoc['id'];
+$renamed = $store->update('notes', $renameId, ['title' => 'Novi naslov', 'content' => 'Prvo telo.'], rename: true);
+$renamedId = (string) $renamed['id'];
+check('rename: the id follows the new title', 1 === preg_match('/^novi-naslov-[0-9a-f]{6}$/', $renamedId), $renamedId);
+check('rename: the random suffix is carried over', substr($renameId, -6) === substr($renamedId, -6), $renameId . ' -> ' . $renamedId);
+check('rename: the new file exists', is_file($memRoot . '/notes/' . $renamedId . '.md'), $renamedId);
+check('rename: the old file is gone', !is_file($memRoot . '/notes/' . $renameId . '.md'), $renameId);
+check('rename: the old id no longer resolves', null === $store->read('notes', $renameId));
+check('rename: the returned document reads back', 'Prvo telo.' === trim((string) $renamed['body']), var_export($renamed['body'], true));
+check('rename: the title is the new one', 'Novi naslov' === $renamed['title'], json_encode($renamed['title']));
+check('rename: the frontmatter id is rewritten', str_contains((string) $store->raw('notes', $renamedId), 'id: ' . $renamedId), (string) $store->raw('notes', $renamedId));
+
+// A body-only edit sends no title and must not rename anything.
+$bodyOnly = $store->update('notes', $renamedId, ['content' => 'Drugo telo.'], rename: true);
+check('rename: a body-only edit keeps the id', $renamedId === $bodyOnly['id'], (string) $bodyOnly['id']);
+
+// A title change that produces the same slug (case, punctuation, accents) must
+// leave the file alone: nothing to rename, no churn in the index.
+$sameSlug = $store->update('notes', $renamedId, ['title' => 'Novi naslov!', 'content' => 'Drugo telo.'], rename: true);
+check('rename: a title that slugs the same keeps the id', $renamedId === $sameSlug['id'], (string) $sameSlug['id']);
+
+// The MCP path (rename: false) never moves an id out from under a caller.
+$stable = $store->create('Telo C.', 'Agentov naslov', 'notes');
+$agentUpdated = $store->update('notes', (string) $stable['id'], ['title' => 'Povsem drug naslov', 'content' => 'Telo C.']);
+check('rename: an MCP update keeps the id', $stable['id'] === $agentUpdated['id'], (string) $agentUpdated['id']);
+check('rename: the MCP update still saves the title', 'Povsem drug naslov' === $agentUpdated['title'], json_encode($agentUpdated['title']));
+
+// Accents fold in the filename, never in the title (Slug handles the one,
+// frontmatter the other).
+$accentDoc = $store->create('Telo.', 'Sola', 'notes');
+$accentRenamed = $store->update('notes', (string) $accentDoc['id'], ['title' => 'Članek o šoli', 'content' => 'Telo.'], rename: true);
+check('rename: the filename is transliterated ASCII', 1 === preg_match('/^clanek-o-soli-[0-9a-f]{6}$/', (string) $accentRenamed['id']), (string) $accentRenamed['id']);
+check('rename: the title keeps its accents', 'Članek o šoli' === $accentRenamed['title'], json_encode($accentRenamed['title']));
+
+// Two entries, the same title: the second one must take a fresh suffix rather
+// than overwrite the file that already sits at the target name.
+$taken = $store->create('Prvo telo.', 'Isti naslov', 'notes');
+$clash = $store->create('Drugo telo.', 'Drug naslov', 'notes');
+$clashRaw = (string) $store->raw('notes', (string) $clash['id']);
+$forcedId = 'drug-naslov-' . substr((string) $taken['id'], -6);
+@file_put_contents(
+    $memRoot . '/notes/' . $forcedId . '.md',
+    str_replace('id: ' . $clash['id'], 'id: ' . $forcedId, $clashRaw)
+);
+@unlink($memRoot . '/notes/' . $clash['id'] . '.md');
+$clashRenamed = $store->update('notes', $forcedId, ['title' => 'Isti naslov', 'content' => 'Drugo telo.'], rename: true);
+check('rename: a taken name gets another id', $taken['id'] !== $clashRenamed['id'], $clashRenamed['id'] . ' vs ' . $taken['id']);
+check('rename: the taken name keeps the other entry', 'Prvo telo.' === trim((string) ($store->read('notes', (string) $taken['id'])['body'] ?? '')), (string) $taken['id']);
+check('rename: the renamed entry keeps its own body', 'Drugo telo.' === trim((string) $clashRenamed['body']), var_export($clashRenamed['body'], true));
+check('rename: the renamed entry is in the target category', 'notes' === $clashRenamed['category'], (string) $clashRenamed['category']);
+
+// A rename and a category move can arrive in one save (the editor sends both).
+$bothDoc = $store->create('Telo D.', 'Naslov za selitev', 'notes');
+$bothMoved = $store->update('notes', (string) $bothDoc['id'], [
+    'title' => 'Preseljen naslov',
+    'content' => 'Telo D.',
+    'category' => 'projects',
+], rename: true);
+check('rename: a rename can move category in one save', 'projects' === $bothMoved['category'], (string) $bothMoved['category']);
+check('rename: the moved id follows the title', 1 === preg_match('/^preseljen-naslov-[0-9a-f]{6}$/', (string) $bothMoved['id']), (string) $bothMoved['id']);
+check('rename: the new path exists', is_file($memRoot . '/projects/' . $bothMoved['id'] . '.md'), (string) $bothMoved['id']);
+check('rename: the old path is gone', !is_file($memRoot . '/notes/' . $bothDoc['id'] . '.md'), (string) $bothDoc['id']);
+
+// A file dropped in by hand is somebody else's name (an Obsidian link, a git
+// history, an rsync target): it is never renamed.
+@file_put_contents(
+    $memRoot . '/notes/my-imported-note.md',
+    "---\ntype: notes\nid: my-imported-note\n---\n\n# Uvozena\n\nTelo.\n"
+);
+$foreign = $store->update('notes', 'my-imported-note', ['title' => 'Povsem nov naslov', 'content' => 'Telo.'], rename: true);
+check('rename: a hand-made filename is left alone', 'my-imported-note' === $foreign['id'], (string) $foreign['id']);
+check('rename: the hand-made file is still there', is_file($memRoot . '/notes/my-imported-note.md'));
+
+// Clearing the title must not rename the file to "memory-xxxxxx".
+$untitled = $store->create('Telo.', 'Naslov za brisanje', 'notes');
+$cleared = $store->update('notes', (string) $untitled['id'], ['title' => '', 'content' => 'Telo.'], rename: true);
+check('rename: clearing the title keeps the filename', $untitled['id'] === $cleared['id'], (string) $cleared['id']);
+
+// A published writing's id is the URL the public API serves, so it stays put
+// until the entry is unpublished.
+$published = $store->create('Javno telo.', 'Prvotni naslov', 'writings', public: true);
+$stillPublished = $store->update('writings', (string) $published['id'], ['title' => 'Nov naslov objave', 'content' => 'Javno telo.'], rename: true);
+check('rename: a published entry keeps its id', $published['id'] === $stillPublished['id'], (string) $stillPublished['id']);
+check('rename: publishing survives the save', true === ($stillPublished['public'] ?? null), json_encode($stillPublished['public'] ?? null));
+$unpublished = $store->update('writings', (string) $published['id'], ['title' => 'Objavljeni nov naslov', 'content' => 'Javno telo.', 'public' => false], rename: true);
+check('rename: unpublishing lets the filename follow the title', 1 === preg_match('/^objavljeni-nov-naslov-[0-9a-f]{6}$/', (string) $unpublished['id']), (string) $unpublished['id']);
+check('rename: the unpublish is written', false === ($unpublished['public'] ?? null), json_encode($unpublished['public'] ?? null));
+
+/* ------------------------------------------------------------------ *
  *  MemoryStore: the trash
  * ------------------------------------------------------------------ */
 

@@ -295,11 +295,19 @@ final class MemoryStore
     }
 
     /**
+     * Rewrite an entry in place. The id is stable by default: an agent that was
+     * handed `facts/foo-a1b2c3` must still find it on the next call.
+     *
+     * `$rename: true` is the admin UI's rule — "the filename follows the title".
+     * It is opt-in because an id is also the handle other things hold (an MCP
+     * tool result, a published writing's URL, a runner's `category/id`). See
+     * {@see idForTitle()} for when a rename is actually applied.
+     *
      * @param array{content?: string, title?: string, tags?: string[], category?: string, archived?: bool} $changes
      *
      * @return array<string, mixed>
      */
-    public function update(string $category, string $id, array $changes): array
+    public function update(string $category, string $id, array $changes, bool $rename = false): array
     {
         $current = $this->read($category, $id);
         if (null === $current) {
@@ -332,13 +340,25 @@ final class MemoryStore
             throw new \InvalidArgumentException("Invalid memory id: {$id}");
         }
 
+        $nextId = $id;
+        if ($rename
+            && trim($nextTitle) !== trim((string) ($current['title'] ?? ''))
+            && '' !== trim($nextTitle)
+            // A published writing's id is the URL the public API serves, so it
+            // stays put even when the title changes. Unpublishing in the same
+            // save lifts that: the id is no longer an external handle.
+            && !$nextPublic
+        ) {
+            $nextId = $this->idForTitle($id, $nextTitle, $nextCategory);
+        }
+
         $frontmatter = [
             'type' => $nextCategory,
             'tags' => $nextTags,
             'created' => (string) ($current['created'] ?? self::nowTimestamp()),
             'updated' => self::nowTimestamp(),
             'source' => (string) ($current['source'] ?? self::SOURCE),
-            'id' => $id,
+            'id' => $nextId,
         ];
         if ($nextArchived) {
             $frontmatter['archived'] = true;
@@ -348,27 +368,94 @@ final class MemoryStore
         }
         $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
-        if ($nextCategory === $category) {
-            if (false === $this->writeFile($file, $raw)) {
+        $nextFile = $this->paths->file($nextCategory, $nextId);
+        if (null === $nextFile) {
+            throw new \InvalidArgumentException("Invalid memory id: {$nextId}");
+        }
+
+        if ($nextFile === $file) {
+            if (false === $this->writeFile($nextFile, $raw)) {
                 throw new \RuntimeException("Failed to write memory file: {$category}/{$id}.md");
             }
         } else {
-            $nextFile = $this->paths->file($nextCategory, $id);
-            if (null === $nextFile) {
-                throw new \InvalidArgumentException("Invalid category: {$nextCategory}");
-            }
+            // Write the new path first, then drop the old one: a failure here
+            // leaves the entry readable at one of the two names, never at none.
             if (!is_dir(dirname($nextFile)) && !mkdir(dirname($nextFile), 0775, true)) {
                 throw new \RuntimeException("Cannot create category directory: {$nextCategory}");
             }
             if (false === $this->writeFile($nextFile, $raw)) {
-                throw new \RuntimeException("Failed to write memory file: {$nextCategory}/{$id}.md");
+                throw new \RuntimeException("Failed to write memory file: {$nextCategory}/{$nextId}.md");
             }
-            @unlink($file);
+            if (!@unlink($file)) {
+                // Not fatal: the caller has the new entry, but the corpus now
+                // holds both names. Worth a log line, since it is a duplicate a
+                // human has to see.
+                $this->logger->warning('memory.original_not_removed', [
+                    'category' => $category,
+                    'id' => $id,
+                    'new_category' => $nextCategory,
+                    'new_id' => $nextId,
+                ]);
+            }
         }
 
-        $this->logger->info('memory.updated', ['id' => $id, 'category' => $nextCategory]);
+        $this->logger->info('memory.updated', ['id' => $nextId, 'category' => $nextCategory]);
+        if ($nextId !== $id || $nextCategory !== $category) {
+            $this->logger->info('memory.relocated', [
+                'from' => $category . '/' . $id,
+                'to' => $nextCategory . '/' . $nextId,
+            ]);
+        }
 
-        return $this->read($nextCategory, $id) ?? throw new \RuntimeException('Failed to read back memory entry.');
+        return $this->read($nextCategory, $nextId) ?? throw new \RuntimeException('Failed to read back memory entry.');
+    }
+
+    /**
+     * The id an entry should carry once its title changed — or the id it already
+     * has, when it must stay put.
+     *
+     * Only names this store generated (`{slug}-{6 hex}`, see {@see newId()}) are
+     * considered. A file somebody dropped into the corpus by hand —
+     * `my-imported-note.md` — is an external name, possibly linked from Obsidian,
+     * so it is never renamed out from under that reference.
+     *
+     * The random suffix is carried over, which keeps the part of the id that
+     * identifies the entry across renames: `stari-naslov-a1b2c3` becomes
+     * `novi-naslov-a1b2c3`. When the target name is already taken (two entries
+     * with the same title), a fresh suffix is generated: the file that already
+     * exists is another entry and is never overwritten.
+     */
+    private function idForTitle(string $currentId, string $title, string $category): string
+    {
+        if (1 !== preg_match('/^(.+)-([0-9a-f]{6})$/', $currentId, $matches)) {
+            return $currentId;
+        }
+
+        $slug = Slug::fromTitle($title);
+        if ($slug === $matches[1]) {
+            // The title changed but the filename would not (case, punctuation,
+            // accents). Nothing to do, and no reason to touch the file.
+            return $currentId;
+        }
+
+        $candidate = $slug . '-' . $matches[2];
+        for ($attempt = 0; $attempt < 5; ++$attempt) {
+            $file = $this->paths->file($category, $candidate);
+            if (null !== $file && !is_file($file)) {
+                return $candidate;
+            }
+            $candidate = $slug . '-' . substr(bin2hex(random_bytes(3)), 0, 6);
+        }
+
+        // Five taken names in a row is not a plausible corpus; keeping the old
+        // filename is the safe answer, because the user's edit still saves.
+        $this->logger->warning('memory.rename_skipped', [
+            'category' => $category,
+            'id' => $currentId,
+            'wanted' => $slug,
+        ]);
+
+        return $currentId;
     }
 
     public function delete(string $category, string $id): bool

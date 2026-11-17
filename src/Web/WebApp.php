@@ -973,7 +973,10 @@ final class WebApp
                 if (array_key_exists('public', $data)) {
                     $changes['public'] = $public;
                 }
-                $doc = $this->store()->update($currentCategory, $id, $changes);
+                // `rename: true` is the admin UI's rule that the filename
+                // follows the title. MCP never sets it: an agent's id stays
+                // stable across its own edits.
+                $doc = $this->store()->update($currentCategory, $id, $changes, rename: true);
             }
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], 400);

@@ -236,6 +236,25 @@ UI to open.
   (white/dark/retro/green/blue) are remembered in `localStorage`.
 - **Delete** appears next to the title for existing memories. It moves the entry
   to the trash (see below) rather than destroying it.
+- **The filename follows the title.** Renaming an entry and saving moves the
+  `.md` file to a name built from the new title, keeping the six-hex suffix that
+  identifies it (`stari-naslov-a1b2c3.md` → `novi-naslov-a1b2c3.md`), so the
+  sidebar, the breadcrumb, `list_memory` and `/api/workflows` stop showing the
+  old name. Saving after a rename uses the id the response returned, so editing
+  carries on uninterrupted. Deliberate limits:
+  - **MCP never renames.** `update_memory` keeps the id an agent was handed, so a
+    later tool call cannot hit a file that no longer exists.
+  - **A published writing keeps its id** while `public` is set: that id is the URL
+    `/public/writings/{id}` serves, so a retitled post would break its own
+    permalink. Unpublish it first if the filename really should change.
+  - **Filenames this app did not generate are left alone** — a file dropped into
+    the memory directory by hand (or restored by rsync) may be linked from
+    Obsidian, so it is never renamed out from under that link. Only ids of the
+    `{slug}-{6 hex}` shape are moved.
+  - An empty title never renames anything (it would become `memory-xxxxxx.md`).
+  - The suffix is kept, but the title part is not, so anything that stored the old
+    id outside MemoryDown — a runner's `category/id`, a bookmark, a link inside
+    another note — has to be updated after a rename.
 - **Menu:** *Reindex*, *Backup* (download a zip of your memory), *Trash*
   (restore or purge deleted entries), *Settings*, and *Users* for admins, plus
   the theme picker and sign-out.

@@ -249,6 +249,11 @@ predlogov, ki jih človek potrdi, ne prek neposrednega pisanja prek MCP.
   Ponoven zagon izvajalca ali ponovno branje definicije ne sme povzročiti druge
   izvedbe istega obdobja. Zamujene izvedbe se nadomestijo **največ enkrat**; če
   je zamuda večja od 3 ur, se zabeleži kot izpuščena, ne izvedena.
+- **Preimenovanje spremeni `id`.** V nadzorni plošči datoteka sledi naslovu
+  (`jutranji-pregled-poste-1a2b3c.md` → `dnevni-pregled-poste-1a2b3c.md`), zato
+  se spremeni tudi ključ izvedbe iz prejšnje alineje. Preimenuj definicijo med
+  izvajanji, ne med njim, in po preimenovanju posodobi morebitne zunanje
+  reference (urnik, zaznamke, povezave v drugih zapisih).
 - Sprememba definicije med izvajanjem velja od **naslednjega** zagona; trenutni
   zagon se zaključi po pravilih, s katerimi je začel.
 

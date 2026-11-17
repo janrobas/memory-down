@@ -1056,6 +1056,55 @@ check('admin API new-in-category -> file in people', '' !== $inCatId && is_file(
 // Clean up the extra entry.
 request('DELETE', '/ui/api/memory?category=people&id=' . rawurlencode($inCatId), ['X-CSRF-Token' => $apiCsrf]);
 
+// The filename follows the title in the admin UI. The response has to carry the
+// new id, because the editor keeps saving with whatever id it holds: a stale one
+// would turn the next autosave into a 404 and lose the edit.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes',
+    'title' => 'Rename probe',
+    'content' => 'Rename probe body.',
+]));
+$renameProbeId = jsonBody($r['body'])['memory']['id'] ?? '';
+$renameProbeOldFile = $memoryRoot . '/notes/' . $renameProbeId . '.md';
+check('admin API rename -> probe created', '' !== $renameProbeId && is_file($renameProbeOldFile), $r['body']);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $renameProbeId,
+    'category' => 'notes',
+    'title' => 'Preimenovan naslov',
+    'content' => 'Rename probe body.',
+]));
+$renamedProbe = jsonBody($r['body']);
+$renamedProbeId = (string) ($renamedProbe['memory']['id'] ?? '');
+$renameProbeNewFile = $memoryRoot . '/notes/' . $renamedProbeId . '.md';
+clearstatcache(true, $renameProbeOldFile);
+check('admin API rename -> the id follows the new title', 1 === preg_match('/^preimenovan-naslov-[0-9a-f]{6}$/', $renamedProbeId), $r['body']);
+check('admin API rename -> the suffix is kept', substr($renameProbeId, -6) === substr($renamedProbeId, -6), $renameProbeId . ' -> ' . $renamedProbeId);
+check('admin API rename -> the file moved on disk', is_file($renameProbeNewFile) && !is_file($renameProbeOldFile), $r['body']);
+check('admin API rename -> the body survives', 'Rename probe body.' === trim((string) ($renamedProbe['memory']['body'] ?? '')), $r['body']);
+
+$r = request('GET', '/ui/api/memory?category=notes&id=' . rawurlencode($renameProbeId));
+check('admin API rename -> the old id is gone', 404 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui/api/memory?category=notes&id=' . rawurlencode($renamedProbeId));
+check('admin API rename -> the new id reads', 200 === $r['status'] && str_contains($r['body'], 'Rename probe body.'), $r['body']);
+
+// Saving again with the id the response handed back must work — this is the
+// autosave that follows every rename in the editor.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $renamedProbeId,
+    'category' => 'notes',
+    'title' => 'Preimenovan naslov',
+    'content' => 'Rename probe body, edited again.',
+]));
+$resaved = jsonBody($r['body']);
+clearstatcache(true, $renameProbeNewFile);
+check('admin API rename -> a second save with the new id succeeds', 200 === $r['status'] && $renamedProbeId === ($resaved['memory']['id'] ?? ''), $r['body']);
+check('admin API rename -> an unchanged title does not churn the filename',
+    is_file($renameProbeNewFile) && str_contains((string) file_get_contents($renameProbeNewFile), 'edited again'), $r['body']);
+if ('' !== $renamedProbeId) {
+    request('DELETE', '/ui/api/memory?category=notes&id=' . rawurlencode($renamedProbeId), ['X-CSRF-Token' => $apiCsrf]);
+}
+
 // The "notes" catch-all category is accepted and gets its own directory.
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
     'category' => 'notes',
@@ -1123,22 +1172,26 @@ $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X
     'content' => $loadedBody, // as the UI would re-send it
 ]));
 $round = jsonBody($r['body']);
+$roundId = (string) ($round['memory']['id'] ?? '');
 check('H1: round-trip rename -> ok', 200 === $r['status'], $r['body']);
-$roundRaw = (string) @file_get_contents($memoryRoot . '/context/' . $h1id . '.md');
+// The admin UI renames the file when the title changes, so the entry now lives
+// under the id the response returned (the editor adopts it for the next save).
+check('H1: rename moves the file to the new id', '' !== $roundId && 1 === preg_match('/^heading-test-renamed-[0-9a-f]{6}$/', $roundId), $roundId);
+$roundRaw = '' !== $roundId ? (string) @file_get_contents($memoryRoot . '/context/' . $roundId . '.md') : '';
 check('H1: rename leaves exactly one H1', 1 === preg_match_all('/^#\s+/m', $roundRaw), $roundRaw);
 check('H1: rename applied', str_contains($roundRaw, '# Heading test renamed'));
 
 // A pre-corrupted file (several leading H1s) heals to one H1 on save.
-$corrupt = $memoryRoot . '/context/' . $h1id . '.md';
-file_put_contents($corrupt, "---\ntype: context\nid: {$h1id}\n---\n\n# A\n\n# A\n\n# A\n\nBody.\n");
+$corrupt = $memoryRoot . '/context/' . $roundId . '.md';
+file_put_contents($corrupt, "---\ntype: context\nid: {$roundId}\n---\n\n# A\n\n# A\n\n# A\n\nBody.\n");
 $r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
-    'id' => $h1id, 'category' => 'context', 'title' => 'A', 'tags' => '', 'content' => 'Body.',
+    'id' => $roundId, 'category' => 'context', 'title' => 'A', 'tags' => '', 'content' => 'Body.',
 ]));
 $healed = (string) @file_get_contents($corrupt);
 check('H1: corrupted duplicates heal to one H1', 1 === preg_match_all('/^#\s+A$/m', $healed), $healed);
 
-if ('' !== $h1id) {
-    request('DELETE', '/ui/api/memory?category=context&id=' . rawurlencode($h1id), ['X-CSRF-Token' => $apiCsrf]);
+if ('' !== $roundId) {
+    request('DELETE', '/ui/api/memory?category=context&id=' . rawurlencode($roundId), ['X-CSRF-Token' => $apiCsrf]);
 }
 
 $r = request('GET', '/health');

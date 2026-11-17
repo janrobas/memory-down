@@ -947,11 +947,17 @@
     applyTab(tab || browseTab(), { persist: false });
   }
 
-  // After the first save of a brand-new memory the store assigns an id. Adopt it
-  // and the resulting view state WITHOUT rewriting the fields the user is
-  // editing, so in-progress text and the caret are left alone (a full
-  // fillEditor() here would move the caret to the end of the textarea).
-  function adoptCreatedMemory(doc) {
+  // A save can come back with a different id: a brand-new memory gets one
+  // assigned, and an update whose title changed is renamed by the store so the
+  // filename follows the title. Adopt the id and the resulting view state
+  // WITHOUT rewriting the fields the user is editing, so in-progress text and the
+  // caret are left alone (a full fillEditor() here would move the caret to the
+  // end of the textarea).
+  //
+  // This must run before markSaved(), otherwise the saved snapshot would keep
+  // the old id, every following isDirty() check would be true and the editor
+  // would autosave forever.
+  function adoptSavedIdentity(doc) {
     fId.value = doc.id;
     syncCategoryUI(doc.category);
     deleteBtn.disabled = false;
@@ -1038,9 +1044,11 @@
       if (res.ok && res.data.memory) {
         // On an update, keep the editor exactly as the user left it (adopting
         // the server's normalised copy here would rewrite the text under the
-        // caret). Only a brand-new memory needs the assigned id folded in.
-        if ('' === payload.id) {
-          adoptCreatedMemory(res.data.memory);
+        // caret). The one field that must follow the server is the id: a new
+        // memory gets one, and a renamed title moves the file, so a stale id
+        // would make the next save fail.
+        if (res.data.memory.id !== payload.id) {
+          adoptSavedIdentity(res.data.memory);
         }
         renderDefinition(res.data.definition);
         markSaved(currentPayload());
