@@ -6,6 +6,7 @@ namespace MemoryDown\Web;
 
 use MemoryDown\Auth\TokenStore;
 use MemoryDown\Config;
+use MemoryDown\I18n\Categories;
 use MemoryDown\I18n\LanguageSwitcher;
 use MemoryDown\I18n\Locale;
 use MemoryDown\I18n\Translator;
@@ -1696,6 +1697,12 @@ final class WebApp
             'lang' => $translator->htmlLang(),
             'languageLinks' => LanguageSwitcher::html($translator, $this->currentUri),
             'languageBlurb' => $translator->e('app.language_blurb'),
+            /*
+             * A category's display name, for the templates. The slug is the data
+             * (URL, API argument, data-* attribute); this is only what a person
+             * reads, and a category without a translation is shown as stored.
+             */
+            'categoryLabel' => static fn (string $slug): string => Categories::label($slug, $translator),
             // Escaped here, once, because the layout drops this straight into a
             // double-quoted attribute: JSON's own quotes would end that attribute
             // and leave app.js parsing a truncated string — which is exactly how

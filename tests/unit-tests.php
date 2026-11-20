@@ -19,6 +19,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MemoryDown\Config;
 use MemoryDown\Auth\TokenStore;
+use MemoryDown\I18n\Categories;
 use MemoryDown\I18n\Locale;
 use MemoryDown\I18n\Translator;
 use MemoryDown\Mcp\MemoryTools;
@@ -648,6 +649,28 @@ check('i18n: every workflow verdict code is translated', [] === $missing, implod
 $refused = WorkflowDefinition::activationProblems('workflows', ['executable'], "```yaml\nmode: sometimes\n```\n\nNavodila.\n");
 $refusal = (new Translator('sl'))->t('workflow.' . $refused[0]['code'], $refused[0]['params']);
 check('i18n: a real verdict renders in Slovenian', str_contains($refusal, 'sometimes') && str_contains($refusal, 'dry-run') && !str_contains($refusal, 'workflow.'), $refusal);
+
+// Category display names. The directory names are data — URLs, API arguments,
+// data-* attributes, the MCP tools, the backup — and are never translated. Only
+// the label a person reads is, and a category with no label (a folder added by
+// hand) is shown exactly as it is stored.
+$builtInCategories = \MemoryDown\Memory\PathValidator::DEFAULT_CATEGORIES;
+$missingLabels = [];
+foreach (['en', 'sl', 'it'] as $code) {
+    foreach ($builtInCategories as $slug) {
+        if (!isset(Translator::catalogue($code)[Categories::PREFIX . $slug])) {
+            $missingLabels[] = $code . ':' . Categories::PREFIX . $slug;
+        }
+    }
+}
+check('i18n: every built-in category has a label in all three languages', [] === $missingLabels, implode(', ', $missingLabels));
+check('i18n: a category label is translated', 'Nastavitve' === Categories::label('preferences', new Translator('sl')), Categories::label('preferences', new Translator('sl')));
+check('i18n: the same slug reads differently per language', 'Preferences' === Categories::label('preferences', new Translator('en')) && 'Preferenze' === Categories::label('preferences', new Translator('it')));
+check('i18n: an unknown category is shown as stored', 'health' === Categories::label('health', new Translator('sl')));
+check('i18n: a label is never a bare key', !str_starts_with(Categories::label('health', new Translator('sl')), Categories::PREFIX));
+$labelMap = Categories::labels($builtInCategories, new Translator('it'));
+check('i18n: the label map covers every category', count($builtInCategories) === count($labelMap) && 'Preferenze' === ($labelMap['preferences'] ?? null), json_encode($labelMap));
+check('i18n: the label map keeps the slugs as its keys', [] === array_diff($builtInCategories, array_keys($labelMap)), json_encode(array_keys($labelMap)));
 
 /* ------------------------------------------------------------------ *
  *  The workflow catalog (read-only API over the workflows category)

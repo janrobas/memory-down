@@ -922,6 +922,23 @@ check(
     ''
 );
 
+// Categories are shown under their translated names, but nothing else about them
+// changes: the slug stays the data (data-* attributes, URLs, API arguments), and
+// the label map is only text. Read the shell in Slovenian for this.
+$GLOBALS['memorydown_cookies']['memorydown_lang'] = 'sl';
+$r = request('GET', '/ui');
+check('categories: the sidebar shows the translated label', str_contains($r['body'], '>Nastavitve<'), '');
+check('categories: the slug stays in the data attribute', str_contains($r['body'], 'data-category="preferences"'), '');
+check('categories: the chips carry slugs, not labels', str_contains($r['body'], 'data-cat="preferences"'), '');
+check('categories: the move picker carries slugs', str_contains($r['body'], '<option value="preferences"'), '');
+preg_match('/data-category-labels="([^"]*)"/', $r['body'], $categoryAttr);
+$categoryMap = json_decode(html_entity_decode($categoryAttr[1] ?? '', ENT_QUOTES | ENT_HTML5), true);
+check('categories: the label map parses', is_array($categoryMap) && 'Nastavitve' === ($categoryMap['preferences'] ?? null), (string) ($categoryAttr[1] ?? ''));
+$r = request('GET', '/ui/api/tree');
+$treeNames = array_column(jsonBody($r['body'])['categories'] ?? [], 'name');
+check('categories: the JSON tree still answers with slugs', in_array('preferences', $treeNames, true) && !in_array('Nastavitve', $treeNames, true), json_encode($treeNames));
+unset($GLOBALS['memorydown_cookies']['memorydown_lang']);
+
 // API tokens are per account now, and only the admin UI mints them. Mint both
 // here; /ui/settings deliberately shows a token again (so it can be copied),
 // which is also how these tests get the value to use.

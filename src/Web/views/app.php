@@ -20,6 +20,7 @@
  * @var string                          $languageLinks pre-rendered chooser
  * @var string                          $languageBlurb
  * @var callable                        $te
+ * @var callable                        $categoryLabel  slug => display name
  */
 use MemoryDown\Memory\WorkflowDefinition;
 use MemoryDown\Web\WebApp;
@@ -45,10 +46,19 @@ $definitionState = null === $definition ? 'is-hidden' : ([] === $definition ? 'i
 $definitionHead = null === $definition
     ? ''
     : ([] === $definition ? $te('definition.ok') : $te('definition.refuse'));
+
+// slug => display name, for the pieces app.js draws itself (group headers, the
+// move picker, the "moved to" status). The slugs stay the values everywhere; this
+// map only ever supplies text.
+$categoryLabels = [];
+foreach ($categories as $category) {
+    $categoryLabels[$category] = $categoryLabel($category);
+}
 ?>
 <div class="app-shell<?= '' === $selId ? ' is-empty' : '' ?>"
      data-csrf="<?= WebApp::h($csrf) ?>"
      data-engine="<?= WebApp::h($engine['engine'] ?? 'direct') ?>"
+     data-category-labels="<?= WebApp::h((string) json_encode($categoryLabels, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>"
      data-workflow-category="<?= WebApp::h(WorkflowDefinition::CATEGORY) ?>"
      data-workflow-template="<?= WebApp::h(WorkflowDefinition::TEMPLATE_BODY) ?>">
 
@@ -76,7 +86,7 @@ $definitionHead = null === $definition
       <?php foreach ($tree as $group): ?>
         <section class="cat" data-category="<?= WebApp::h($group['name']) ?>">
           <div class="cat-name">
-            <span><?= WebApp::h($group['name']) ?></span>
+            <span><?= WebApp::h($categoryLabel((string) $group['name'])) ?></span>
             <span class="count"><?= count($group['memories']) ?></span>
           </div>
           <ul>
@@ -105,7 +115,7 @@ $definitionHead = null === $definition
       <div class="editor-head">
         <div class="editor-topbar">
           <button type="button" id="open-memories" class="icon-btn" aria-controls="sidebar" aria-expanded="false" title="<?= $te('app.memories') ?>">☰</button>
-          <span class="breadcrumb" id="breadcrumb"><?= '' !== $selId ? WebApp::h($selCategory) . '<span class="sep">/</span>' . WebApp::h($selId) : $te('app.new_memory') ?></span>
+          <span class="breadcrumb" id="breadcrumb"><?= '' !== $selId ? WebApp::h($categoryLabel((string) $selCategory)) . '<span class="sep">/</span>' . WebApp::h($selId) : $te('app.new_memory') ?></span>
           <span class="spacer"></span>
 
           <?php /* Theme and Logout live in the drawer markup (so the no-JS fallback
@@ -124,7 +134,7 @@ $definitionHead = null === $definition
         <div class="new-cats" id="new-cats"<?= '' !== $selId ? ' hidden' : '' ?>>
           <span class="new-label"><?= $te('app.category') ?></span>
           <?php foreach ($categories as $category): ?>
-            <button type="button" class="chip<?= $category === $selCategory ? ' active' : '' ?>" data-cat="<?= WebApp::h($category) ?>"><?= WebApp::h($category) ?></button>
+            <button type="button" class="chip<?= $category === $selCategory ? ' active' : '' ?>" data-cat="<?= WebApp::h($category) ?>"><?= WebApp::h($categoryLabel($category)) ?></button>
           <?php endforeach; ?>
           <input type="hidden" name="category" id="f-category" value="<?= WebApp::h($selCategory) ?>">
         </div>
@@ -134,7 +144,7 @@ $definitionHead = null === $definition
             <span class="field-label"><?= $te('app.move_to') ?></span>
             <select id="move-category">
               <?php foreach ($categories as $category): ?>
-                <option value="<?= WebApp::h($category) ?>"<?= $category === $selCategory ? ' selected' : '' ?>><?= WebApp::h($category) ?></option>
+                <option value="<?= WebApp::h($category) ?>"<?= $category === $selCategory ? ' selected' : '' ?>><?= WebApp::h($categoryLabel($category)) ?></option>
               <?php endforeach; ?>
             </select>
           </label>

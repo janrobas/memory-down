@@ -949,10 +949,20 @@ available in **Slovenian, English and Italian** — and nothing follows from tha
 beyond the interface:
 
 - **The scope is the interface, not the data.** A translation changes what a page
-  says, never what is stored: memories, titles, tags, category names and workflow
-  definitions are served exactly as written, and the MCP tool descriptions and
-  server instructions stay English because agents read them. `/health`, the JSON
-  API payloads and the protocol error codes are untranslated by design.
+  says, never what is stored: memories, titles, tags and workflow definitions are
+  served exactly as written, and the MCP tool descriptions and server instructions
+  stay English because agents read them. `/health`, the JSON API payloads and the
+  protocol error codes are untranslated by design.
+- **A category has a translated name and an untranslated identity.** The twelve
+  built-in categories carry a display label per language (`category.*` in the
+  catalogues, `I18n\Categories` resolves it, with the slug as the fallback for a
+  folder somebody added by hand). The label is text and only text: the directory
+  name, `?category=` in URLs, the `category` argument of `/ui/api/*`, every
+  `data-*` attribute the editor compares against (the drop targets, the reserved
+  `executable` rule, `public` being a `writings` flag), the MCP tools, the
+  workflows API and the backup all keep the slug. Nothing may ever be *resolved*
+  from a label — there is no reverse map, and a custom category colliding with
+  one would make it ambiguous. The sidebar keeps slug order in every language.
 - **One cookie, no account state.** `memorydown_lang`, one year, `HttpOnly`,
   `SameSite=Lax`, `Secure` in production — the same policy as the session cookie.
   Resolution order: cookie, `Accept-Language`, `APP_DEFAULT_LOCALE` (default

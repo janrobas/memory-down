@@ -105,6 +105,24 @@ return [
     'definition.ok' => 'Un esecutore può eseguire questa definizione',
     'definition.refuse' => 'Un esecutore rifiuterebbe questa definizione',
 
+    /* ------------------------------------------------------------ categorie */
+    /* Solo nomi visualizzati. I nomi delle cartelle su disco restano slug
+       inglesi, ogni URL, argomento API e attributo `data-*` mantiene lo slug;
+       una categoria che non è qui (una cartella aggiunta a mano) viene mostrata
+       così com'è. */
+    'category.preferences' => 'Preferenze',
+    'category.projects' => 'Progetti',
+    'category.decisions' => 'Decisioni',
+    'category.workflows' => 'Workflow',
+    'category.ideas' => 'Idee',
+    'category.references' => 'Riferimenti',
+    'category.goals' => 'Obiettivi',
+    'category.facts' => 'Fatti',
+    'category.people' => 'Persone',
+    'category.context' => 'Contesto',
+    'category.notes' => 'Note',
+    'category.writings' => 'Pubblicazioni',
+
     /* -------------------------------------------------------------- accesso */
     'login.title' => 'Accedi',
     'login.tagline' => 'Accedi per sfogliare e modificare le tue memorie.',
@@ -295,7 +313,7 @@ return [
     'js.delete_failed' => 'Eliminazione non riuscita.',
     'js.move_failed' => 'Spostamento non riuscito.',
     'js.could_not_move' => 'Non è stato possibile spostare la memoria.',
-    'js.moved' => 'Spostata in {category}.',
+    'js.moved' => 'Spostata in: {category}.',
     'js.moved_to_trash' => 'Spostata nel cestino.',
     'js.delete_confirm' => 'Spostare questa memoria nel cestino? Puoi ripristinarla dal cestino finché non lo svuoti.',
     'js.preview_unavailable' => 'Anteprima non disponibile.',

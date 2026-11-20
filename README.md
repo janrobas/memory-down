@@ -321,9 +321,16 @@ and the OAuth consent page — is available in **Slovenian**, **English** and
 page, the consent page and `/about`, because those are pages a person meets
 before they have chosen anything).
 
-- **It is UI only.** No memory, tag, category or stored definition is ever
-  translated or rewritten, and the MCP tools and their descriptions stay
-  English: they are read by agents, not by people.
+- **It is UI only.** No memory, tag or stored definition is ever translated or
+  rewritten, and the MCP tools and their descriptions stay English: they are read
+  by agents, not by people. The one thing that gets a translated *name* is a
+  category — the twelve built-ins read "Nastavitve", "Zapiski", "Besedila" — but
+  that is a label and nothing else: the directory on disk, the `?category=` in a
+  URL, the `category` argument of every API call, the `data-*` attributes the
+  editor compares against, the MCP tools and the backup all keep the slug
+  (`preferences`, `notes`, `writings`). A category you added yourself has no
+  label and is shown exactly as it is stored. The sidebar keeps its order by
+  slug, so switching language never shuffles the list.
 - **Whose choice is it.** One cookie (`memorydown_lang`) per browser, so it works
   on the sign-in page too and needs no account. Resolution order: the cookie,
   then the browser's `Accept-Language`, then `APP_DEFAULT_LOCALE` (default

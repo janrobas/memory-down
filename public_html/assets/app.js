@@ -61,6 +61,24 @@
   }
 
   var csrf = shell.getAttribute('data-csrf') || '';
+
+  /* A category's display name. The slug is what the editor compares against, puts
+     in data-* attributes and sends to the API; this map is text only, built by the
+     server in the page's language, and an unknown category falls back to its slug. */
+  var CATEGORY_LABELS = (function () {
+    try {
+      return JSON.parse(shell.getAttribute('data-category-labels') || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  })();
+
+  function categoryLabel(category) {
+    var label = CATEGORY_LABELS[category];
+
+    return 'string' === typeof label && '' !== label ? label : category;
+  }
+
   var list = document.getElementById('list');
   var search = document.getElementById('search');
   var searchClear = document.getElementById('search-clear');
@@ -622,7 +640,7 @@
       var section = document.createElement('section');
       section.className = 'cat';
       section.setAttribute('data-category', group.name);
-      section.appendChild(sectionTitle(group.name, visible.length));
+      section.appendChild(sectionTitle(categoryLabel(group.name), visible.length));
       var ul = document.createElement('ul');
       visible.forEach(function (mem) {
         ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, public: !!mem.public, private: !!mem.private, new: !!mem.new }));
@@ -735,7 +753,7 @@
     section.setAttribute('data-draft', '1');
     var name = document.createElement('div');
     name.className = 'cat-name draft-name';
-    name.textContent = t('js.new_memory_in', { category: state.category });
+    name.textContent = t('js.new_memory_in', { category: categoryLabel(state.category) });
     section.appendChild(name);
     var ul = document.createElement('ul');
     ul.appendChild(memLink({
@@ -781,7 +799,7 @@
     if (!exists) {
       var opt = document.createElement('option');
       opt.value = category;
-      opt.textContent = category;
+      opt.textContent = categoryLabel(category);
       moveCategory.appendChild(opt);
     }
   }
@@ -883,7 +901,7 @@
   function updateBreadcrumb(category, id) {
     if (id) {
       breadcrumb.innerHTML = '';
-      breadcrumb.appendChild(document.createTextNode(category));
+      breadcrumb.appendChild(document.createTextNode(categoryLabel(category)));
       var sep = document.createElement('span');
       sep.className = 'sep';
       sep.textContent = '/';
@@ -1209,7 +1227,7 @@
               fillEditor(saved.data.memory, previewVisible() ? 'preview' : 'write', saved.data.definition);
               markSaved(currentPayload());
             }
-            setStatus(t('js.moved', { category: toCategory }), 'ok');
+            setStatus(t('js.moved', { category: categoryLabel(toCategory) }), 'ok');
             refreshTree();
           } else {
             setStatus(saved.data.error || t('js.move_failed'), 'err');

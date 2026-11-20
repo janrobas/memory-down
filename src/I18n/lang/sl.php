@@ -105,6 +105,23 @@ return [
     'definition.ok' => 'Izvajalec sme izvesti to definicijo',
     'definition.refuse' => 'Izvajalec bi to definicijo zavrnil',
 
+    /* ----------------------------------------------------------- kategorije */
+    /* Samo prikazna imena. Imena map na disku ostanejo angleški slugi, vsak
+       URL, argument API-ja in atribut `data-*` obdrži slug; kategorija, ki je tu
+       ni (mapa, ki jo je nekdo dodal ročno), se prikaže tako, kot je. */
+    'category.preferences' => 'Nastavitve',
+    'category.projects' => 'Projekti',
+    'category.decisions' => 'Odločitve',
+    'category.workflows' => 'Workflowi',
+    'category.ideas' => 'Ideje',
+    'category.references' => 'Reference',
+    'category.goals' => 'Cilji',
+    'category.facts' => 'Dejstva',
+    'category.people' => 'Ljudje',
+    'category.context' => 'Kontekst',
+    'category.notes' => 'Zapiski',
+    'category.writings' => 'Besedila',
+
     /* ----------------------------------------------------------- prijava */
     'login.title' => 'Prijava',
     'login.tagline' => 'Prijavi se za pregledovanje in urejanje svojih spominov.',
@@ -301,7 +318,7 @@ return [
     'js.delete_failed' => 'Brisanje ni uspelo.',
     'js.move_failed' => 'Premikanje ni uspelo.',
     'js.could_not_move' => 'Spomina ni bilo mogoče premakniti.',
-    'js.moved' => 'Premaknjeno v {category}.',
+    'js.moved' => 'Premaknjeno v: {category}.',
     'js.moved_to_trash' => 'Premaknjeno v koš.',
     'js.delete_confirm' => 'Premaknem ta spomin v koš? Obnoviš ga lahko iz koša, dokler ga ne izprazniš.',
     'js.preview_unavailable' => 'Predogled ni na voljo.',

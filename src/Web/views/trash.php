@@ -15,6 +15,7 @@
  * @var string $error
  * @var callable $te
  * @var callable $t
+ * @var callable $categoryLabel  slug => display name
  */
 $h = static fn (string $v): string => \MemoryDown\Web\WebApp::h($v);
 $size = static function (int $bytes): string {
@@ -48,7 +49,7 @@ $count = count($entries);
             <span class="trash-title"><?= $h($entry['id']) ?></span>
             <span class="muted">
               <?= $te('trash.meta', [
-                  'category' => $entry['category'],
+                  'category' => $categoryLabel((string) $entry['category']),
                   'date' => $entry['deleted_at'],
                   'size' => $size($entry['bytes']),
               ]) ?>

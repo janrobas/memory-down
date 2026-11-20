@@ -14,6 +14,18 @@ version lives in `config.php` (`app_version`).
 ## [Unreleased]
 
 ### Added
+- **Category names are translated in the interface — and only there.** The twelve
+  built-in categories read "Nastavitve", "Zapiski", "Besedila" in Slovenian
+  ("Preferenze", "Note", "Pubblicazioni" in Italian), in the sidebar, the chips,
+  the *Move to* picker, the breadcrumb and the trash list. The identity does not
+  move: the directory name, `?category=` in URLs, the `category` argument of
+  `/ui/api/*`, every `data-*` attribute the editor compares against (drop
+  targets, the reserved `executable` rule, `public` being a `writings` flag), the
+  MCP tools, the workflows API and the backup keep the slug — `I18n\Categories`
+  only ever produces text, and a category with no label (a folder added by hand)
+  is shown as it is stored. The sidebar keeps its order by slug, so switching
+  language never shuffles the list, and "moved to" reads "Premaknjeno v: Ideje"
+  so no label has to be declined.
 - **The admin UI speaks Slovenian, English and Italian.** The chooser sits in the
   ⋯ menu (and on the sign-in page, the OAuth consent page and `/about`, since
   those come before any preference exists), and the choice is remembered in one

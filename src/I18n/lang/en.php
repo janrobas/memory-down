@@ -119,6 +119,23 @@ return [
     'definition.ok' => 'A runner may execute this definition',
     'definition.refuse' => 'A runner would refuse this definition',
 
+    /* --------------------------------------------------------- categories */
+    /* Display names only. The directory names on disk stay English slugs, and
+       every URL, API argument and `data-*` attribute keeps the slug; a category
+       with no entry here (a folder somebody added by hand) is shown as it is. */
+    'category.preferences' => 'Preferences',
+    'category.projects' => 'Projects',
+    'category.decisions' => 'Decisions',
+    'category.workflows' => 'Workflows',
+    'category.ideas' => 'Ideas',
+    'category.references' => 'References',
+    'category.goals' => 'Goals',
+    'category.facts' => 'Facts',
+    'category.people' => 'People',
+    'category.context' => 'Context',
+    'category.notes' => 'Notes',
+    'category.writings' => 'Writings',
+
     /* -------------------------------------------------------------- login */
     'login.title' => 'Sign in',
     'login.tagline' => 'Sign in to browse and edit your memories.',
@@ -309,7 +326,7 @@ return [
     'js.delete_failed' => 'Delete failed.',
     'js.move_failed' => 'Move failed.',
     'js.could_not_move' => 'Could not move memory.',
-    'js.moved' => 'Moved to {category}.',
+    'js.moved' => 'Moved to: {category}.',
     'js.moved_to_trash' => 'Moved to the trash.',
     'js.delete_confirm' => 'Move this memory to the trash? You can restore it from the trash until you empty it.',
     'js.preview_unavailable' => 'Preview unavailable.',
