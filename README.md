@@ -73,6 +73,11 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Deletes are recoverable:** anything deleted — in the UI or by an agent — goes
   to a `.trash/` folder instead of vanishing, and can be restored until you empty
   it. Deleting an *account* moves its whole directory aside the same way.
+- **Private entries:** any memory can be marked **Private** in the editor — hidden
+  from every AI-facing reader (all MCP tools on both connectors, the writings API,
+  the workflows API) while staying a normal Markdown file in your own UI, backup
+  and Obsidian. Only you can set or lift it; agents cannot see such an entry, not
+  even by id. Search it in the UI with `is:private`.
 - **One-click backup** at `/ui/backup`: every Markdown file of one account as a
   zip, with no credentials in it; an admin can download any account's.
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`, with a human
@@ -702,6 +707,12 @@ and whether MCP session storage is writable.
   Account ids get the same treatment, because an id is a directory name.
 - `writings` is read-only through MCP: the write tools refuse to create, edit,
   move into or delete entries in that category.
+- **Private entries are hidden from AI, not encrypted.** `private: true` keeps an
+  entry out of every MCP tool (including the admin connector), out of
+  `/public/writings` even if it is also `public`, and out of `/api/workflows`. Only
+  the admin UI can set or lift the flag. The file is still plain Markdown on disk,
+  so it is readable in Obsidian, in the backup zip and by anyone with filesystem
+  access.
 - The `executable` tag is reserved and human-only: it can only be added in the
   admin UI, and `remember`, `update_memory` and `forget_memory` refuse to touch
   any entry that carries it. A workflow definition cannot be created, rewritten,

@@ -85,6 +85,8 @@ final class MemoryTools
                 . 'Tags are freeform EXCEPT the reserved tag "executable", which is rejected here: it marks a '
                 . 'workflow definition and can only be added by the user in the admin UI, because a workflow '
                 . 'that a runner executes must be authorised by a human, not by an agent.'
+                . ' Entries the user marked PRIVATE are not part of this corpus either: they are never found, '
+                . 'never updated, and a duplicate of one is therefore created as a new entry.'
                 . $this->scopeNote('Writes go to the account named by "owner".'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
@@ -260,7 +262,9 @@ final class MemoryTools
                 . 'Results never carry the body, only a SHORT SNIPPET of it and its size in "chars": call '
                 . 'read_memory with the returned id to read an entry in full. '
                 . 'Archived memories are included but ranked after active ones; pass archived="active" to '
-                . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".'
+                . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active". '
+                . 'Entries the user marked PRIVATE are not searchable here at all: if the user refers to a '
+                . 'memory you cannot find, ask whether it is private.'
                 . $this->scopeNote('Without "owner" it searches every account at once and each result names the account it came from.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
@@ -334,6 +338,7 @@ final class MemoryTools
                 . 'before changing it, or to append to / edit part of it. The whole body is returned by '
                 . 'default; pass offset and max_chars to page through a very long entry. Reading is always '
                 . 'allowed, including entries in the read-only "writings" category.'
+                . ' An entry the user marked PRIVATE is not available through MCP at all.'
                 . $this->scopeNote('Ids are unique across accounts, so "owner" is only needed when the same id exists in more than one.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
@@ -368,6 +373,9 @@ final class MemoryTools
                 $doc = $store->read($hit['category'], $reference['id']);
                 if (null === $doc) {
                     return self::fail("No memory entry found with id {$reference['id']}.");
+                }
+                if (!empty($doc['private'])) {
+                    return self::failPrivate();
                 }
 
                 $body = (string) ($doc['body'] ?? '');
@@ -420,6 +428,7 @@ final class MemoryTools
                 . 'entry that already carries it (a workflow definition the user authorised) is read-only '
                 . 'through MCP: it cannot be edited, archived or moved, only read — ask the user to change it '
                 . 'in the admin UI.'
+                . ' An entry the user marked PRIVATE cannot be changed here either.'
                 . $this->scopeNote('"owner" only says where to find the entry: an entry cannot be moved between accounts.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
@@ -487,6 +496,9 @@ final class MemoryTools
                 if (null === $current) {
                     return self::fail("No memory entry found with id {$id}.");
                 }
+                if (!empty($current['private'])) {
+                    return self::failPrivate();
+                }
                 $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
                 if ('' !== $reserved) {
                     return self::failHumanOnlyTag($reserved, 'this memory cannot be changed here.');
@@ -518,6 +530,7 @@ final class MemoryTools
                 . 'Entries in the "writings" category are read-only through MCP and cannot be deleted here. '
                 . 'An entry carrying the reserved tag "executable" (a workflow definition) cannot be deleted '
                 . 'here either — deleting an authorised workflow is the user\'s call in the admin UI.'
+                . ' An entry the user marked PRIVATE cannot be deleted here.'
                 . $this->scopeNote('A deleted entry goes to that account\'s own trash, where only its owner can restore it.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
@@ -548,6 +561,9 @@ final class MemoryTools
                 $current = $store->read($hit['category'], $id);
                 if (null === $current) {
                     return self::fail("No memory entry found with id {$id}.");
+                }
+                if (!empty($current['private'])) {
+                    return self::failPrivate();
                 }
                 $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
                 if ('' !== $reserved) {
@@ -584,6 +600,7 @@ final class MemoryTools
                 . 'with read_memory to read one entry in full. '
                 . 'With no category all categories are listed. Archived memories are included but listed '
                 . 'after active ones; pass archived="active" to exclude them.'
+                . ' Entries the user marked PRIVATE are never listed, and are not counted in "total".'
                 . $this->scopeNote('Without "owner" it lists every account at once and reports how many entries each holds.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
@@ -978,6 +995,23 @@ final class MemoryTools
         }
 
         return rtrim($m[0]);
+    }
+
+    /**
+     * Refuse an operation on an entry the user marked private.
+     *
+     * Private is the one flag that is defined by its absence: the entry is left
+     * out of search, recall and list, and this is the other half of that
+     * promise — an id that was shared once (or guessed) cannot be used to read
+     * or change the content anyway. Like the reserved `executable` tag, only the
+     * user can lift it, in the admin UI.
+     */
+    private static function failPrivate(): CallToolResult
+    {
+        return self::fail(
+            'This memory is private: the user marked it as hidden from AI, so it is not available through '
+            . 'MCP at all. It can only be read or changed in the admin UI.'
+        );
     }
 
     /**

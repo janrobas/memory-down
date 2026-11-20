@@ -742,7 +742,8 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
 
 .mem .badge-new,
 .mem .badge-archived,
-.mem .badge-public { flex: 0 0 auto; }
+.mem .badge-public,
+.mem .badge-private { flex: 0 0 auto; }
 
 .mem:hover { background: var(--bg); }
 .mem.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
@@ -808,6 +809,24 @@ body.resizing .sidebar-resizer { background: var(--accent-weak); }
   background: var(--accent);
   border: 1px solid var(--accent);
   color: var(--accent-contrast);
+  vertical-align: middle;
+}
+
+/* Private: the strongest state an entry can carry — it is the one that removes
+   it from what an AI may read. A dashed pill reads as a boundary rather than as
+   another accent colour. */
+.mem .badge-private {
+  display: inline-block;
+  margin-left: .4rem;
+  padding: 0 .35rem;
+  font-size: .62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px dashed var(--muted);
+  color: var(--muted);
   vertical-align: middle;
 }
 

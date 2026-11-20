@@ -207,7 +207,7 @@ final class App
         foreach ($kernel->users->ids() as $id) {
             $services = $kernel->userServices->for($id);
             $memory = $kernel->userPaths->memory($id);
-            $entries += $services->memory->count();
+            $entries += $services->memory->count(true);
             $trashed += $services->memory->trashCount();
             $memoryWritable = $memoryWritable && is_writable($memory);
             $trashWritable = $trashWritable && is_writable($memory . '/' . \MemoryDown\Memory\PathValidator::TRASH_DIR);

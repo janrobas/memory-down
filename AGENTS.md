@@ -476,6 +476,38 @@ It marks a workflow definition (see `docs/WORKFLOWS.md`), can only be set in the
 admin UI, and makes the entry read-only through MCP. It is the only tag with
 enforced meaning; everything above still holds for every other tag.
 
+### Private entries (the owner's memory the AI may not read)
+
+An entry may carry `private: true` in its frontmatter. It is a **state**, not a
+tag, because it has to survive tag edits and cannot be lost by accident.
+
+- **It is the one thing MCP cannot reach.** Private entries never appear in
+  `search_memory`, `recall` or `list_memory`, are not counted, and
+  `read_memory` / `update_memory` / `forget_memory` refuse them by id. The same
+  holds on the admin connector `/mcp/all`: an administrator's second connection
+  sees every *enabled account*, never anybody's private entries.
+- **Only the human sets it, only in the admin UI.** The MCP tools have no field
+  for it, `remember` cannot create one, and no agent can lift it. Like the
+  reserved `executable` tag, it is a boundary the model cannot move.
+- **Hidden everywhere an agent reads**, which is more than MCP: `/public/writings`
+  withholds a private writing even if `public: true` (privacy wins, checked again
+  at read time because the Markdown can be edited by hand), and `/api/workflows`
+  withholds a private definition. `private` + `executable` is **refused** rather
+  than honoured: a runner reads its definitions over that API, so a hidden one
+  could never run — a silent failure instead of an error.
+- **`private` and `public` are mutually exclusive.** Publishing serves an entry to
+  a website; privacy keeps it away from AI. Both at once is refused with a reason
+  instead of silently picking one.
+- **Default hidden, everywhere.** `MemoryStore::list()`/`count()` and both search
+  engines exclude private entries unless asked (`includePrivate`), so a caller
+  that forgets to think about it hides rather than leaks. Only the admin UI — the
+  owner's own view — asks, and it shows them with a lock badge and finds them with
+  `is:private`.
+- **It is not encryption.** The file is Markdown on disk: readable in Obsidian, in
+  the backup zip and over FTP. The UI says so where the switch is.
+- **Dedupe ignores them**: `remember` cannot silently rewrite a hidden entry; it
+  creates a new one, and says so in its description.
+
 ---
 
 ## Search architecture

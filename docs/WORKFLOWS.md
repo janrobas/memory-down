@@ -35,6 +35,7 @@ definicijo: **navodila v naravnem jeziku niso dovoljenje za izvajanje.**
 | --- | --- | --- |
 | klasifikacija zapisa (oznaka `executable`) | frontmatter v Markdownu | **samo človek v admin UI** |
 | pavza / arhiviranost | frontmatter (`archived`) | **samo človek v admin UI** (za zapis z oznako) |
+| vidnost za AI (`private`) | frontmatter (`private`) | **samo človek v admin UI**; definicija z oznako `executable` **ne more** biti privatna, ker je izvajalec ne bi videl |
 | operativna konfiguracija | **telo** dokumenta (fenced `yaml` blok) | samo človek v admin UI (zapis z oznako je prek MCP samo za branje) |
 | navodila | **telo** dokumenta, v naravnem jeziku | isto |
 | kdaj se je izvedlo, kaj je bilo predlagano/odobreno | SQLite izvajalca | izvajalec |

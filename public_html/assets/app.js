@@ -38,6 +38,7 @@
   var fTags = document.getElementById('f-tags');
   var fArchived = document.getElementById('f-archived');
   var fPublic = document.getElementById('f-public');
+  var fPrivate = document.getElementById('f-private');
   var publicField = document.getElementById('public-field');
   var fContent = document.getElementById('f-content');
   var deleteBtn = document.getElementById('delete');
@@ -422,7 +423,7 @@
   /* ------------------------------------------------------- editor state */
 
   // Snapshot of what's currently persisted, used to detect unsaved changes.
-  var saved = { id: '', title: '', category: '', tags: '', archived: false, public: false, content: '' };
+  var saved = { id: '', title: '', category: '', tags: '', archived: false, public: false, private: false, content: '' };
   var saving = false;
   var queuedSave = null;
 
@@ -434,6 +435,7 @@
       tags: fTags.value,
       archived: !!fArchived.checked,
       public: !!fPublic.checked,
+      private: !!fPrivate.checked,
       content: fContent.value
     };
   }
@@ -446,6 +448,7 @@
       || p.tags !== saved.tags
       || p.archived !== saved.archived
       || p.public !== saved.public
+      || p.private !== saved.private
       || p.content !== saved.content;
   }
 
@@ -457,6 +460,7 @@
       tags: payload.tags,
       archived: !!payload.archived,
       public: !!payload.public,
+      private: !!payload.private,
       content: payload.content
     };
   }
@@ -471,10 +475,13 @@
   function memLink(item) {
     var li = document.createElement('li');
     var a = document.createElement('a');
-    // A single status badge, by priority: archived > public > new.
-    var kind = item.archived ? 'archived' : (item.public ? 'public' : (item.new ? 'new' : ''));
+    // A single status badge, by priority: private > archived > public > new.
+    // Private outranks the rest because it is the state that decides whether any
+    // AI can see the entry at all.
+    var kind = item.private ? 'private' : (item.archived ? 'archived' : (item.public ? 'public' : (item.new ? 'new' : '')));
     a.className = 'mem'
       + (item.archived ? ' archived' : '')
+      + (item.private ? ' private-entry' : '')
       + ('new' === kind ? ' new' : '')
       + (item.snippet ? ' has-snippet' : '');
     a.href = '/ui?category=' + encodeURIComponent(item.category) + '&id=' + encodeURIComponent(item.id);
@@ -584,7 +591,7 @@
       section.appendChild(sectionTitle(group.name, visible.length));
       var ul = document.createElement('ul');
       visible.forEach(function (mem) {
-        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, public: !!mem.public, new: !!mem.new }));
+        ul.appendChild(memLink({ id: mem.id, category: group.name, title: mem.title, archived: !!mem.archived, public: !!mem.public, private: !!mem.private, new: !!mem.new }));
       });
       section.appendChild(ul);
       list.appendChild(section);
@@ -623,7 +630,7 @@
     section.appendChild(sectionTitle('Results', results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
-      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, public: !!item.public, new: !!item.new, snippet: item.snippet, query: query }));
+      ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, public: !!item.public, private: !!item.private, new: !!item.new, snippet: item.snippet, query: query }));
     });
     section.appendChild(ul);
     list.appendChild(section);
@@ -667,14 +674,14 @@
     // tree applies to its rows.
     if (filterMode === 'archived') { return null; }
 
-    return { category: fCategory.value, title: fTitle.value.trim() };
+    return { category: fCategory.value, title: fTitle.value.trim(), private: !!fPrivate.checked };
   }
 
   function sameDraft(a, b) {
     if (a === b) { return true; }
     if (!a || !b) { return false; }
 
-    return a.category === b.category && a.title === b.title;
+    return a.category === b.category && a.title === b.title && !!a.private === !!b.private;
   }
 
   function renderDraftRow() {
@@ -701,6 +708,7 @@
       id: '',
       category: state.category,
       title: state.title || 'New memory',
+      private: !!state.private,
       new: true
     }));
     section.appendChild(ul);
@@ -921,6 +929,7 @@
     syncTagChips();
     fArchived.checked = !!doc.archived;
     fPublic.checked = !!doc.public;
+    fPrivate.checked = !!doc.private;
     setValuePreservingCaret(fContent, doc.body || '');
     syncCategoryUI(doc.category);
     deleteBtn.disabled = false;
@@ -938,6 +947,7 @@
       tags: fTags.value,
       archived: fArchived.checked,
       public: fPublic.checked,
+      private: fPrivate.checked,
       content: fContent.value
     });
     setStatus('');
@@ -991,6 +1001,7 @@
     syncTagChips();
     fArchived.checked = false;
     fPublic.checked = false;
+    fPrivate.checked = false;
     fContent.value = '';
     templateUntouched = false;
     renderDefinition(null);
@@ -1005,7 +1016,7 @@
     resetTabs();
     // The body is read (not assumed empty) because selecting `workflows` may have
     // just pre-filled the template in the line above.
-    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, public: false, content: fContent.value });
+    snapshot({ id: '', title: '', category: fCategory.value, tags: '', archived: false, public: false, private: false, content: fContent.value });
     setStatus('');
     fTitle.focus();
   }
@@ -1049,9 +1060,17 @@
         // would make the next save fail.
         if (res.data.memory.id !== payload.id) {
           adoptSavedIdentity(res.data.memory);
+          // The snapshot below is the payload that was sent, so it has to carry
+          // the id the server assigned — otherwise the editor would believe it
+          // is still unsaved and autosave forever.
+          payload.id = res.data.memory.id;
         }
         renderDefinition(res.data.definition);
-        markSaved(currentPayload());
+        // Mark exactly what was sent, not what the DOM holds now: a checkbox
+        // clicked while this request was in flight (Archived, Public, Private)
+        // must stay dirty so the next save carries it. Snapshotting the live DOM
+        // here would declare that change saved when it never reached the server.
+        markSaved(payload);
         refreshTree();
         return true;
       }
@@ -1548,6 +1567,19 @@
     });
   }
 
+  // The reserved workflow tag, read from the chip that carries it (the server is
+  // the authority on which tag it is; the UI only mirrors it).
+  function reservedWorkflowTag() {
+    var chip = tagSuggest ? tagSuggest.querySelector('.tag-chip-reserved') : null;
+    return chip ? (chip.getAttribute('data-tag') || '') : '';
+  }
+
+  function hasWorkflowTag() {
+    var reserved = reservedWorkflowTag().toLowerCase();
+    if ('' === reserved) { return false; }
+    return readTags().some(function (t) { return t.toLowerCase() === reserved; });
+  }
+
   function wireTagChips() {
     if (!tagSuggest) { return; }
     tagSuggest.addEventListener('click', function (event) {
@@ -1558,6 +1590,14 @@
       var list = readTags();
       var idx = -1;
       list.forEach(function (t, i) { if (t.toLowerCase() === tag.toLowerCase()) { idx = i; } });
+      // Activating the reserved tag on a private entry is refused rather than
+      // lifting the privacy: a workflow the runner must read cannot be hidden,
+      // and making an entry visible again is never something a click should do
+      // silently. The admin API refuses the same combination.
+      if (idx < 0 && chip.classList.contains('tag-chip-reserved') && fPrivate.checked) {
+        setStatus('Remove "Private" first: a workflow the runner must read cannot be hidden from it.', 'err');
+        return;
+      }
       if (idx >= 0) { list.splice(idx, 1); } else { list.push(tag); }
       writeTags(list);
       syncTagChips();
@@ -1689,9 +1729,26 @@
     });
   }
 
-  /* Archive / publish toggles: saved immediately (discrete actions). */
+  /* Archive / publish / private toggles: saved immediately (discrete actions). */
   fArchived.addEventListener('change', saveNow);
-  fPublic.addEventListener('change', saveNow);
+  fPublic.addEventListener('change', function () {
+    // Public serves the entry to the writings API; private keeps it away from AI.
+    // They describe the same entry in opposite directions, so one lifts the other.
+    if (fPublic.checked && fPrivate.checked) { fPrivate.checked = false; }
+    saveNow();
+  });
+  fPrivate.addEventListener('change', function () {
+    if (!fPrivate.checked) { saveNow(); return; }
+    // Refused, not silently resolved: activating a hidden workflow is the one
+    // combination the server also refuses.
+    if (hasWorkflowTag()) {
+      fPrivate.checked = false;
+      setStatus('Remove the "' + reservedWorkflowTag() + '" tag before making this entry private.', 'err');
+      return;
+    }
+    if (fPublic.checked) { fPublic.checked = false; }
+    saveNow();
+  });
 
   /* Write / Preview tabs. Clicking one remembers the choice as a preference. */
   Array.prototype.forEach.call(tabs, function (tab) {

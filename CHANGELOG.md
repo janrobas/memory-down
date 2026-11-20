@@ -14,6 +14,19 @@ version lives in `config.php` (`app_version`).
 ## [Unreleased]
 
 ### Added
+- **Private entries.** Any memory can be marked *Private* in the editor (a
+  checkbox beside Archived/Public) and is then invisible to every AI-facing
+  reader: `search_memory`, `recall`, `list_memory`, `read_memory`,
+  `update_memory` and `forget_memory` never see it — on `/mcp` and on the admin
+  connector `/mcp/all` alike — and `/public/writings` and `/api/workflows`
+  withhold it too. Only the human can set or lift it; the MCP tools have no field
+  for it and refuse a private entry by id. The store and both search engines
+  exclude private entries by default (`includePrivate`), so forgetting to think
+  about it hides rather than leaks; the UI shows them with a `private` badge,
+  finds them with `is:private`, and offers the switch on every entry. `private` +
+  `public` and `private` + the reserved `executable` tag are refused with a
+  reason. Not encryption: the Markdown file stays readable in Obsidian, the
+  backup and over FTP, and the UI says so.
 - An **admin MCP connector** at `/mcp/all`: the same seven tools, over every
   enabled account at once. Each tool gains an `owner` argument — reads search one
   account or all of them, writes go to `owner` (default: your own account) — and

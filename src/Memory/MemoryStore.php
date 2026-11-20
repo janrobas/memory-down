@@ -125,6 +125,7 @@ final class MemoryStore
         string $id = '',
         bool $archived = false,
         bool $public = false,
+        bool $private = false,
     ): array {
         $category = self::normalizeCategory($category);
         $dir = $this->paths->categoryDir($category);
@@ -158,6 +159,9 @@ final class MemoryStore
         }
         if ($public) {
             $frontmatter['public'] = true;
+        }
+        if ($private) {
+            $frontmatter['private'] = true;
         }
         $body = self::bodyWithTitle($title, $content);
         $raw = Frontmatter::render($frontmatter) . "\n\n" . $body . "\n";
@@ -303,7 +307,7 @@ final class MemoryStore
      * tool result, a published writing's URL, a runner's `category/id`). See
      * {@see idForTitle()} for when a rename is actually applied.
      *
-     * @param array{content?: string, title?: string, tags?: string[], category?: string, archived?: bool} $changes
+     * @param array{content?: string, title?: string, tags?: string[], category?: string, archived?: bool, public?: bool, private?: bool} $changes
      *
      * @return array<string, mixed>
      */
@@ -326,6 +330,13 @@ final class MemoryStore
         $nextPublic = array_key_exists('public', $changes)
             ? (bool) $changes['public']
             : (bool) ($current['public'] ?? false);
+        // Privacy is preserved the same way, and deliberately stricter: an
+        // agent's update never carries `private`, so a private entry can never be
+        // made visible (or, for that matter, private) through MCP. Only the admin
+        // UI sends this key. See MemoryTools for the refusals.
+        $nextPrivate = array_key_exists('private', $changes)
+            ? (bool) $changes['private']
+            : (bool) ($current['private'] ?? false);
 
         $dir = $this->paths->categoryDir($nextCategory);
         if (null === $dir) {
@@ -365,6 +376,9 @@ final class MemoryStore
         }
         if ($nextPublic) {
             $frontmatter['public'] = true;
+        }
+        if ($nextPrivate) {
+            $frontmatter['private'] = true;
         }
         $raw = Frontmatter::render($frontmatter) . "\n\n" . self::bodyWithTitle($nextTitle, $nextContent) . "\n";
 
@@ -704,9 +718,14 @@ final class MemoryStore
      * List entries, active first then newest first. Optionally restrict to a
      * single archived state and/or a tag (exact, case-insensitive).
      *
+     * Private entries are left out unless $includePrivate is true, and that is
+     * the whole safety mechanism of `private`: every caller that serves memory
+     * to an AI (the MCP tools, the search engines, the read-only APIs) uses the
+     * default, and only the admin UI — the owner's own view — asks for them.
+     *
      * @return list<array<string, mixed>>
      */
-    public function list(?string $category = null, int $limit = 50, ?bool $archived = null, ?string $tag = null, ?bool $public = null): array
+    public function list(?string $category = null, int $limit = 50, ?bool $archived = null, ?string $tag = null, ?bool $public = null, bool $includePrivate = false): array
     {
         $tag = null !== $tag ? strtolower(trim($tag)) : null;
         $docs = [];
@@ -720,6 +739,9 @@ final class MemoryStore
             $id = substr($relParts[1], 0, -3);
             $doc = $this->read($cat, $id);
             if (null === $doc) {
+                continue;
+            }
+            if (!$includePrivate && !empty($doc['private'])) {
                 continue;
             }
             if (null !== $archived && (bool) $doc['archived'] !== $archived) {
@@ -786,9 +808,18 @@ final class MemoryStore
         return $files;
     }
 
-    public function count(): int
+    /**
+     * How many entries the corpus holds. Private entries are excluded unless
+     * asked for, mirroring {@see list()} — an agent-facing count must not
+     * reveal entries an agent may not read.
+     */
+    public function count(bool $includePrivate = false): int
     {
-        return count($this->collectFiles());
+        if ($includePrivate) {
+            return count($this->collectFiles());
+        }
+
+        return count($this->list(null, PHP_INT_MAX));
     }
 
     /**
@@ -984,6 +1015,11 @@ final class MemoryStore
             'source' => isset($fm['source']) && is_string($fm['source']) ? $fm['source'] : 'unknown',
             'archived' => filter_var($fm['archived'] ?? false, FILTER_VALIDATE_BOOL),
             'public' => filter_var($fm['public'] ?? false, FILTER_VALIDATE_BOOL),
+            // `private` means "not part of the corpus an AI may read". It is not
+            // encryption: the Markdown file is on disk, in the backup and in
+            // Obsidian exactly as written. Everything that hands memory to an
+            // agent filters on this flag, and the default is "hidden".
+            'private' => filter_var($fm['private'] ?? false, FILTER_VALIDATE_BOOL),
             'body' => $body,
         ];
     }

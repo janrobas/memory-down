@@ -3039,6 +3039,171 @@ $r = request('POST', '/ui/logout', $form([]), http_build_query(['csrf' => $signO
 check('admin connector: signing out afterwards works', 302 === $r['status'], (string) $r['status']);
 
 /* ------------------------------------------------------------------ *
+ *  Private memories: the owner's UI sees them, every AI-facing reader not
+ * ------------------------------------------------------------------ */
+
+section('Private memories (hidden from AI)');
+
+// Back in as the admin (the admin connector section signed out).
+$r = request('GET', '/ui/login');
+preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $privLoginMatch);
+$r = request('POST', '/ui/login', $form([]), http_build_query([
+    'csrf' => $privLoginMatch[1] ?? '', 'username' => 'test-user', 'password' => 'a-new-admin-password',
+]));
+check('private: the admin signs in', 302 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $privAdminMatch);
+$apiCsrf = $privAdminMatch[1] ?? '';
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'notes',
+    'title' => 'Private diary',
+    'content' => 'Nobody may read this through MCP.',
+    'tags' => ['personal'],
+    'private' => true,
+]));
+$privateDoc = jsonBody($r['body'])['memory'] ?? [];
+$privateId = (string) ($privateDoc['id'] ?? '');
+$privateFile = $memoryRoot . '/notes/' . $privateId . '.md';
+check('private: the editor saves it', '' !== $privateId, $r['body']);
+check('private: the response says it is private', true === ($privateDoc['private'] ?? null), $r['body']);
+check('private: the frontmatter carries it', str_contains((string) @file_get_contents($privateFile), 'private: true'), (string) @file_get_contents($privateFile));
+
+$r = request('GET', '/ui?category=notes&id=' . rawurlencode($privateId));
+check('private: the sidebar shows a private badge', str_contains($r['body'], 'class="badge-private"'), '');
+check('private: the editor offers the switch', str_contains($r['body'], 'id="f-private"') && str_contains($r['body'], 'name="private"'), '');
+
+$r = request('GET', '/ui/api/tree');
+$treeDoc = null;
+foreach (jsonBody($r['body'])['categories'] ?? [] as $group) {
+    foreach ($group['memories'] ?? [] as $mem) {
+        if (($mem['id'] ?? '') === $privateId) {
+            $treeDoc = $mem;
+        }
+    }
+}
+check('private: the tree carries it, flagged as private', is_array($treeDoc) && true === ($treeDoc['private'] ?? null), json_encode($treeDoc));
+
+$r = request('GET', '/ui/api/search?q=' . rawurlencode('nobody may read'));
+$privFound = array_values(array_filter(jsonBody($r['body'])['results'] ?? [], static fn (array $f): bool => ($f['id'] ?? '') === $privateId));
+check('private: the owner\'s search finds it', 1 === count($privFound), json_encode(jsonBody($r['body'])['results'] ?? []));
+check('private: and flags it', true === ($privFound[0]['private'] ?? null), json_encode($privFound[0] ?? null));
+
+// --- Through MCP: no connector sees it, not even the admin one.
+$privMcp = $issueToken('test-user', 'a-new-admin-password', $base . '/mcp');
+$privAuth = [
+    'Authorization' => 'Bearer ' . (string) ($privMcp['access_token'] ?? ''),
+    'Content-Type' => 'application/json',
+    'Accept' => 'application/json, text/event-stream',
+];
+$r = request('POST', '/mcp', $privAuth, $body);
+$privSession = $privAuth + ['Mcp-Session-Id' => $r['headers']['mcp-session-id'] ?? ''];
+
+$r = request('POST', '/mcp', $privSession, '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"nobody may read"}}}');
+check('private: /mcp does not find it', !in_array($privateId, array_column(toolResult(jsonBody($r['body']))['results'] ?? [], 'id'), true), $r['body']);
+$r = request('POST', '/mcp', $privSession, '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_memory","arguments":{"limit":200}}}');
+check('private: /mcp does not list it', !str_contains($r['body'], $privateId), $r['body']);
+
+$r = request('POST', '/mcp', $privSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 4, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $privateId]],
+]));
+check('private: /mcp refuses to read it by id', true === (jsonBody($r['body'])['result']['isError'] ?? false) && str_contains(strtolower($r['body']), 'private'), $r['body']);
+
+$r = request('POST', '/mcp', $privSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 5, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => ['id' => $privateId, 'content' => 'Rewritten.']],
+]));
+check('private: /mcp refuses to update it', true === (jsonBody($r['body'])['result']['isError'] ?? false), $r['body']);
+
+$r = request('POST', '/mcp', $privSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 6, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $privateId]],
+]));
+check('private: /mcp refuses to delete it', true === (jsonBody($r['body'])['result']['isError'] ?? false), $r['body']);
+clearstatcache(true, $privateFile);
+check('private: the file is still there', is_file($privateFile) && str_contains((string) @file_get_contents($privateFile), 'Nobody may read'), '');
+
+// The admin connector sees every account — and still not this.
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"nobody may read"}}}');
+check('private: /mcp/all does not find it either', !in_array($privateId, array_column(toolResult(jsonBody($r['body']))['results'] ?? [], 'id'), true), $r['body']);
+$r = request('POST', '/mcp/all', $allSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call',
+    'params' => ['name' => 'read_memory', 'arguments' => ['id' => $privateId]],
+]));
+check('private: /mcp/all refuses it by id too', true === (jsonBody($r['body'])['result']['isError'] ?? false), $r['body']);
+
+// --- Lifting the flag makes it visible to agents again.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $privateId,
+    'category' => 'notes',
+    'title' => 'Private diary',
+    'content' => 'Nobody may read this through MCP.',
+    'tags' => ['personal'],
+    'private' => false,
+]));
+check('private: the flag can be lifted in the editor', false === (jsonBody($r['body'])['memory']['private'] ?? null), $r['body']);
+$r = request('POST', '/mcp', $privSession, '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"nobody may read"}}}');
+check('private: and /mcp finds it again', in_array($privateId, array_column(toolResult(jsonBody($r['body']))['results'] ?? [], 'id'), true), $r['body']);
+// Put it back, for the API checks below to have something hidden.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'id' => $privateId,
+    'category' => 'notes',
+    'title' => 'Private diary',
+    'content' => 'Nobody may read this through MCP.',
+    'tags' => ['personal'],
+    'private' => true,
+]));
+check('private: and it can be hidden again', true === (jsonBody($r['body'])['memory']['private'] ?? null), $r['body']);
+
+// --- The two read-only APIs answer as if a private entry did not exist.
+$mixedId = 'mixed-visibility-abcdef';
+@mkdir($memoryRoot . '/writings', 0775, true);
+@file_put_contents(
+    $memoryRoot . '/writings/' . $mixedId . '.md',
+    "---\ntype: writings\ntags:\ncreated: 2026-11-20T10:00:00Z\nupdated: 2026-11-20T10:00:00Z\nsource: admin\nid: {$mixedId}\npublic: true\nprivate: true\n---\n\n# Mixed\n\nThis must not be published.\n"
+);
+$r = request('POST', '/ui/settings/token', $form([]), http_build_query(['csrf' => $apiCsrf, 'kind' => 'writings', 'action' => 'rotate']));
+check('private: a fresh writings token', 302 === $r['status'], (string) $r['status']);
+$authStore = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+$freshWritings = (string) ($authStore['test-user']['tokens']['writings'] ?? '');
+$r = request('GET', '/public/writings', ['Authorization' => 'Bearer ' . $freshWritings]);
+check('private: a public+private writing is not listed', 200 === $r['status'] && !str_contains($r['body'], $mixedId), $r['body']);
+$r = request('GET', '/public/writings/' . $mixedId, ['Authorization' => 'Bearer ' . $freshWritings]);
+check('private: nor served by id', 404 === $r['status'], (string) $r['status']);
+
+$hiddenWorkflowId = 'hidden-workflow-abcdef';
+@mkdir($memoryRoot . '/workflows', 0775, true);
+@file_put_contents(
+    $memoryRoot . '/workflows/' . $hiddenWorkflowId . '.md',
+    "---\ntype: workflows\ntags:\n  - executable\ncreated: 2026-11-20T10:00:00Z\nupdated: 2026-11-20T10:00:00Z\nsource: admin\nid: {$hiddenWorkflowId}\nprivate: true\n---\n\n# Hidden workflow\n\n```yaml\nmode: dry-run\nschedule: \"0 8 * * *\"\ntimezone: Europe/Ljubljana\nallowed_tools: []\n```\n\nSay hello.\n"
+);
+$r = request('POST', '/ui/settings/token', $form([]), http_build_query(['csrf' => $apiCsrf, 'kind' => 'workflows', 'action' => 'rotate']));
+check('private: a fresh workflows token', 302 === $r['status'], (string) $r['status']);
+$authStore = json_decode((string) @file_get_contents($tmp . '/auth/users.json'), true);
+$freshWorkflows = (string) ($authStore['test-user']['tokens']['workflows'] ?? '');
+$r = request('GET', '/api/workflows', ['Authorization' => 'Bearer ' . $freshWorkflows]);
+check('private: a private definition is not listed', 200 === $r['status'] && !str_contains($r['body'], $hiddenWorkflowId), $r['body']);
+$r = request('GET', '/api/workflows/' . $hiddenWorkflowId, ['Authorization' => 'Bearer ' . $freshWorkflows]);
+check('private: nor served by id', 404 === $r['status'], (string) $r['status']);
+
+// --- The editor refuses the two combinations that would break a promise.
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'workflows', 'title' => 'Both at once', 'content' => 'Body.', 'tags' => ['executable'], 'private' => true,
+]));
+check('private: the API refuses private + executable', 400 === $r['status'] && str_contains($r['body'], 'cannot be private'), $r['body']);
+
+$r = request('POST', '/ui/api/memory', ['Content-Type' => 'application/json', 'X-CSRF-Token' => $apiCsrf], json_encode([
+    'category' => 'writings', 'title' => 'Published and hidden', 'content' => 'Body.', 'public' => true, 'private' => true,
+]));
+check('private: the API refuses public + private', 400 === $r['status'] && str_contains($r['body'], 'both public and private'), $r['body']);
+
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $privSignOutMatch);
+$r = request('POST', '/ui/logout', $form([]), http_build_query(['csrf' => $privSignOutMatch[1] ?? '']));
+check('private: signing out afterwards works', 302 === $r['status'], (string) $r['status']);
+
+/* ------------------------------------------------------------------ *
  *  OAuth: revocation endpoint (RFC 7009) and refresh reuse detection
  * ------------------------------------------------------------------ */
 

@@ -61,7 +61,13 @@ final class Publications
 
     /**
      * A single public writing, including its Markdown body. Returns null when it
-     * does not exist, is not public, or is not in the writings category.
+     * does not exist, is not public, is private, or is not in the writings
+     * category.
+     *
+     * `public` and `private` are meant to be mutually exclusive (the admin UI and
+     * `/ui/api/memory` refuse both at once), but the file is the source of truth
+     * and can be edited by hand — so privacy wins here instead of publishing
+     * whatever the frontmatter happens to say.
      *
      * @return array<string, mixed>|null
      */
@@ -72,7 +78,7 @@ final class Publications
         }
 
         $doc = $this->store->read(self::CATEGORY, $id);
-        if (null === $doc || empty($doc['public'])) {
+        if (null === $doc || empty($doc['public']) || !empty($doc['private'])) {
             return null;
         }
 

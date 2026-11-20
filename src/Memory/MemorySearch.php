@@ -29,7 +29,7 @@ final class MemorySearch implements SearchEngine
     /**
      * @return list<array<string, mixed>> ranked results, each with an added "score" and "snippet"
      */
-    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null): array
+    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null, bool $includePrivate = false): array
     {
         $limit = min(max(1, $limit), 200);
         $q = SearchQuery::parse($query)->withExplicit($tag, $archived);
@@ -41,6 +41,13 @@ final class MemorySearch implements SearchEngine
         foreach ($this->store->collectFiles($category) as $file) {
             $doc = $this->store->read($this->categoryOf($file), $this->idOf($file));
             if (null === $doc) {
+                continue;
+            }
+            // Private means private: the directive narrows, never widens.
+            if (!$includePrivate && !empty($doc['private'])) {
+                continue;
+            }
+            if ($q->private && empty($doc['private'])) {
                 continue;
             }
             if (null !== $q->archived && (bool) ($doc['archived'] ?? false) !== $q->archived) {

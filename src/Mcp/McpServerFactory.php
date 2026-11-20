@@ -73,6 +73,10 @@ Categories:
 Tags:
 - Optional but recommended: when calling remember or update_memory, add 1-3 short lowercase tags (e.g. "project-x", "meeting-notes") to make memories easier to group and search later.
 
+Privacy:
+- The user can mark any entry PRIVATE in the admin UI. Private entries are not part of this corpus: they never appear in search_memory, recall or list_memory, they are not counted, and read_memory/update_memory/forget_memory refuse them by id. They are not encrypted — they are simply kept away from AI.
+- You cannot mark an entry private, and you cannot lift it. If the user refers to a memory you cannot find, say so and ask whether it is marked private.
+
 Tools:
 - remember: create or update a memory
 - recall: pull memories relevant to the conversation

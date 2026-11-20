@@ -78,6 +78,9 @@ final class WorkflowCatalog
      * null when it does not exist or the id could not name a file (including any
      * traversal attempt), so the caller answers 404 for all of them alike.
      *
+     * A private definition is reported as absent: what a runner may not see must
+     * not be readable here either, and the list already leaves it out.
+     *
      * @return array<string, mixed>|null
      */
     public function get(string $id): ?array
@@ -87,7 +90,7 @@ final class WorkflowCatalog
         }
 
         $doc = $this->store->read(WorkflowDefinition::CATEGORY, $id);
-        if (null === $doc) {
+        if (null === $doc || !empty($doc['private'])) {
             return null;
         }
 

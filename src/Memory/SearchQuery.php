@@ -14,6 +14,8 @@ namespace MemoryDown\Memory;
  *   tag:"a b"         require the exact tag "a b" (quote multi-word tags)
  *   is:archived       only archived entries
  *   is:active         only active entries
+ *   is:private        only entries the user marked private (narrows; a corpus
+ *                     that does not include private entries matches nothing)
  *
  * Everything else is treated as normal full-text terms. Explicit parameters
  * passed to {@see SearchEngine::search()} take precedence over directives.
@@ -28,6 +30,7 @@ final class SearchQuery
         public readonly array $terms,
         public readonly array $tags,
         public readonly ?bool $archived,
+        public readonly bool $private = false,
     ) {
     }
 
@@ -36,6 +39,7 @@ final class SearchQuery
         $terms = [];
         $tags = [];
         $archived = null;
+        $private = false;
 
         foreach (self::tokenize($query) as $word) {
             if ('' === $word) {
@@ -57,6 +61,13 @@ final class SearchQuery
                 continue;
             }
 
+            // A directive, not a word: "is:private" must never be matched as
+            // text, and it only ever narrows a result set.
+            if (0 === strcasecmp($word, 'is:private')) {
+                $private = true;
+                continue;
+            }
+
             $word = trim($word, "\"'.,;:!?()[]{}");
             if (mb_strlen($word) >= 2) {
                 $terms[] = mb_strtolower($word);
@@ -67,6 +78,7 @@ final class SearchQuery
             array_values(array_unique($terms)),
             array_values(array_unique($tags)),
             $archived,
+            $private,
         );
     }
 
@@ -145,6 +157,7 @@ final class SearchQuery
             $this->terms,
             array_values(array_unique($tags)),
             null !== $archived ? $archived : $this->archived,
+            $this->private,
         );
     }
 

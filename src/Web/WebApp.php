@@ -835,7 +835,7 @@ final class WebApp
         // of going stale until the next full page load.
         return $this->json([
             'categories' => $this->tree(),
-            'total' => $this->store()->count(),
+            'total' => $this->store()->count(true),
             'trashed' => $this->store()->trashCount(),
         ]);
     }
@@ -863,6 +863,9 @@ final class WebApp
             false,
             '' !== $tag ? $tag : null,
             self::archivedFilter((string) ($query['archived'] ?? 'all')),
+            // The owner's own view: private entries are found here, which is the
+            // whole point of a place to keep them.
+            includePrivate: true,
         );
 
         $light = array_map(fn (array $r): array => [
@@ -873,6 +876,7 @@ final class WebApp
             'tags' => $r['tags'] ?? [],
             'archived' => (bool) ($r['archived'] ?? false),
             'public' => (bool) ($r['public'] ?? false),
+            'private' => (bool) ($r['private'] ?? false),
             'new' => $this->isNew($r),
             'score' => $r['score'] ?? 0,
             'snippet' => $r['snippet'] ?? '',
@@ -926,6 +930,7 @@ final class WebApp
         $tags = $this->normalizeTags($data['tags'] ?? []);
         $archived = filter_var($data['archived'] ?? false, FILTER_VALIDATE_BOOL);
         $public = filter_var($data['public'] ?? false, FILTER_VALIDATE_BOOL);
+        $private = filter_var($data['private'] ?? false, FILTER_VALIDATE_BOOL);
 
         if (!PathValidator::isCategory($category)) {
             return $this->json(['error' => 'Invalid category.'], 400);
@@ -940,13 +945,36 @@ final class WebApp
         // "remove the tag first", not "that tag belongs elsewhere" — the tag came
         // from the entry being moved, not from the user typing it.
         $currentCategory = '' === $id ? '' : $this->categoryFor($id);
+        $currentDoc = '' !== $currentCategory ? $this->store()->read($currentCategory, $id) : null;
         if ('' !== $currentCategory && $currentCategory !== $category) {
-            $current = $this->store()->read($currentCategory, $id);
-            if (null !== $current && WorkflowDefinition::hasTag($current['tags'] ?? [])) {
+            if (null !== $currentDoc && WorkflowDefinition::hasTag($currentDoc['tags'] ?? [])) {
                 return $this->json([
                     'error' => 'This entry is an active workflow: remove the "' . WorkflowDefinition::TAG . '" tag before moving it out of "' . WorkflowDefinition::CATEGORY . '".',
                 ], 400);
             }
+        }
+
+        // Private and executable are mutually exclusive: a runner reads its
+        // definitions over the workflows API, so an authorised workflow that is
+        // hidden from that API could never run — it would fail silently instead
+        // of being refused. Checked on the state this save would produce, so
+        // neither order (tag then private, private then tag) can slip through.
+        $nextTags = array_key_exists('tags', $data)
+            ? $tags
+            : (null !== $currentDoc ? array_values(array_map('strval', $currentDoc['tags'] ?? [])) : []);
+        $nextPrivate = array_key_exists('private', $data) ? $private : (bool) ($currentDoc['private'] ?? false);
+        if ($nextPrivate && WorkflowDefinition::hasTag($nextTags)) {
+            return $this->json([
+                'error' => 'A workflow that is marked "' . WorkflowDefinition::TAG . '" cannot be private: the runner reads definitions over the workflows API, so it would never see this one. Remove the tag first.',
+            ], 400);
+        }
+
+        // `public` and `private` describe the same entry in opposite directions.
+        $nextPublic = array_key_exists('public', $data) ? $public : (bool) ($currentDoc['public'] ?? false);
+        if ($nextPrivate && $nextPublic) {
+            return $this->json([
+                'error' => 'An entry cannot be both public and private: publishing serves it to the writings API, privacy keeps it away from AI.',
+            ], 400);
         }
 
         // The reserved tag is a permission, and it is only meaningful on an entry
@@ -963,7 +991,7 @@ final class WebApp
 
         try {
             if ('' === $id) {
-                $doc = $this->store()->create($content, $title, $category, $tags, archived: $archived, public: $public);
+                $doc = $this->store()->create($content, $title, $category, $tags, archived: $archived, public: $public, private: $private);
             } else {
                 if (!PathValidator::isId($id)) {
                     return $this->json(['error' => 'Invalid id.'], 400);
@@ -979,6 +1007,11 @@ final class WebApp
                 // older client can never accidentally unpublish a writing.
                 if (array_key_exists('public', $data)) {
                     $changes['public'] = $public;
+                }
+                // Same rule for privacy: an editor that does not know the flag
+                // must not silently make a private entry visible.
+                if (array_key_exists('private', $data)) {
+                    $changes['private'] = $private;
                 }
                 // `rename: true` is the admin UI's rule that the filename
                 // follows the title. MCP never sets it: an agent's id stays
@@ -1170,7 +1203,7 @@ final class WebApp
             'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
             'php' => PHP_VERSION,
             'account' => $target->id,
-            'memories' => $store->count(),
+            'memories' => $store->count(true),
             'files' => count($files),
             'contents' => 'memory/** plus this manifest and RESTORE.txt',
             'excluded' => 'account records and credentials (data/auth), sessions, logs, .env, and every other account',
@@ -1343,7 +1376,7 @@ final class WebApp
             $grouped[$category] = [];
         }
 
-        foreach ($this->store()->list(null, 1000) as $doc) {
+        foreach ($this->store()->list(null, 1000, includePrivate: true) as $doc) {
             $category = (string) $doc['category'];
             if (!isset($grouped[$category])) {
                 $grouped[$category] = [];
@@ -1356,6 +1389,7 @@ final class WebApp
                 'tags' => $doc['tags'] ?? [],
                 'archived' => (bool) ($doc['archived'] ?? false),
                 'public' => (bool) ($doc['public'] ?? false),
+                'private' => (bool) ($doc['private'] ?? false),
                 'new' => $this->isNew($doc),
             ];
         }

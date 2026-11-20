@@ -1672,6 +1672,96 @@ check('ordinary connector: an id that exists twice is simply its own copy', fals
 check('ordinary connector: no account is named in a response', !array_key_exists('owner', $singleRead['data']['memory'] ?? []));
 
 /* ------------------------------------------------------------------ *
+ *  Private memories: kept away from every AI-facing reader
+ * ------------------------------------------------------------------ */
+
+section('Private memories');
+
+$privRoot = $root . '/private-corpus';
+$privStore = new MemoryStore($privRoot);
+$privateDoc = $privStore->create('A diary entry nobody else may read.', 'Diary', 'notes', ['personal'], private: true);
+$publicDoc = $privStore->create('A shared note about the roof.', 'Roof', 'facts');
+
+$privFile = $privRoot . '/notes/' . $privateDoc['id'] . '.md';
+check('private: the frontmatter carries the flag', str_contains((string) @file_get_contents($privFile), 'private: true'), (string) @file_get_contents($privFile));
+check('private: read reports it', true === $privateDoc['private'] && false === $publicDoc['private']);
+check('private: list hides it by default', [$publicDoc['id']] === array_column($privStore->list(), 'id'), json_encode(array_column($privStore->list(), 'id')));
+check('private: list can be asked for it', 2 === count($privStore->list(null, 50, null, null, null, true)));
+check('private: count hides it by default', 1 === $privStore->count());
+check('private: count can include it', 2 === $privStore->count(true));
+// The dedupe path goes through list(), so it cannot silently rewrite a hidden
+// entry with what an agent just said.
+check('private: findDuplicate does not see it', null === $privStore->findDuplicate('A diary entry nobody else may read.', 'Diary', 'notes'));
+
+$privStore->update('notes', $privateDoc['id'], ['title' => 'Diary, renamed']);
+check('private: an unrelated update keeps the flag', true === ($privStore->read('notes', $privateDoc['id'])['private'] ?? false));
+$privStore->update('notes', $privateDoc['id'], ['private' => false]);
+$clearedRaw = (string) @file_get_contents($privFile);
+check('private: clearing removes the key from the file', !str_contains($clearedRaw, 'private: true'), $clearedRaw);
+check('private: a cleared entry is visible again', 2 === $privStore->count());
+$privStore->update('notes', $privateDoc['id'], ['private' => true]);
+
+$searchQuery = SearchQuery::parse('is:private diary');
+check('private: is:private is a directive, not a term', true === $searchQuery->private && ['diary'] === $searchQuery->terms, json_encode($searchQuery));
+
+$directSearch = new MemorySearch($privStore);
+check('private: the direct scan hides it', [] === $directSearch->search('diary'));
+check('private: the direct scan shows it when asked', 1 === count($directSearch->search('diary', includePrivate: true)));
+check('private: is:private narrows a visible corpus', 1 === count($directSearch->search('is:private diary', includePrivate: true)));
+check('private: is:private cannot widen a hidden one', [] === $directSearch->search('is:private diary'));
+
+$privIndex = new MemoryIndex($privStore, $root . '/private-corpus/index.sqlite');
+if ($privIndex->isAvailable()) {
+    check('private: the index hides it', [] === $privIndex->search('diary'));
+    check('private: the index shows it when asked', 1 === count($privIndex->search('diary', includePrivate: true)));
+    check('private: is:private narrows the index too', 1 === count($privIndex->search('is:private diary', includePrivate: true)), json_encode($privIndex->search('is:private diary', includePrivate: true)));
+    check('private: is:private cannot widen the index', [] === $privIndex->search('is:private diary'));
+} else {
+    check('private: the index is unavailable here, the direct scan covers it', true);
+}
+
+// The MCP tools never see it — and refuse it by id as well.
+$diary = $toolFactory->for('bob')->memory->create('Bob private diary: nobody may read this.', 'Bob diary', 'notes', private: true);
+$bobTools = (new MemoryTools(UserCorpora::only($toolUsers, $toolFactory, 'bob'), 'bob'))->definitions();
+
+$hiddenSearch = $callTool($bobTools, 'search_memory', ['query' => 'diary']);
+check('private: search_memory does not find it', [] === ($hiddenSearch['data']['results'] ?? null), json_encode($hiddenSearch['data']));
+$hiddenList = $callTool($bobTools, 'list_memory', ['limit' => 50]);
+check('private: list_memory does not list it', !in_array($diary['id'], array_column($hiddenList['data']['memories'] ?? [], 'id'), true), json_encode($hiddenList['data']));
+check(
+    'private: list_memory does not count it in the total',
+    $toolFactory->for('bob')->memory->count() === ($hiddenList['data']['total'] ?? -1),
+    json_encode(['total' => $hiddenList['data']['total'] ?? null, 'count' => $toolFactory->for('bob')->memory->count()])
+);
+
+$hiddenRead = $callTool($bobTools, 'read_memory', ['id' => $diary['id']]);
+check('private: read_memory refuses it', true === $hiddenRead['isError'] && str_contains(strtolower($hiddenRead['text']), 'private'), $hiddenRead['text']);
+$hiddenUpdate = $callTool($bobTools, 'update_memory', ['id' => $diary['id'], 'content' => 'Rewritten by an agent.']);
+check('private: update_memory refuses it', true === $hiddenUpdate['isError'] && str_contains(strtolower($hiddenUpdate['text']), 'private'), $hiddenUpdate['text']);
+$hiddenDelete = $callTool($bobTools, 'forget_memory', ['id' => $diary['id']]);
+check('private: forget_memory refuses it', true === $hiddenDelete['isError'] && str_contains(strtolower($hiddenDelete['text']), 'private'), $hiddenDelete['text']);
+check('private: and the file is still there', is_file($toolRoot . '/users/bob/memory/notes/' . $diary['id'] . '.md'));
+check('private: none of the refusals changed the body', str_contains((string) @file_get_contents($toolRoot . '/users/bob/memory/notes/' . $diary['id'] . '.md'), 'nobody may read this'));
+
+$rememberedAgain = $callTool($bobTools, 'remember', ['content' => 'Bob private diary: nobody may read this.', 'title' => 'Bob diary', 'category' => 'notes']);
+check('private: remember creates a new entry instead of rewriting the hidden one', 'created' === ($rememberedAgain['data']['action'] ?? ''), json_encode($rememberedAgain));
+
+// The two read-only APIs answer as if a private entry did not exist.
+$pubStore = new MemoryStore($root . '/private-publish');
+$secretWriting = $pubStore->create('A post that must stay private.', 'Secret post', 'writings', public: true, private: true);
+$openWriting = $pubStore->create('A post anyone may read.', 'Open post', 'writings', public: true);
+$publications = new Publications($pubStore);
+check('private: a public writing that is private is withheld', null === $publications->get($secretWriting['id']));
+check('private: and it is not listed', [$openWriting['id']] === array_column($publications->list()['writings'], 'id'), json_encode(array_column($publications->list()['writings'], 'id')));
+
+$wfStore = new MemoryStore($root . '/private-workflows');
+$hiddenWorkflow = $wfStore->create("TODO: draft\n", 'Hidden workflow', 'workflows', [WorkflowDefinition::TAG], private: true);
+$openWorkflow = $wfStore->create("TODO: draft\n", 'Open workflow', 'workflows', [WorkflowDefinition::TAG]);
+$wfCatalog = new WorkflowCatalog($wfStore);
+check('private: a private definition is withheld', null === $wfCatalog->get($hiddenWorkflow['id']));
+check('private: and it is not listed', [$openWorkflow['id']] === array_column($wfCatalog->list()['workflows'], 'id'), json_encode(array_column($wfCatalog->list()['workflows'], 'id')));
+
+/* ------------------------------------------------------------------ *
  *  Summary
  * ------------------------------------------------------------------ */
 

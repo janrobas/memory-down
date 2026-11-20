@@ -25,6 +25,7 @@ $selTitle = $selected['title'] ?? '';
 $selTags = $selected ? implode(', ', $selected['tags'] ?? []) : '';
 $selArchived = (bool) ($selected['archived'] ?? false);
 $selPublic = (bool) ($selected['public'] ?? false);
+$selPrivate = (bool) ($selected['private'] ?? false);
 $selBody = $selected['body'] ?? '';
 if (!in_array($selCategory, $categories, true)) {
     $categories[] = $selCategory;
@@ -73,9 +74,9 @@ $definitionHead = null === $definition
           </div>
           <ul>
             <?php foreach ($group['memories'] as $mem): ?>
-              <?php $memKind = !empty($mem['archived']) ? 'archived' : (!empty($mem['public']) ? 'public' : (!empty($mem['new']) ? 'new' : '')); ?>
+              <?php $memKind = !empty($mem['private']) ? 'private' : (!empty($mem['archived']) ? 'archived' : (!empty($mem['public']) ? 'public' : (!empty($mem['new']) ? 'new' : ''))); ?>
               <li>
-                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['archived']) ? ' archived' : '' ?><?= 'new' === $memKind ? ' new' : '' ?>"
+                <a class="mem<?= ($mem['id'] === $selId && $group['name'] === $selCategory) ? ' active' : '' ?><?= !empty($mem['archived']) ? ' archived' : '' ?><?= !empty($mem['private']) ? ' private-entry' : '' ?><?= 'new' === $memKind ? ' new' : '' ?>"
                    href="/ui?category=<?= rawurlencode((string) $group['name']) ?>&amp;id=<?= rawurlencode((string) $mem['id']) ?>"
                    data-category="<?= WebApp::h($group['name']) ?>"
                    data-id="<?= WebApp::h($mem['id']) ?>"><span class="mem-title"><?= WebApp::h($mem['title'] !== '' ? $mem['title'] : $mem['id']) ?></span><?php if ('' !== $memKind): ?><span class="badge-<?= $memKind ?>"><?= $memKind ?></span><?php endif; ?></a>
@@ -162,6 +163,16 @@ $definitionHead = null === $definition
             <label class="check-label">
               <input type="checkbox" id="f-public" name="public" value="1"<?= $selPublic ? ' checked' : '' ?>>
               <span>Public</span>
+            </label>
+          </div>
+          <?php /* Private is an entry's own state, not a category's; it is offered
+                   on every entry, including a writing (a draft kept away from AI).
+                   It is human-only: MCP can neither set nor lift it. */ ?>
+          <div class="field check" id="private-field">
+            <span class="field-label">Private</span>
+            <label class="check-label" title="Hidden from AI: no MCP tool (not even the admin connector) and no read API can see this memory. It stays a normal Markdown file — not encrypted — in this editor, in your backup and in Obsidian.">
+              <input type="checkbox" id="f-private" name="private" value="1"<?= $selPrivate ? ' checked' : '' ?>>
+              <span>Private</span>
             </label>
           </div>
         </div>

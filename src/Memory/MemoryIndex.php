@@ -27,13 +27,14 @@ final class MemoryIndex implements SearchEngine
      * disposable, so a version mismatch just drops and rebuilds it from the
      * Markdown on the next search.
      */
-    private const SCHEMA_VERSION = '2';
+    private const SCHEMA_VERSION = '3';
 
     /**
-     * FTS5 column list. `archived` is kept last and UNINDEXED so the existing
-     * positional references (bm25, snippet column 4 = body) stay valid.
+     * FTS5 column list. `archived` and `private` are kept last and UNINDEXED so
+     * the existing positional references (bm25, snippet column 4 = body) stay
+     * valid.
      */
-    private const FTS_COLUMNS = 'id UNINDEXED, category UNINDEXED, title, tags, body, archived UNINDEXED, tokenize=\'unicode61\'';
+    private const FTS_COLUMNS = 'id UNINDEXED, category UNINDEXED, title, tags, body, archived UNINDEXED, private UNINDEXED, tokenize=\'unicode61\'';
 
     private ?\PDO $pdo = null;
     private bool $available = false;
@@ -75,16 +76,22 @@ final class MemoryIndex implements SearchEngine
         ];
     }
 
-    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null): array
+    public function search(string $query, ?string $category = null, int $limit = 10, bool $includeBody = false, ?string $tag = null, ?bool $archived = null, bool $includePrivate = false): array
     {
         $q = SearchQuery::parse($query)->withExplicit($tag, $archived);
         if ($q->isEmpty()) {
             return [];
         }
 
+        // "only private" cannot be satisfied by a corpus that excludes private
+        // entries. The directive must never widen what a connector may read.
+        if ($q->private && !$includePrivate) {
+            return [];
+        }
+
         // With the index unavailable, always scan the Markdown directly.
         if (!$this->available) {
-            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
+            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived, $includePrivate);
         }
 
         $limit = min(max(1, $limit), 200);
@@ -99,7 +106,7 @@ final class MemoryIndex implements SearchEngine
             // to the tags column. Either group alone is enough; both AND.
             $match = $this->matchExpression($q->terms, $q->tags);
             if ('' === $match) {
-                return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
+                return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived, $includePrivate);
             }
 
             $sql = 'SELECT id, category, bm25(memories) AS rank, '
@@ -113,6 +120,13 @@ final class MemoryIndex implements SearchEngine
                 // stored as text '1'/'0' in the UNINDEXED column.
                 $sql .= ' AND archived = :archived';
             }
+            // Private entries are filtered in SQL for the same reason archived
+            // ones are: LIMIT must apply after filtering, or a page of hidden
+            // hits would silently crowd out real ones. The directive narrows to
+            // private entries; "include private" means no filter at all.
+            if ($q->private || !$includePrivate) {
+                $sql .= ' AND private = :private';
+            }
             $sql .= ' ORDER BY bm25(memories) LIMIT :limit';
 
             $stmt = $this->pdo->prepare($sql);
@@ -123,6 +137,9 @@ final class MemoryIndex implements SearchEngine
             if (null !== $q->archived) {
                 $stmt->bindValue(':archived', $q->archived ? '1' : '0', \PDO::PARAM_STR);
             }
+            if ($q->private || !$includePrivate) {
+                $stmt->bindValue(':private', $q->private ? '1' : '0', \PDO::PARAM_STR);
+            }
             $stmt->bindValue(':limit', $candidates, \PDO::PARAM_INT);
             $stmt->execute();
 
@@ -130,7 +147,7 @@ final class MemoryIndex implements SearchEngine
         } catch (\Throwable $e) {
             $this->logger->warning('memory.index.query_failed', ['message' => $e->getMessage()]);
 
-            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived);
+            return $this->fallback->search($query, $category, $limit, $includeBody, $tag, $archived, $includePrivate);
         }
 
         $results = [];
@@ -140,6 +157,11 @@ final class MemoryIndex implements SearchEngine
                 continue;
             }
             if (null !== $q->archived && (bool) ($doc['archived'] ?? false) !== $q->archived) {
+                continue;
+            }
+            // The SQL already filtered, but the file is the source of truth: an
+            // entry flipped to private since the last rebuild is dropped here.
+            if (!$includePrivate && !empty($doc['private'])) {
                 continue;
             }
             if ([] !== $q->tags && !$this->hasAllTags($doc, $q->tags)) {
@@ -201,7 +223,7 @@ final class MemoryIndex implements SearchEngine
             $this->pdo->exec('DELETE FROM memories');
 
             $insert = $this->pdo->prepare(
-                'INSERT INTO memories (id, category, title, tags, body, archived) VALUES (:id, :category, :title, :tags, :body, :archived)'
+                'INSERT INTO memories (id, category, title, tags, body, archived, private) VALUES (:id, :category, :title, :tags, :body, :archived, :private)'
             );
 
             foreach ($this->store->collectFiles() as $file) {
@@ -218,6 +240,7 @@ final class MemoryIndex implements SearchEngine
                     ':tags' => implode(' ', $doc['tags']),
                     ':body' => (string) $doc['body'],
                     ':archived' => !empty($doc['archived']) ? '1' : '0',
+                    ':private' => !empty($doc['private']) ? '1' : '0',
                 ]);
             }
 
