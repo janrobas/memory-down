@@ -171,7 +171,7 @@ llm_model: <model-id>
 
 ## Namen
 
-TODO: kaj naj workflow naredi in zakaj.
+TODO: kaj naj delovni tok naredi in zakaj.
 
 ## Navodila
 
