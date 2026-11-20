@@ -942,6 +942,43 @@ exception to "one connector, one corpus"; nothing else about accounts changes.
   administrator acting *as* another account — the token's `sub` always stays the
   admin who consented.
 
+### Amendment: the interface language (in scope, UI only)
+
+The admin UI, the sign-in/setup pages, `/about` and the OAuth consent page are
+available in **Slovenian, English and Italian** — and nothing follows from that
+beyond the interface:
+
+- **The scope is the interface, not the data.** A translation changes what a page
+  says, never what is stored: memories, titles, tags, category names and workflow
+  definitions are served exactly as written, and the MCP tool descriptions and
+  server instructions stay English because agents read them. `/health`, the JSON
+  API payloads and the protocol error codes are untranslated by design.
+- **One cookie, no account state.** `memorydown_lang`, one year, `HttpOnly`,
+  `SameSite=Lax`, `Secure` in production — the same policy as the session cookie.
+  Resolution order: cookie, `Accept-Language`, `APP_DEFAULT_LOCALE` (default
+  `sl`). It is deliberately not stored in `users.json`: a language is a property
+  of how somebody reads, not of who they are, and it has to work on the sign-in
+  page where no account is known yet.
+- **`GET /ui/language` is the only writer.** One cookie and a redirect, no
+  JavaScript and no CSRF token (a display preference is not a mutation), and the
+  return path must be a path inside this instance — a scheme, `//` or a backslash
+  is dropped — so the endpoint can never become an open redirector. The cookie is
+  not authentication: on its own it still lands on the sign-in page.
+- **Catalogues are PHP arrays** (`src/I18n/lang/{sl,en,it}.php`), not gettext,
+  because a `.mo` file needs a compiled locale that cheap shared hosting often
+  lacks. English is the reference and the fallback, so a missing key reads as
+  English rather than as a bare key. Plurals are per language
+  (`I18n\Locale::pluralForm()`), which is what makes Slovenian's four forms
+  (`1 vnos`, `2 vnosa`, `5 vnosov`) come out right.
+- **The layers below the UI stay language-neutral.** `WorkflowDefinition` returns
+  problem *codes* and their parameters and the sentences live in the catalogues,
+  so a verdict can be Slovenian while the definition is untouched;
+  `WebAuth::attempt()` returns refusal codes for the same reason.
+- **Adding a language is one file plus one list entry**, and the unit tests
+  enforce that every catalogue has the same keys, the same `{placeholders}` and
+  the plural forms its language uses — a half-finished translation fails the build
+  instead of showing keys in a page.
+
 Still explicitly **out of scope**: embeddings/vector search, teams, billing,
 background jobs/queues, self-service account creation.
 

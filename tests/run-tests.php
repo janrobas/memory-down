@@ -106,6 +106,11 @@ if (!$keepServer) {
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('PUBLIC_API_ENABLED=true');
     putenv('WORKFLOWS_API_ENABLED=true');
+    // The UI ships in Slovenian by default (APP_DEFAULT_LOCALE). These assertions
+    // read English, so English is the instance default here and the language
+    // section below proves the other two are reachable — by cookie, by
+    // Accept-Language, and through the chooser endpoint.
+    putenv('APP_DEFAULT_LOCALE=en');
     // The main chain signs in many times — and now also mints tokens for the
     // admin connector — so the consent and token endpoints get a generous cap
     // here. Their limits have dedicated servers of their own where they matter.
@@ -535,11 +540,11 @@ check('authorize: mismatched redirect_uri rejected', 400 === $r['status']);
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
     http_build_query(['decision' => 'allow', 'username' => 'test-user', 'password' => 'wrong-password']));
-check('authorize: wrong consent password denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
+check('authorize: wrong consent password denied', 200 === $r['status'] && str_contains($r['body'], 'Incorrect username or password'));
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
     http_build_query(['decision' => 'allow', 'username' => 'wrong-user', 'password' => 'test-password']));
-check('authorize: wrong username denied', 200 === $r['status'] && str_contains($r['body'], 'Invalid username or password'));
+check('authorize: wrong username denied', 200 === $r['status'] && str_contains($r['body'], 'Incorrect username or password'));
 
 $r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
     http_build_query(['decision' => 'allow', 'username' => 'test-user', 'password' => 'test-password']));
@@ -3587,8 +3592,80 @@ if (is_resource($rlSetupProc)) {
 @exec((PHP_OS_FAMILY === 'Windows' ? 'rmdir /s /q ' : 'rm -rf ') . escapeshellarg($rlTmp));
 
 /* ------------------------------------------------------------------ *
- *  Summary
+ *  Languages (the UI only)
  * ------------------------------------------------------------------ */
+
+section('Languages: the interface, not the data');
+
+// The instance default is English in this harness (APP_DEFAULT_LOCALE), which is
+// what every other assertion reads. What is proven here is that the other two are
+// actually reachable and that the choice stays a display preference.
+$langJar = $GLOBALS['memorydown_cookies'];
+
+$r = request('GET', '/ui/login');
+check('language: no cookie and no header -> the instance default', str_contains($r['body'], 'lang="en"') && str_contains($r['body'], 'Sign in'), 'login page');
+
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'sl'];
+$r = request('GET', '/ui/login');
+check('language: a Slovenian cookie renders Slovenian', str_contains($r['body'], 'lang="sl"') && str_contains($r['body'], 'Prijava'), 'login page');
+
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'it'];
+$r = request('GET', '/ui/login');
+check('language: an Italian cookie renders Italian', str_contains($r['body'], 'lang="it"') && str_contains($r['body'], 'Accedi'), 'login page');
+$r = request('GET', '/about');
+check('language: /about follows the same cookie', str_contains($r['body'], 'lang="it"'), 'about page');
+
+$GLOBALS['memorydown_cookies'] = [];
+$r = request('GET', '/about', ['Accept-Language' => 'sl-SI,sl;q=0.9,en;q=0.5']);
+check('language: Accept-Language decides when there is no cookie', str_contains($r['body'], 'lang="sl"'), 'about page');
+$r = request('GET', '/about', ['Accept-Language' => 'fr-FR,de;q=0.8']);
+check('language: a language this UI does not have falls back to the default', str_contains($r['body'], 'lang="en"'), 'about page');
+
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'de'];
+$r = request('GET', '/ui/login');
+check('language: an unsupported cookie is ignored', str_contains($r['body'], 'lang="en"'), 'login page');
+
+// Choosing: one plain GET, a preference cookie, and back to where you were.
+$GLOBALS['memorydown_cookies'] = [];
+$r = request('GET', '/ui/language?lang=sl&back=%2Fui%2Flogin');
+check('language: choosing answers with a redirect', 302 === $r['status'], (string) $r['status']);
+check('language: choosing remembers the language', 'sl' === ($GLOBALS['memorydown_cookies']['memorydown_lang'] ?? ''), json_encode($GLOBALS['memorydown_cookies']));
+check('language: choosing returns to the page that asked', '/ui/login' === ($r['headers']['location'] ?? ''), (string) ($r['headers']['location'] ?? ''));
+
+$r = request('GET', '/ui/language?lang=it&back=%2Fabout');
+check('language: the chooser is not limited to the admin UI', 'it' === ($GLOBALS['memorydown_cookies']['memorydown_lang'] ?? '') && '/about' === ($r['headers']['location'] ?? ''), json_encode($r['headers']));
+
+// It writes a preference and nothing else, so it must not become an open
+// redirector: anything that is not a path inside this instance lands on /ui.
+foreach (['https%3A%2F%2Fevil.example', '%2F%2Fevil.example', '%2Fui%5C%40evil.example', '%2F%2F%2Fevil.example'] as $back) {
+    $r = request('GET', '/ui/language?lang=sl&back=' . $back);
+    check('language: a crafted return path is dropped (' . $back . ')', '/ui' === ($r['headers']['location'] ?? ''), (string) ($r['headers']['location'] ?? ''));
+}
+
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'it'];
+$r = request('GET', '/ui/language?lang=fr&back=%2Fui');
+check('language: an unsupported choice sets no cookie', 'it' === ($GLOBALS['memorydown_cookies']['memorydown_lang'] ?? ''), json_encode($GLOBALS['memorydown_cookies']));
+check('language: an unsupported choice still returns somewhere sane', '/ui' === ($r['headers']['location'] ?? ''), (string) ($r['headers']['location'] ?? ''));
+
+// The consent page follows the same cookie, and carries the chooser itself: it is
+// the page a person meets before they have any account-level preference at all.
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'it'];
+$r = request('GET', '/oauth/authorize?' . $authQuery);
+check('language: the consent page follows the cookie', str_contains($r['body'], 'lang="it"') && str_contains($r['body'], 'Consenti'), 'consent page');
+check('language: the consent page offers the chooser', str_contains($r['body'], 'Slovenščina') && str_contains($r['body'], 'Italiano'), 'consent page');
+check('language: the chooser comes back to the consent request', str_contains($r['body'], 'back=%2Foauth%2Fauthorize%3F'), 'consent page');
+
+$r = request('POST', '/oauth/authorize?' . $authQuery, ['Content-Type' => 'application/x-www-form-urlencoded'],
+    http_build_query(['decision' => 'allow', 'username' => 'test-user', 'password' => 'wrong-password']));
+check('language: a consent refusal is translated too', str_contains($r['body'], 'Nome utente o password errati'), 'consent page');
+
+// The content is never translated and the preference is never authentication: a
+// language cookie alone still lands on the sign-in page.
+$GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'sl'];
+$r = request('GET', '/ui');
+check('language: choosing a language grants no access', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'), (string) $r['status'] . ' ' . (string) ($r['headers']['location'] ?? ''));
+
+$GLOBALS['memorydown_cookies'] = $langJar;
 
 echo "\n----------------------------------------\n";
 echo "Passed: {$passed}   Failed: {$failed}\n";

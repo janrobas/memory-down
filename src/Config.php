@@ -50,6 +50,12 @@ final class Config
     public readonly string $adminPasswordHash;
     public readonly string $adminSetupToken;
 
+    /**
+     * The language of the admin UI when neither a cookie nor the browser asks
+     * for one it has. UI only: see {@see \MemoryDown\I18n\Locale}.
+     */
+    public readonly string $defaultLocale;
+
     public readonly bool $indexEnabled;
 
     public readonly bool $publicApiEnabled;
@@ -89,6 +95,8 @@ final class Config
         $this->uiEnabled = (bool) ($c['ui_enabled'] ?? true);
         $this->adminPasswordHash = (string) ($c['admin_password_hash'] ?? '');
         $this->adminSetupToken = (string) ($c['admin_setup_token'] ?? '');
+        $this->defaultLocale = \MemoryDown\I18n\Locale::normalize($c['default_locale'] ?? '')
+            ?: \MemoryDown\I18n\Locale::FALLBACK;
 
         $this->indexEnabled = (bool) ($c['index_enabled'] ?? true);
 

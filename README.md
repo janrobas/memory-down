@@ -191,6 +191,7 @@ in the hosting panel or php.ini win over `.env`.
 | `OAUTH_REFRESH_TOKEN_TTL` | `7776000` | Refresh token lifetime (seconds) |
 | `OAUTH_CODE_TTL` | `600` | Authorization code lifetime (seconds) |
 | `UI_ENABLED` | `true` | Enable the admin UI at `/ui` |
+| `APP_DEFAULT_LOCALE` | `sl` | Language of the admin UI when neither a cookie nor `Accept-Language` decides: `sl`, `en` or `it` |
 | `ADMIN_PASSWORD_HASH` | *(empty)* | **Deprecated**: seed password hash for the first account; otherwise set the first one via `/ui/setup` |
 | `ADMIN_SETUP_TOKEN` | *(empty)* | Optional extra secret for the first-run `/ui/setup` form (and the only way back into an instance whose account store was deleted) |
 | `INDEX_ENABLED` | `true` | Build the SQLite FTS5 search index (one per account) |
@@ -311,6 +312,36 @@ reset a password, hand out an API token, and delete.
 
 Sessions live in `data/sessions/`; the cookie is `HttpOnly` + `SameSite=Lax`
 (`Secure` in production). All state-changing requests require a CSRF token.
+
+### Language (Slovenian, English, Italian)
+
+The interface — the editor, sign-in and setup, settings, users, trash, `/about`
+and the OAuth consent page — is available in **Slovenian**, **English** and
+**Italian**. The chooser is at the bottom of the **⋯ menu** (and on the sign-in
+page, the consent page and `/about`, because those are pages a person meets
+before they have chosen anything).
+
+- **It is UI only.** No memory, tag, category or stored definition is ever
+  translated or rewritten, and the MCP tools and their descriptions stay
+  English: they are read by agents, not by people.
+- **Whose choice is it.** One cookie (`memorydown_lang`) per browser, so it works
+  on the sign-in page too and needs no account. Resolution order: the cookie,
+  then the browser's `Accept-Language`, then `APP_DEFAULT_LOCALE` (default
+  `sl`).
+- **Switching** is a plain `GET /ui/language?lang=sl&back=<path>`: one cookie, one
+  redirect, no JavaScript and no CSRF token — it changes a display preference,
+  nothing else. The return path is always a path inside this instance; anything
+  with a scheme or `//` lands on `/ui` instead, so the endpoint can never be used
+  as an open redirector.
+- **Plurals** are real plurals: Slovenian has four forms (1, 2, 3–4, 5+), English
+  and Italian two, so a trash page counts `1 vnos`, `2 vnosa`, `5 vnosov`.
+- **Adding a language** is one file: copy `src/I18n/lang/en.php` to
+  `src/I18n/lang/<code>.php`, translate the values (same keys, same
+  `{placeholders}`, same plural forms), and add the code to
+  `I18n\Locale::NAMES`. `tests/unit-tests.php` checks that the key sets,
+  placeholders and plural forms of every catalogue still match the English one,
+  so a half-finished translation fails the build instead of showing keys in the
+  page.
 
 ## Public writings API (`/public/writings`)
 

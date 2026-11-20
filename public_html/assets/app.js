@@ -14,6 +14,39 @@
 (function () {
   'use strict';
 
+  /* ------------------------------------------------------------- strings */
+
+  // The strings this file paints itself. They travel with the page in a data
+  // attribute on <body> — not in an inline <script>, which the admin CSP
+  // (script-src 'self') forbids — already rendered in the language the page is
+  // in. A key the catalogue does not have is shown as the key itself, so a
+  // missing translation is visible rather than silent.
+  var MESSAGES = (function () {
+    try {
+      return JSON.parse(document.body.getAttribute('data-i18n') || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  })();
+
+  function t(key, params) {
+    var text = MESSAGES[key];
+    if ('string' !== typeof text) { return key; }
+    if (!params) { return text; }
+
+    return text.replace(/\{(\w+)\}/g, function (match, name) {
+      return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match;
+    });
+  }
+
+  // Only for the one place that has to build HTML (the preview fallback); every
+  // other string here is assigned through textContent.
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
   // Applied on every page, including the ones with no app shell at all (login,
   // setup, users, settings, trash): the saved theme, and the confirm guard on
   // every form that destroys something.
@@ -202,7 +235,7 @@
     var btn = document.getElementById('logout');
     if (!btn) { return; }
     btn.addEventListener('click', function () {
-      if (!window.confirm('Sign out?')) { return; }
+      if (!window.confirm(t('js.sign_out'))) { return; }
       btn.disabled = true;
       api('/ui/logout', { method: 'POST' }).then(function () {
         window.location.href = '/ui/login';
@@ -212,8 +245,9 @@
     });
   }
 
-  // Label the button shows when there is nothing to report.
-  var REINDEX_IDLE_LABEL = '⟳ Reindex';
+  // Label the button shows when there is nothing to report. The server renders
+  // the same label, so this only has to restate it after a reindex.
+  var REINDEX_IDLE_LABEL = t('app.reindex');
 
   // Re-enable the reindex button (after an edit or memory change) and restore
   // its idle label. A no-op while a reindex is in flight.
@@ -233,29 +267,29 @@
       btn.disabled = true;
       btn.setAttribute('data-busy', '1');
       btn.classList.remove('ok', 'err');
-      btn.textContent = '⟳ Reindexing…';
+      btn.textContent = t('js.reindex_busy');
       api(endpoint.reindex, { method: 'POST' }).then(function (res) {
         btn.setAttribute('data-busy', '0');
         if (res.ok && res.data.status) {
           if (res.data.status.engine === 'sqlite-fts5') {
             // Success: report on the button and leave it disabled until the
             // next edit or memory change (resetReindexButton).
-            btn.textContent = 'Indexed ' + (res.data.status.indexed || 0);
+            btn.textContent = t('js.reindexed', { n: res.data.status.indexed || 0 });
             btn.classList.add('ok');
           } else {
             // Index unavailable: nothing was indexed; let the user retry.
-            btn.textContent = 'Index unavailable';
+            btn.textContent = t('js.index_unavailable');
             btn.classList.add('err');
             btn.disabled = false;
           }
         } else {
-          btn.textContent = 'Reindex failed';
+          btn.textContent = t('js.reindex_failed');
           btn.classList.add('err');
           btn.disabled = false;
         }
       }).catch(function () {
         btn.setAttribute('data-busy', '0');
-        btn.textContent = 'Reindex failed';
+        btn.textContent = t('js.reindex_failed');
         btn.classList.add('err');
         btn.disabled = false;
       });
@@ -467,7 +501,7 @@
 
   function markSaved(payload) {
     snapshot(payload);
-    setStatus('Saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 'ok');
+    setStatus(t('js.saved', { time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }), 'ok');
   }
 
   /* --------------------------------------------------------------- render */
@@ -506,7 +540,7 @@
     if ('' !== kind) {
       var badge = document.createElement('span');
       badge.className = 'badge-' + kind;
-      badge.textContent = kind;
+      badge.textContent = t('badge.' + kind);
       head.appendChild(badge);
     }
     a.appendChild(head);
@@ -598,9 +632,9 @@
     });
     var empty = emptyMessage();
     empty.hidden = total > 0;
-    empty.textContent = filterMode === 'archived' ? 'No archived memories.'
-      : filterMode === 'active' ? 'No active memories.'
-      : 'No memories yet.';
+    empty.textContent = filterMode === 'archived' ? t('js.no_archived')
+      : filterMode === 'active' ? t('js.no_active')
+      : t('app.no_memories');
     markActive(fId.value ? fCategory.value : '', fId.value);
     applyCollapsed();
     renderDraftRow();
@@ -621,13 +655,13 @@
     if (!results.length) {
       var p = document.createElement('p');
       p.className = 'empty muted';
-      p.textContent = 'No matches.';
+      p.textContent = t('js.no_matches');
       list.appendChild(p);
       return;
     }
     var section = document.createElement('section');
     section.className = 'cat results';
-    section.appendChild(sectionTitle('Results', results.length));
+    section.appendChild(sectionTitle(t('js.results'), results.length));
     var ul = document.createElement('ul');
     results.forEach(function (item) {
       ul.appendChild(memLink({ id: item.id, category: item.category, title: item.title, archived: !!item.archived, public: !!item.public, private: !!item.private, new: !!item.new, snippet: item.snippet, query: query }));
@@ -701,13 +735,13 @@
     section.setAttribute('data-draft', '1');
     var name = document.createElement('div');
     name.className = 'cat-name draft-name';
-    name.textContent = 'New memory · ' + state.category;
+    name.textContent = t('js.new_memory_in', { category: state.category });
     section.appendChild(name);
     var ul = document.createElement('ul');
     ul.appendChild(memLink({
       id: '',
       category: state.category,
-      title: state.title || 'New memory',
+      title: state.title || t('app.new_memory'),
       private: !!state.private,
       new: true
     }));
@@ -833,8 +867,8 @@
     definitionBox.classList.toggle('is-ok', !bad);
     if (definitionHead) {
       definitionHead.textContent = bad
-        ? 'A runner would refuse this definition'
-        : 'A runner may execute this definition';
+        ? t('definition.refuse')
+        : t('definition.ok');
     }
     if (definitionList) {
       definitionList.innerHTML = '';
@@ -856,7 +890,7 @@
       breadcrumb.appendChild(sep);
       breadcrumb.appendChild(document.createTextNode(id));
     } else {
-      breadcrumb.textContent = 'New memory';
+      breadcrumb.textContent = t('app.new_memory');
     }
   }
 
@@ -985,7 +1019,7 @@
         if (res.ok && res.data.memory) {
           fillEditor(res.data.memory, browseTab(), res.data.definition);
         } else {
-          setStatus('Could not load that memory.', 'err');
+          setStatus(t('js.could_not_load'), 'err');
         }
       });
   }
@@ -1044,13 +1078,13 @@
     if ('' === payload.content.trim()) {
       // Autosave safety: don't create/overwrite with an empty body.
       if (manualIntent) {
-        setStatus('Content must not be empty.', 'err');
+        setStatus(t('js.content_empty'), 'err');
       }
       return Promise.resolve(false);
     }
 
     saving = true;
-    setStatus('Saving…');
+    setStatus(t('js.saving'));
     return api(endpoint.memory, { method: 'POST', body: payload }).then(function (res) {
       if (res.ok && res.data.memory) {
         // On an update, keep the editor exactly as the user left it (adopting
@@ -1074,10 +1108,10 @@
         refreshTree();
         return true;
       }
-      setStatus(res.data.error || 'Save failed.', 'err');
+      setStatus(res.data.error || t('js.save_failed'), 'err');
       return false;
     }).catch(function () {
-      setStatus('Network error.', 'err');
+      setStatus(t('js.network_error'), 'err');
       return false;
     }).then(function (ok) {
       saving = false;
@@ -1145,7 +1179,7 @@
     api(endpoint.preview, { method: 'POST', body: { markdown: body } }).then(function (res) {
       // Only paint if the editor still holds the same text we sent.
       if (fContent.value !== body) { return; }
-      previewEl.innerHTML = res.ok ? (res.data.html || '') : '<p class="muted">Preview unavailable.</p>';
+      previewEl.innerHTML = res.ok ? (res.data.html || '') : '<p class="muted">' + escapeHtml(t('js.preview_unavailable')) + '</p>';
     });
   }, PREVIEW_MS);
 
@@ -1157,7 +1191,7 @@
     return api(endpoint.memory + '?category=' + encodeURIComponent(fromCategory) + '&id=' + encodeURIComponent(id))
       .then(function (res) {
         if (!res.ok || !res.data.memory) {
-          setStatus('Could not move memory.', 'err');
+          setStatus(t('js.could_not_move'), 'err');
           return;
         }
         var doc = res.data.memory;
@@ -1175,10 +1209,10 @@
               fillEditor(saved.data.memory, previewVisible() ? 'preview' : 'write', saved.data.definition);
               markSaved(currentPayload());
             }
-            setStatus('Moved to ' + toCategory + '.', 'ok');
+            setStatus(t('js.moved', { category: toCategory }), 'ok');
             refreshTree();
           } else {
-            setStatus(saved.data.error || 'Move failed.', 'err');
+            setStatus(saved.data.error || t('js.move_failed'), 'err');
           }
         });
       });
@@ -1194,15 +1228,15 @@
   deleteBtn.addEventListener('click', function () {
     var category = fCategory.value;
     var id = fId.value;
-    if (!id || !window.confirm('Move this memory to the trash? You can restore it from the trash until you empty it.')) { return; }
+    if (!id || !window.confirm(t('js.delete_confirm'))) { return; }
     api(endpoint.memory + '?category=' + encodeURIComponent(category) + '&id=' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function (res) {
         if (res.ok) {
           hideEditor();
-          setStatus('Moved to the trash.', 'ok');
+          setStatus(t('js.moved_to_trash'), 'ok');
           refreshTree();
         } else {
-          setStatus(res.data.error || 'Delete failed.', 'err');
+          setStatus(res.data.error || t('js.delete_failed'), 'err');
         }
       });
   });
@@ -1294,7 +1328,7 @@
       return !section.classList.contains('collapsed');
     });
     if (categoriesHead) { categoriesHead.hidden = sections.length === 0; }
-    var label = anyExpanded ? 'Collapse all categories' : 'Expand all categories';
+    var label = anyExpanded ? t('app.collapse_all') : t('app.expand_all');
     collapseToggle.textContent = anyExpanded ? '⊟' : '⊞';
     collapseToggle.title = label;
     collapseToggle.setAttribute('aria-label', label);
@@ -1595,7 +1629,7 @@
       // and making an entry visible again is never something a click should do
       // silently. The admin API refuses the same combination.
       if (idx < 0 && chip.classList.contains('tag-chip-reserved') && fPrivate.checked) {
-        setStatus('Remove "Private" first: a workflow the runner must read cannot be hidden from it.', 'err');
+        setStatus(t('js.private_workflow'), 'err');
         return;
       }
       if (idx >= 0) { list.splice(idx, 1); } else { list.push(tag); }
@@ -1743,7 +1777,7 @@
     // combination the server also refuses.
     if (hasWorkflowTag()) {
       fPrivate.checked = false;
-      setStatus('Remove the "' + reservedWorkflowTag() + '" tag before making this entry private.', 'err');
+      setStatus(t('js.private_workflow_tag', { tag: reservedWorkflowTag() }), 'err');
       return;
     }
     if (fPublic.checked) { fPublic.checked = false; }
@@ -1760,7 +1794,7 @@
   /* Editing: schedule autosave, update preview live, flag unsaved. */
   function onEdit() {
     resetReindexButton();
-    if (isDirty()) { setStatus('Editing…'); } else { setStatus(''); }
+    if (isDirty()) { setStatus(t('js.editing')); } else { setStatus(''); }
     saveIdle();
     autosizeContent();
     if (previewVisible()) { renderPreview(); }

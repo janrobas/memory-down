@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace MemoryDown\Auth;
 
 use MemoryDown\Config;
+use MemoryDown\I18n\LanguageSwitcher;
+use MemoryDown\I18n\Translator;
 use MemoryDown\Support\ClientIp;
 use MemoryDown\Support\RateLimiter;
 use MemoryDown\Users\User;
@@ -41,6 +43,8 @@ use Psr\Log\LoggerInterface;
 final class AuthorizationServer
 {
     private const ALLOWED_SCOPES = [TokenStore::SCOPE];
+
+    private ?Translator $translator = null;
 
     public function __construct(
         private readonly Config $config,
@@ -138,7 +142,7 @@ final class AuthorizationServer
             }
 
             if ('allow' !== $decision) {
-                return $this->consentPage($request, $client, $params, 'Invalid decision.');
+                return $this->consentPage($request, $client, $params, 'consent.invalid_decision');
             }
 
             $consent = $this->consentUser($params);
@@ -506,63 +510,117 @@ final class AuthorizationServer
         ServerRequestInterface $request,
         array $client,
         array $params,
-        ?string $error,
+        ?string $errorKey,
     ): ResponseInterface {
+        $t = $this->translator();
         $unconfigured = $this->users->isEmpty();
+        $appName = htmlspecialchars($this->config->appName, ENT_QUOTES);
+
         $body = [];
-        $body[] = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">';
+        $body[] = '<!DOCTYPE html><html lang="' . htmlspecialchars($t->htmlLang(), ENT_QUOTES) . '"><head><meta charset="utf-8">';
         $body[] = '<meta name="viewport" content="width=device-width, initial-scale=1">';
-        $body[] = '<title>Authorize access - ' . htmlspecialchars($this->config->appName, ENT_QUOTES) . '</title>';
+        $body[] = '<title>' . htmlspecialchars($t->t('consent.title'), ENT_QUOTES) . ' - ' . $appName . '</title>';
         $body[] = '<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:3rem auto;padding:0 1rem;color:#1a1a1a}'
             . '.card{border:1px solid #ddd;border-radius:10px;padding:1.5rem}'
             . 'h1{font-size:1.25rem}.muted{color:#666;word-break:break-all}'
             . 'button{margin-top:1rem;padding:.6rem 1.2rem;border-radius:6px;border:0;cursor:pointer;font-size:1rem}'
             . '.allow{background:#146c43;color:#fff;margin-right:.5rem}.deny{background:#eee}'
             . 'input[type=password],input[type=text]{width:100%;padding:.5rem;margin-top:1rem;border:1px solid #ccc;border-radius:6px}'
-            . '.err{color:#b02a37;background:#f8d7da;border:1px solid #f5c2c7;padding:.6rem;border-radius:6px;margin-bottom:1rem}</style>';
+            . '.err{color:#b02a37;background:#f8d7da;border:1px solid #f5c2c7;padding:.6rem;border-radius:6px;margin-bottom:1rem}'
+            . '.lang-links{display:flex;gap:.75rem;margin-top:1.25rem;font-size:.85rem}'
+            . '.lang-links a{color:#146c43;text-decoration:none}.lang-links a.is-active{font-weight:600;text-decoration:underline}'
+            . '</style>';
         $body[] = '</head><body><div class="card">';
-        $body[] = '<h1>' . htmlspecialchars($this->config->appName, ENT_QUOTES) . ' authorization</h1>';
-        if (null !== $error) {
-            $body[] = '<div class="err">' . htmlspecialchars($error, ENT_QUOTES) . '</div>';
+        $body[] = '<h1>' . htmlspecialchars($t->t('consent.heading', ['app' => $this->config->appName]), ENT_QUOTES) . '</h1>';
+        if (null !== $errorKey) {
+            $body[] = '<div class="err">' . htmlspecialchars($t->t($errorKey), ENT_QUOTES) . '</div>';
         }
-        $body[] = '<p><strong>' . htmlspecialchars((string) $client['client_name'], ENT_QUOTES) . '</strong> requests access to a MemoryDown account.</p>';
-        $body[] = '<p class="muted">Redirect URI: ' . htmlspecialchars((string) ($params['redirect_uri'] ?? ''), ENT_QUOTES) . '</p>';
+        $body[] = '<p>' . $t->t('consent.requests', [
+            'client' => '<strong>' . htmlspecialchars((string) $client['client_name'], ENT_QUOTES) . '</strong>',
+        ]) . '</p>';
+        $body[] = '<p class="muted">' . htmlspecialchars($t->t('consent.redirect_uri'), ENT_QUOTES) . ' '
+            . htmlspecialchars((string) ($params['redirect_uri'] ?? ''), ENT_QUOTES) . '</p>';
         if (isset($params['scope'])) {
-            $body[] = '<p class="muted">Scopes: ' . htmlspecialchars((string) $params['scope'], ENT_QUOTES) . '</p>';
+            $body[] = '<p class="muted">' . htmlspecialchars($t->t('consent.scopes'), ENT_QUOTES) . ' '
+                . htmlspecialchars((string) $params['scope'], ENT_QUOTES) . '</p>';
         }
         if (isset($params['resource'])) {
-            $body[] = '<p class="muted">Resource: ' . htmlspecialchars((string) $params['resource'], ENT_QUOTES) . '</p>';
+            $body[] = '<p class="muted">' . htmlspecialchars($t->t('consent.resource'), ENT_QUOTES) . ' '
+                . htmlspecialchars((string) $params['resource'], ENT_QUOTES) . '</p>';
         }
 
         if ($unconfigured) {
             // Nothing to consent to yet, and saying so is more useful than a
             // login form that cannot succeed. No secret is revealed: "no
             // accounts exist" is not information an attacker can use.
-            $body[] = '<p>The instance has no accounts yet. Create the first admin at '
-                . '<a href="' . htmlspecialchars($this->config->appBaseUrl . '/ui/setup', ENT_QUOTES) . '">'
-                . htmlspecialchars($this->config->appBaseUrl . '/ui/setup', ENT_QUOTES) . '</a>, then start again.</p>';
+            $setupUrl = $this->config->appBaseUrl . '/ui/setup';
+            $body[] = '<p>' . $t->t('consent.unconfigured', ['url' => '<a href="'
+                . htmlspecialchars($setupUrl, ENT_QUOTES) . '">' . htmlspecialchars($setupUrl, ENT_QUOTES) . '</a>'])
+                . '</p>';
+            $body[] = LanguageSwitcher::html($t, $this->consentBackPath($params));
             $body[] = '</div></body></html>';
 
             return $this->html(implode("\n", $body));
         }
 
-        $body[] = '<p class="muted">Sign in with the account this access is for. The connection will be able to read and write '
-            . 'the memory of that account only.</p>';
+        $body[] = '<p class="muted">' . htmlspecialchars($t->t('consent.sign_in'), ENT_QUOTES) . '</p>';
         $body[] = '<form method="post" action="' . htmlspecialchars($this->config->appBaseUrl . '/oauth/authorize', ENT_QUOTES) . '">';
-        foreach (['client_id', 'redirect_uri', 'response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'resource'] as $keep) {
-            if (isset($params[$keep])) {
-                $value = is_array($params[$keep]) ? implode(' ', $params[$keep]) : (string) $params[$keep];
-                $body[] = '<input type="hidden" name="' . htmlspecialchars($keep, ENT_QUOTES) . '" value="' . htmlspecialchars($value, ENT_QUOTES) . '">';
-            }
+        foreach ($this->consentKeptParams($params) as $keep => $value) {
+            $body[] = '<input type="hidden" name="' . htmlspecialchars($keep, ENT_QUOTES) . '" value="' . htmlspecialchars($value, ENT_QUOTES) . '">';
         }
-        $body[] = '<input type="text" name="username" placeholder="Username" autocomplete="username" required>';
-        $body[] = '<input type="password" name="password" placeholder="Password" autocomplete="current-password" required>';
+        $body[] = '<input type="text" name="username" placeholder="' . htmlspecialchars($t->t('field.username'), ENT_QUOTES) . '" autocomplete="username" required>';
+        $body[] = '<input type="password" name="password" placeholder="' . htmlspecialchars($t->t('field.password'), ENT_QUOTES) . '" autocomplete="current-password" required>';
         $body[] = '<div>';
-        $body[] = '<button type="submit" name="decision" value="allow" class="allow">Allow</button>';
-        $body[] = '<button type="submit" name="decision" value="deny" class="deny">Deny</button>';
-        $body[] = '</div></form></div></body></html>';
+        $body[] = '<button type="submit" name="decision" value="allow" class="allow">' . htmlspecialchars($t->t('consent.allow'), ENT_QUOTES) . '</button>';
+        $body[] = '<button type="submit" name="decision" value="deny" class="deny">' . htmlspecialchars($t->t('consent.deny'), ENT_QUOTES) . '</button>';
+        $body[] = '</div></form>';
+        $body[] = LanguageSwitcher::html($t, $this->consentBackPath($params));
+        $body[] = '</div></body></html>';
 
         return $this->html(implode("\n", $body));
+    }
+
+    /**
+     * The parameters a consent decision has to carry through unchanged: the
+     * hidden fields of the form, and the query of the GET link the language
+     * chooser returns to. One list, so the two cannot drift.
+     *
+     * @param array<string, mixed> $params
+     *
+     * @return array<string, string>
+     */
+    private function consentKeptParams(array $params): array
+    {
+        $kept = [];
+        foreach (['client_id', 'redirect_uri', 'response_type', 'scope', 'state', 'code_challenge', 'code_challenge_method', 'resource'] as $name) {
+            if (isset($params[$name])) {
+                $value = is_array($params[$name]) ? implode(' ', array_map('strval', $params[$name])) : (string) $params[$name];
+                $kept[$name] = $value;
+            }
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Where the language chooser should come back to: the same consent request,
+     * as the GET that renders this page.
+     *
+     * A path, not a URL: the language endpoint only ever redirects inside this
+     * instance.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function consentBackPath(array $params): string
+    {
+        $kept = $this->consentKeptParams($params);
+
+        return '/oauth/authorize' . ([] === $kept ? '' : '?' . http_build_query($kept, '', '&', PHP_QUERY_RFC3986));
+    }
+
+    private function translator(): Translator
+    {
+        return $this->translator ??= Translator::forRequest($this->config->defaultLocale);
     }
 
     /**
@@ -645,10 +703,13 @@ final class AuthorizationServer
      * the consent page.
      *
      * One credential per person: this is the same username and password the
-     * admin UI asks for, checked against the same record. The message is
-     * deliberately identical for "no such user", "wrong password" and "disabled
-     * account" (except for the disabled case, which is worth saying plainly to
-     * somebody who got the password right — it reveals nothing to anyone else).
+     * admin UI asks for, checked against the same record. The refusal is
+     * deliberately identical for "no such user" and "wrong password" (except for
+     * the disabled case, which is worth saying plainly to somebody who got the
+     * password right — it reveals nothing to anyone else).
+     *
+     * The refusal travels as a catalogue key, not a sentence: the consent page is
+     * rendered in the language the visitor chose (I18n\Translator).
      *
      * @param array<string, mixed> $params
      *
@@ -659,15 +720,15 @@ final class AuthorizationServer
         $username = strtolower(trim((string) ($params['username'] ?? '')));
         $password = (string) ($params['password'] ?? '');
         if ('' === $username || '' === $password) {
-            return ['user' => null, 'error' => 'Enter the username and password of a MemoryDown account.'];
+            return ['user' => null, 'error' => 'consent.credentials_required'];
         }
 
         $user = $this->users->verify($username, $password);
         if (null === $user) {
-            return ['user' => null, 'error' => 'Invalid username or password.'];
+            return ['user' => null, 'error' => 'error.credentials'];
         }
         if (!$user->enabled) {
-            return ['user' => null, 'error' => 'That account is disabled.'];
+            return ['user' => null, 'error' => 'error.account_disabled'];
         }
 
         return ['user' => $user, 'error' => null];

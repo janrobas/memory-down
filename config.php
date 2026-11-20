@@ -87,6 +87,13 @@ return [
     'app_name' => 'MemoryDown',
     'app_version' => '1.0.2',
 
+    // Language of the admin interface when the visitor's browser asks for one
+    // this UI does not have: sl, en or it. It is a UI preference only — memory,
+    // tags and categories stay exactly as written, and the MCP tools stay
+    // English. A visitor's own choice (a cookie) and their Accept-Language
+    // header both win over this.
+    'default_locale' => $__env('APP_DEFAULT_LOCALE', 'sl'),
+
     // Absolute paths (defaults assume the repository layout).
     'data_path' => $__dataPath,
 

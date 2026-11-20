@@ -6,6 +6,9 @@ namespace MemoryDown\Web;
 
 use MemoryDown\Auth\TokenStore;
 use MemoryDown\Config;
+use MemoryDown\I18n\LanguageSwitcher;
+use MemoryDown\I18n\Locale;
+use MemoryDown\I18n\Translator;
 use MemoryDown\Kernel;
 use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemoryStore;
@@ -56,42 +59,52 @@ final class WebApp
      * Flash messages, keyed by a short code passed in the query string. A fixed
      * vocabulary means nothing the user typed — or a link someone else crafted —
      * is ever echoed back into the page.
+     *
+     * The value is a catalogue key, not a sentence: the message is rendered in
+     * whichever language the page is being read in.
      */
     private const NOTICES = [
-        'restored' => 'Memory restored to its original category.',
-        'purged' => 'Trashed entry deleted permanently.',
-        'emptied' => 'Trash emptied. Those entries are gone for good.',
-        'invalid' => 'That entry is no longer in the trash.',
-        'restore_failed' => 'Could not restore that entry: a memory with the same id exists again, or the file could not be moved. Reload and check.',
+        'restored' => 'notice.restored',
+        'purged' => 'notice.purged',
+        'emptied' => 'notice.emptied',
+        'invalid' => 'notice.trash_invalid',
+        'restore_failed' => 'notice.restore_failed',
     ];
 
     /** The same idea for the account pages. */
     private const ACCOUNT_NOTICES = [
-        'password_changed' => 'Password changed. Your other sessions and MCP connections have to sign in again.',
-        'user_created' => 'Account created. Give that person their username and password.',
-        'user_password' => 'Password reset. That account\'s other sessions and MCP connections have to sign in again.',
-        'user_role' => 'Role updated.',
-        'user_enabled' => 'Account enabled. It can sign in again, but its old tokens do not come back.',
-        'user_disabled' => 'Account disabled. Its sessions and MCP connections stopped working immediately.',
-        'user_deleted' => 'Account deleted. Its memory was moved to data/users/.trash and can be brought back over FTP.',
-        'token_rotated' => 'New API token generated. Copy it to wherever it is used; the previous one stopped working.',
-        'token_cleared' => 'API token cleared. That API no longer serves this account.',
+        'password_changed' => 'notice.password_changed',
+        'user_created' => 'notice.user_created',
+        'user_password' => 'notice.user_password',
+        'user_role' => 'notice.user_role',
+        'user_enabled' => 'notice.user_enabled',
+        'user_disabled' => 'notice.user_disabled',
+        'user_deleted' => 'notice.user_deleted',
+        'token_rotated' => 'notice.token_rotated',
+        'token_cleared' => 'notice.token_cleared',
     ];
 
     private const ACCOUNT_ERRORS = [
-        'invalid_id' => 'A username must be 3-32 characters of a-z, 0-9, "_" or "-", and start with a letter or digit.',
-        'exists' => 'That username is already taken.',
-        'password_short' => 'Choose a password of at least ' . UserStore::MIN_PASSWORD_LENGTH . ' characters.',
-        'password_match' => 'The two passwords do not match.',
-        'current_password' => 'That is not your current password.',
-        'role' => 'Unknown role.',
-        'missing' => 'No such account.',
-        'last_admin' => 'That would leave the instance without an enabled admin.',
-        'self_role' => 'You cannot change your own role.',
-        'self_disable' => 'You cannot disable your own account.',
-        'self_delete' => 'You cannot delete your own account.',
-        'archive_failed' => 'Could not move that account\'s directory aside, so nothing was deleted. Check the permissions on data/users.',
-        'invalid' => 'That request was not valid.',
+        'invalid_id' => 'error.invalid_id',
+        'exists' => 'error.exists',
+        'password_short' => 'error.password_short',
+        'password_match' => 'error.password_match',
+        'current_password' => 'error.current_password',
+        'role' => 'error.role',
+        'missing' => 'error.missing',
+        'last_admin' => 'error.last_admin',
+        'self_role' => 'error.self_role',
+        'self_disable' => 'error.self_disable',
+        'self_delete' => 'error.self_delete',
+        'archive_failed' => 'error.archive_failed',
+        'invalid' => 'error.invalid',
+    ];
+
+    /** The refusal codes WebAuth::attempt() reports, as catalogue keys. */
+    private const LOGIN_ERRORS = [
+        'locked' => 'error.login_locked',
+        'credentials' => 'error.credentials',
+        'disabled' => 'error.account_disabled',
     ];
 
     /** Shipped inside every backup zip so it explains itself later. */
@@ -128,6 +141,9 @@ final class WebApp
 
     private Psr17Factory $factory;
     private WebAuth $auth;
+    private ?Translator $translator = null;
+    /** The path (and query) of the request being answered, for the language chooser's return trip. */
+    private string $currentUri = '/ui';
     private bool $userResolved = false;
     private ?User $currentUser = null;
 
@@ -172,10 +188,13 @@ final class WebApp
             $path = '/ui';
         }
         $method = strtoupper($request->getMethod());
+        $query = $request->getUri()->getQuery();
+        $this->currentUri = '' === $query ? $path : $path . '?' . $query;
 
         try {
             return match (true) {
                 '/ui' === $path && 'GET' === $method => $this->page($request),
+                '/ui/language' === $path && 'GET' === $method => $this->language($request),
                 '/ui/login' === $path && 'GET' === $method => $this->loginPage(),
                 '/ui/login' === $path && 'POST' === $method => $this->loginSubmit($request),
                 '/ui/logout' === $path && 'POST' === $method => $this->logout($request),
@@ -217,6 +236,102 @@ final class WebApp
 
             return $this->json(['error' => 'internal_error'], 500);
         }
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  Language (the UI only)
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Remember the visitor's choice of language and send them back where they
+     * were.
+     *
+     * A plain GET that writes one preference cookie and redirects: no CSRF token
+     * (nothing but a display preference changes) and no JavaScript, so it also
+     * works on the sign-in page, where there is no account and no session to
+     * keep the choice in.
+     *
+     * The return path is a PATH, never a URL: anything carrying a scheme, a
+     * protocol-relative "//" or a backslash is replaced by /ui, so a crafted link
+     * cannot turn this endpoint into an open redirector.
+     */
+    private function language(ServerRequestInterface $request): ResponseInterface
+    {
+        $query = $request->getQueryParams();
+        $chosen = Locale::normalize($query['lang'] ?? null);
+
+        $response = $this->redirect($this->returnPath($this->str($query['back'] ?? null)));
+        $cookie = Locale::cookieHeader($chosen, $this->config->isProduction());
+        if ('' !== $cookie) {
+            $response = $response->withHeader('Set-Cookie', $cookie);
+        }
+
+        return $response;
+    }
+
+    private function returnPath(string $value): string
+    {
+        $safe = '' !== $value
+            && str_starts_with($value, '/')
+            && !str_starts_with($value, '//')
+            && !str_contains($value, '\\')
+            && 1 !== preg_match('/[\x00-\x1F\x7F]/', $value);
+
+        return $safe ? $value : '/ui';
+    }
+
+    /**
+     * The translator for this request: the visitor's cookie, else their
+     * Accept-Language, else APP_DEFAULT_LOCALE.
+     *
+     * Built lazily, because every JSON API call answers in the same language as
+     * the page that called it and must not pay for the catalogue twice.
+     */
+    private function translator(): Translator
+    {
+        return $this->translator ??= Translator::forRequest($this->config->defaultLocale);
+    }
+
+    /** Shorthand for the pages that need one string rather than a whole catalogue. */
+    private function t(string $key, array $params = []): string
+    {
+        return $this->translator()->t($key, $params);
+    }
+
+    /**
+     * What a runner would refuse a document for, in the language the page is
+     * being read in, or null when the entry is not an activated definition.
+     *
+     * WorkflowDefinition returns codes and their parameters (it is storage and
+     * knows nothing about readers); the sentences live in the catalogues, so the
+     * verdict can be Slovenian, English or Italian while the stored definition
+     * stays exactly as written.
+     *
+     * @param array<string, mixed>|null $doc
+     *
+     * @return list<string>|null
+     */
+    private function renderProblems(?array $doc): ?array
+    {
+        if (null === $doc) {
+            return null;
+        }
+
+        $problems = WorkflowDefinition::activationProblems(
+            (string) ($doc['category'] ?? ''),
+            $doc['tags'] ?? [],
+            (string) ($doc['body'] ?? ''),
+        );
+        if (null === $problems) {
+            return null;
+        }
+
+        $t = $this->translator();
+
+        return array_map(
+            static fn (array $problem): string => $t->t('workflow.' . $problem['code'], $problem['params']),
+            $problems,
+        );
     }
 
     /* ------------------------------------------------------------------ *
@@ -301,18 +416,14 @@ final class WebApp
         }
 
         return $this->html($this->view('app', [
-            'title' => 'MemoryDown',
+            'title' => $this->config->appName,
             'appVersion' => $this->config->appVersion,
             'bodyClass' => 'app',
             'csrf' => $this->auth->csrfToken(),
             'categories' => $this->store()->categories(),
             'tree' => $this->tree(),
             'selected' => $selected,
-            'definition' => null === $selected ? null : WorkflowDefinition::activationProblems(
-                (string) ($selected['category'] ?? ''),
-                $selected['tags'] ?? [],
-                (string) ($selected['body'] ?? ''),
-            ),
+            'definition' => $this->renderProblems($selected),
             'trashCount' => $this->store()->trashCount(),
             'engine' => $this->search() instanceof MemoryIndex ? $this->search()->status() : ['engine' => 'direct'],
             'user' => $this->user(),
@@ -329,7 +440,7 @@ final class WebApp
         }
 
         return $this->html($this->view('login', [
-            'title' => 'Sign in',
+            'title' => $this->t('login.title'),
             'bodyClass' => 'auth',
             'csrf' => $this->auth->csrfToken(),
             'username' => '',
@@ -348,11 +459,11 @@ final class WebApp
         // that cannot be reset by the client.
         if (!$this->withinUiRateLimit('login', $request, $this->config->rateLimitLoginMax)) {
             return $this->html($this->view('login', [
-                'title' => 'Sign in',
+                'title' => $this->t('login.title'),
                 'bodyClass' => 'auth',
                 'csrf' => $this->auth->csrfToken(),
                 'username' => '',
-                'error' => 'Too many attempts. Wait a moment and try again.',
+                'error' => $this->t('error.login_locked'),
             ]), 429)->withHeader('Retry-After', (string) max(1, $this->config->rateLimitWindow));
         }
 
@@ -360,25 +471,26 @@ final class WebApp
         $username = trim($this->str($body['username'] ?? null));
 
         if (!$this->auth->checkCsrf($this->str($body['csrf'] ?? null))) {
-            return $this->loginError($username, 'Your session expired. Please try again.', 400);
+            return $this->loginError($username, 'error.session_expired', 400);
         }
 
         $error = $this->auth->attempt($username, $this->str($body['password'] ?? null));
         if ('' !== $error) {
-            return $this->loginError($username, $error, 401);
+            return $this->loginError($username, self::LOGIN_ERRORS[$error] ?? 'error.credentials', 401);
         }
 
         return $this->redirect('/ui');
     }
 
+    /** @param string $error a catalogue key, translated here */
     private function loginError(string $username, string $error, int $status): ResponseInterface
     {
         return $this->html($this->view('login', [
-            'title' => 'Sign in',
+            'title' => $this->t('login.title'),
             'bodyClass' => 'auth',
             'csrf' => $this->auth->csrfToken(),
             'username' => $username,
-            'error' => $error,
+            'error' => $this->t($error),
         ]), $status);
     }
 
@@ -403,7 +515,7 @@ final class WebApp
         }
 
         return $this->html($this->view('setup', [
-            'title' => 'Set up MemoryDown',
+            'title' => $this->t('setup.title'),
             'bodyClass' => 'auth',
             'csrf' => $this->auth->csrfToken(),
             'needsToken' => '' !== $this->config->adminSetupToken,
@@ -424,12 +536,12 @@ final class WebApp
         // weak or unset.
         if (!$this->withinUiRateLimit('setup', $request, $this->config->rateLimitSetupMax)) {
             return $this->html($this->view('setup', [
-                'title' => 'Set up MemoryDown',
+                'title' => $this->t('setup.title'),
                 'bodyClass' => 'auth',
                 'csrf' => $this->auth->csrfToken(),
                 'needsToken' => '' !== $this->config->adminSetupToken,
                 'username' => $this->suggestedUsername(),
-                'error' => 'Too many attempts. Wait a moment and try again.',
+                'error' => $this->t('error.login_locked'),
             ]), 429)->withHeader('Retry-After', (string) max(1, $this->config->rateLimitWindow));
         }
 
@@ -441,20 +553,20 @@ final class WebApp
         $token = $this->str($body['setup_token'] ?? null);
 
         if (!$this->auth->checkCsrf($this->str($body['csrf'] ?? null))) {
-            $error = 'Your session expired. Please try again.';
+            $error = $this->t('error.session_expired');
         } elseif ('' !== $this->config->adminSetupToken && !hash_equals($this->config->adminSetupToken, $token)) {
-            $error = 'Invalid setup token.';
+            $error = $this->t('error.setup_token');
         } elseif (!UserStore::isValidId($username)) {
-            $error = self::ACCOUNT_ERRORS['invalid_id'];
+            $error = $this->t('error.invalid_id');
         } elseif (strlen($password) < UserStore::MIN_PASSWORD_LENGTH) {
-            $error = self::ACCOUNT_ERRORS['password_short'];
+            $error = $this->passwordShort();
         } elseif ($password !== $confirm) {
-            $error = self::ACCOUNT_ERRORS['password_match'];
+            $error = $this->t('error.password_match');
         }
 
         if ('' !== $error) {
             return $this->html($this->view('setup', [
-                'title' => 'Set up MemoryDown',
+                'title' => $this->t('setup.title'),
                 'bodyClass' => 'auth',
                 'csrf' => $this->auth->csrfToken(),
                 'needsToken' => '' !== $this->config->adminSetupToken,
@@ -467,12 +579,12 @@ final class WebApp
             $this->users->create($username, $password, UserStore::ROLE_ADMIN);
         } catch (\InvalidArgumentException $e) {
             return $this->html($this->view('setup', [
-                'title' => 'Set up MemoryDown',
+                'title' => $this->t('setup.title'),
                 'bodyClass' => 'auth',
                 'csrf' => $this->auth->csrfToken(),
                 'needsToken' => '' !== $this->config->adminSetupToken,
                 'username' => $username,
-                'error' => self::ACCOUNT_ERRORS['exists'],
+                'error' => $this->t('error.exists'),
             ]), 400);
         }
 
@@ -509,7 +621,7 @@ final class WebApp
         \assert(null !== $user);
 
         return $this->html($this->view('settings', [
-            'title' => 'MemoryDown — Settings',
+            'title' => $this->config->appName . ' — ' . $this->t('settings.title'),
             'bodyClass' => 'settings',
             'csrf' => $this->auth->csrfToken(),
             'user' => $user,
@@ -590,7 +702,7 @@ final class WebApp
         \assert(null !== $user);
 
         return $this->html($this->view('users', [
-            'title' => 'MemoryDown — Users',
+            'title' => $this->config->appName . ' — ' . $this->t('users.title'),
             'bodyClass' => 'users',
             'csrf' => $this->auth->csrfToken(),
             'currentId' => $user->id,
@@ -905,11 +1017,7 @@ final class WebApp
 
         return $this->json([
             'memory' => $doc,
-            'definition' => WorkflowDefinition::activationProblems(
-                (string) ($doc['category'] ?? ''),
-                $doc['tags'] ?? [],
-                (string) ($doc['body'] ?? ''),
-            ),
+            'definition' => $this->renderProblems($doc),
         ]);
     }
 
@@ -933,10 +1041,10 @@ final class WebApp
         $private = filter_var($data['private'] ?? false, FILTER_VALIDATE_BOOL);
 
         if (!PathValidator::isCategory($category)) {
-            return $this->json(['error' => 'Invalid category.'], 400);
+            return $this->json(['error' => $this->t('error.invalid_category')], 400);
         }
         if ('' === trim($content)) {
-            return $this->json(['error' => 'Content must not be empty.'], 400);
+            return $this->json(['error' => $this->t('error.empty_content')], 400);
         }
 
         // A definition stays in `workflows` until its activation is taken away,
@@ -949,7 +1057,10 @@ final class WebApp
         if ('' !== $currentCategory && $currentCategory !== $category) {
             if (null !== $currentDoc && WorkflowDefinition::hasTag($currentDoc['tags'] ?? [])) {
                 return $this->json([
-                    'error' => 'This entry is an active workflow: remove the "' . WorkflowDefinition::TAG . '" tag before moving it out of "' . WorkflowDefinition::CATEGORY . '".',
+                    'error' => $this->t('error.workflow_move', [
+                        'tag' => WorkflowDefinition::TAG,
+                        'category' => WorkflowDefinition::CATEGORY,
+                    ]),
                 ], 400);
             }
         }
@@ -965,7 +1076,7 @@ final class WebApp
         $nextPrivate = array_key_exists('private', $data) ? $private : (bool) ($currentDoc['private'] ?? false);
         if ($nextPrivate && WorkflowDefinition::hasTag($nextTags)) {
             return $this->json([
-                'error' => 'A workflow that is marked "' . WorkflowDefinition::TAG . '" cannot be private: the runner reads definitions over the workflows API, so it would never see this one. Remove the tag first.',
+                'error' => $this->t('error.workflow_private', ['tag' => WorkflowDefinition::TAG]),
             ], 400);
         }
 
@@ -973,7 +1084,7 @@ final class WebApp
         $nextPublic = array_key_exists('public', $data) ? $public : (bool) ($currentDoc['public'] ?? false);
         if ($nextPrivate && $nextPublic) {
             return $this->json([
-                'error' => 'An entry cannot be both public and private: publishing serves it to the writings API, privacy keeps it away from AI.',
+                'error' => $this->t('error.public_private'),
             ], 400);
         }
 
@@ -985,7 +1096,10 @@ final class WebApp
         $reserved = PathValidator::humanOnlyTag($tags);
         if ('' !== $reserved && !WorkflowDefinition::isWorkflowCategory($category)) {
             return $this->json([
-                'error' => 'The "' . $reserved . '" tag can only be used in the "' . WorkflowDefinition::CATEGORY . '" category.',
+                'error' => $this->t('error.reserved_tag', [
+                    'tag' => $reserved,
+                    'category' => WorkflowDefinition::CATEGORY,
+                ]),
             ], 400);
         }
 
@@ -994,7 +1108,7 @@ final class WebApp
                 $doc = $this->store()->create($content, $title, $category, $tags, archived: $archived, public: $public, private: $private);
             } else {
                 if (!PathValidator::isId($id)) {
-                    return $this->json(['error' => 'Invalid id.'], 400);
+                    return $this->json(['error' => $this->t('error.invalid_memory_id')], 400);
                 }
                 $changes = [
                     'title' => $title,
@@ -1024,11 +1138,7 @@ final class WebApp
 
         return $this->json([
             'memory' => $doc,
-            'definition' => WorkflowDefinition::activationProblems(
-                (string) ($doc['category'] ?? ''),
-                $doc['tags'] ?? [],
-                (string) ($doc['body'] ?? ''),
-            ),
+            'definition' => $this->renderProblems($doc),
         ]);
     }
 
@@ -1083,7 +1193,6 @@ final class WebApp
             return $denied;
         }
 
-        $query = $request->getQueryParams();
         $entries = $this->store()->trashed();
         $bytes = 0;
         foreach ($entries as $entry) {
@@ -1091,13 +1200,13 @@ final class WebApp
         }
 
         return $this->html($this->view('trash', [
-            'title' => 'MemoryDown — Trash',
+            'title' => $this->config->appName . ' — ' . $this->t('trash.title'),
             'bodyClass' => 'trash',
             'csrf' => $this->auth->csrfToken(),
             'entries' => $entries,
             'bytes' => $bytes,
-            'notice' => self::NOTICES[$this->str($query['notice'] ?? null)] ?? '',
-            'error' => self::NOTICES[$this->str($query['error'] ?? null)] ?? '',
+            'notice' => $this->flash($request, 'notice', self::NOTICES),
+            'error' => $this->flash($request, 'error', self::NOTICES),
         ]));
     }
 
@@ -1342,13 +1451,22 @@ final class WebApp
     }
 
     /**
-     * @param array<string, string> $vocabulary
+     * @param array<string, string> $vocabulary code => catalogue key
      */
     private function flash(ServerRequestInterface $request, string $key, array $vocabulary): string
     {
         $code = $this->str($request->getQueryParams()[$key] ?? null);
+        $catalogueKey = $vocabulary[$code] ?? '';
 
-        return '' === $code ? '' : ($vocabulary[$code] ?? '');
+        // An unknown code shows nothing: a message is never built out of what a
+        // link happened to carry.
+        return '' === $catalogueKey ? '' : $this->t($catalogueKey);
+    }
+
+    /** "Choose a password of at least N characters." — N comes from the store. */
+    private function passwordShort(): string
+    {
+        return $this->t('error.password_short', ['min' => UserStore::MIN_PASSWORD_LENGTH]);
     }
 
     private function usersError(string $code): ResponseInterface
@@ -1566,6 +1684,27 @@ final class WebApp
      */
     private function view(string $template, array $data): string
     {
+        $translator = $this->translator();
+
+        // Every template — and the shared layout — gets the translator and the
+        // language chooser, so no page can be left untranslated by forgetting to
+        // pass them. `te()` is the escaped form, which is what a template should
+        // use unless the catalogue value carries markup of its own.
+        $data += [
+            't' => static fn (string $key, array $params = []): string => $translator->t($key, $params),
+            'te' => static fn (string $key, array $params = []): string => $translator->e($key, $params),
+            'lang' => $translator->htmlLang(),
+            'languageLinks' => LanguageSwitcher::html($translator, $this->currentUri),
+            'languageBlurb' => $translator->e('app.language_blurb'),
+            // Safe inside a double-quoted HTML attribute: the HEX flags escape
+            // every character that could end it or start a tag.
+            'i18nJson' => (string) json_encode(
+                $translator->clientBundle(),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+                | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT,
+            ),
+        ];
+
         $content = (static function () use ($template, $data): string {
             extract($data, EXTR_SKIP);
             ob_start();
@@ -1604,10 +1743,15 @@ final class WebApp
      */
     private function forbidden(): ResponseInterface
     {
+        $t = $this->translator();
+
         return $this->html(
-            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Not allowed</title></head>'
+            '<!DOCTYPE html><html lang="' . WebApp::h($t->htmlLang()) . '"><head><meta charset="utf-8">'
+            . '<title>' . WebApp::h($t->t('forbidden.title')) . '</title></head>'
             . '<body style="font-family:system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem">'
-            . '<h1>Not allowed</h1><p>That page is for admins.</p><p><a href="/ui">Back to memories</a></p>'
+            . '<h1>' . WebApp::h($t->t('forbidden.title')) . '</h1>'
+            . '<p>' . WebApp::h($t->t('forbidden.text')) . '</p>'
+            . '<p><a href="/ui">' . WebApp::h($t->t('forbidden.back')) . '</a></p>'
             . '</body></html>',
             403
         );

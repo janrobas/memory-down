@@ -122,17 +122,19 @@ final class WebAuth
     }
 
     /**
-     * Try to sign in. Returns '' on success, otherwise a message safe to show
-     * the person typing: it never distinguishes a wrong username from a wrong
-     * password, but it does say when an account is disabled — somebody who got
-     * the password right is not being told a secret.
+     * Try to sign in. Returns '' on success, otherwise a refusal code the caller
+     * renders in the visitor's language: `locked`, `credentials` or `disabled`.
+     *
+     * The code never distinguishes a wrong username from a wrong password, but
+     * `disabled` is its own code — somebody who got the password right is not
+     * being told a secret.
      */
     public function attempt(string $username, string $password): string
     {
         $this->start();
 
         if ((int) ($_SESSION['locked_until'] ?? 0) > time()) {
-            return 'Too many attempts. Wait a moment and try again.';
+            return 'locked';
         }
 
         $username = strtolower(trim($username));
@@ -147,13 +149,13 @@ final class WebAuth
             }
             $this->logger->warning('admin.login_failed', ['user' => $username]);
 
-            return 'Incorrect username or password.';
+            return 'credentials';
         }
 
         if (!$user->enabled) {
             $this->logger->warning('admin.login_disabled', ['user' => $user->id]);
 
-            return 'That account is disabled.';
+            return 'disabled';
         }
 
         session_regenerate_id(true);

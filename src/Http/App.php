@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace MemoryDown\Http;
 
 use MemoryDown\Config;
+use MemoryDown\I18n\Locale;
+use MemoryDown\I18n\Translator;
 use MemoryDown\Kernel;
 use MemoryDown\Mcp\McpServerFactory;
 use MemoryDown\Support\BearerToken;
@@ -487,31 +489,51 @@ final class App
         return $response;
     }
 
+    /**
+     * The human-facing page of links and endpoints, in the language the visitor
+     * asked for (the same cookie the admin UI uses). Two of its lines carry
+     * <code> markup of our own, which is why they are not escaped as a whole.
+     */
     private function aboutPage(): ResponseInterface
     {
+        $t = new Translator(Locale::fromRequest($this->config->defaultLocale));
+        $e = static fn (string $key, array $params = []): string => htmlspecialchars(
+            $t->t($key, $params),
+            ENT_QUOTES | ENT_SUBSTITUTE,
+            'UTF-8',
+        );
+
         $uiLink = $this->config->uiEnabled
-            ? '<li><a href="/ui">Admin UI — browse &amp; edit memories</a></li>'
+            ? '<li><a href="/ui">' . $e('about.ui') . '</a></li>'
             : '';
+
+        $lang = htmlspecialchars($t->htmlLang(), ENT_QUOTES);
+        $appName = htmlspecialchars($this->config->appName, ENT_QUOTES);
+        $tagline = $e('about.tagline', ['version' => $this->config->appVersion]);
+        $mcp = $t->t('about.mcp');
+        $mcpAll = $t->t('about.mcp_all');
 
         $html = <<<HTML
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{$lang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
-<title>{$this->config->appName}</title>
+<title>{$appName}</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem;color:#1a1a1a}
 code{background:#f3f4f6;padding:.1rem .35rem;border-radius:4px}
 a{color:#146c43}
+.lang{display:flex;gap:.8rem;font-size:.85rem;margin-top:2rem}
+.lang a{color:#4b5563;text-decoration:none}.lang a.on{color:#146c43;font-weight:600}
 </style>
 </head>
 <body>
-<h1>{$this->config->appName}</h1>
-<p>Personal AI memory server (v{$this->config->appVersion}). Persistent memory is stored as Markdown files.</p>
-<p>This host serves the MCP endpoint at <code>/mcp</code> (and at the base URL) over Streamable HTTP with OAuth 2.1.</p>
-<p>Administrators also get <code>/mcp/all</code>: the same tools, over every enabled account. It is bound to its own OAuth audience, so an ordinary connector cannot reach it.</p>
+<h1>{$appName}</h1>
+<p>{$tagline}</p>
+<p>{$mcp}</p>
+<p>{$mcpAll}</p>
 <ul>
 {$uiLink}
 <li><a href="/health">/health</a></li>
@@ -520,6 +542,7 @@ a{color:#146c43}
 <li><a href="/.well-known/oauth-protected-resource">/.well-known/oauth-protected-resource</a></li>
 <li><a href="/.well-known/oauth-authorization-server">/.well-known/oauth-authorization-server</a></li>
 </ul>
+{$this->aboutLanguageLinks($t)}
 </body>
 </html>
 HTML;
@@ -530,6 +553,28 @@ HTML;
         $response->getBody()->write($html);
 
         return $response;
+    }
+
+    /**
+     * The language chooser on /about, in this page's own minimal styling (it has
+     * no stylesheet and no script: the CSP there allows neither).
+     */
+    private function aboutLanguageLinks(Translator $t): string
+    {
+        $links = [];
+        foreach (Locale::NAMES as $code => $name) {
+            $attributes = 'href="' . htmlspecialchars(
+                \MemoryDown\I18n\LanguageSwitcher::href($code, '/about'),
+                ENT_QUOTES,
+            ) . '"';
+            $attributes .= ' lang="' . $code . '" hreflang="' . $code . '"';
+            if ($code === $t->locale()) {
+                $attributes .= ' class="on" aria-current="true"';
+            }
+            $links[] = '<a ' . $attributes . '>' . htmlspecialchars($name, ENT_QUOTES) . '</a>';
+        }
+
+        return '<div class="lang" role="group">' . implode('', $links) . '</div>';
     }
 
     /**

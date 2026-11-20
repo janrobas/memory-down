@@ -5,6 +5,9 @@
  * changing it signs out every other session and MCP connection) and the API
  * tokens of the read-only publishing APIs.
  *
+ * `$te` escapes what it renders; `$t` is used for the two or three notes whose
+ * catalogue value carries its own <code> markup.
+ *
  * @var string $csrf
  * @var \MemoryDown\Users\User $user
  * @var array<string, array{token: string, enabled: bool}> $tokens
@@ -12,6 +15,8 @@
  * @var array{account: string, all: string} $mcp
  * @var string $notices
  * @var string $errors
+ * @var callable $te
+ * @var callable $t
  */
 use MemoryDown\Users\UserStore;
 use MemoryDown\Web\WebApp;
@@ -19,21 +24,23 @@ use MemoryDown\Web\WebApp;
 $h = static fn (string $v): string => WebApp::h($v);
 $labels = [
     UserStore::TOKEN_WRITINGS => [
-        'name' => 'Writings API',
-        'what' => 'read-only access to your published writings (entries in the writings category that are marked public), at /public/writings',
+        'name' => $te('settings.writings_name'),
+        'name_raw' => $t('settings.writings_name'),
+        'what' => $te('settings.writings_what'),
     ],
     UserStore::TOKEN_WORKFLOWS => [
-        'name' => 'Workflows API',
-        'what' => 'read-only access to your workflow definitions, at /api/workflows',
+        'name' => $te('settings.workflows_name'),
+        'name_raw' => $t('settings.workflows_name'),
+        'what' => $te('settings.workflows_what'),
     ],
 ];
 ?>
 <main class="page-stack">
 
   <section class="page-card">
-    <h1>Settings</h1>
+    <h1><?= $te('settings.title') ?></h1>
     <p class="muted">
-      Signed in as <strong><?= $h($user->id) ?></strong>
+      <?= $te('settings.signed_in_as') ?> <strong><?= $h($user->id) ?></strong>
       <span class="pill<?= $user->isAdmin() ? ' pill-accent' : '' ?>"><?= $h($user->role) ?></span>
     </p>
 
@@ -45,81 +52,65 @@ $labels = [
     <?php endif; ?>
 
     <p class="trash-back">
-      <a href="/ui">&larr; Back to memories</a>
-      <?php if ($user->isAdmin()): ?> &middot; <a href="/ui/users">Users</a><?php endif; ?>
+      <a href="/ui"><?= $te('settings.back') ?></a>
+      <?php if ($user->isAdmin()): ?> &middot; <a href="/ui/users"><?= $te('settings.users') ?></a><?php endif; ?>
     </p>
   </section>
 
   <section class="page-card">
-    <h2>Password</h2>
-    <p class="muted">
-      This is the same password MCP clients ask for on the consent page, and the one you
-      sign in here with. Changing it signs out your other sessions and invalidates every
-      MCP connection of this account; you stay signed in here.
-    </p>
+    <h2><?= $te('settings.password_head') ?></h2>
+    <p class="muted"><?= $te('settings.password_intro') ?></p>
     <form method="post" action="/ui/settings/password" autocomplete="off">
       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
-      <label for="current">Current password</label>
+      <label for="current"><?= $te('field.current_password') ?></label>
       <input type="password" id="current" name="current" required autocomplete="current-password">
-      <label for="password">New password</label>
+      <label for="password"><?= $te('field.new_password') ?></label>
       <input type="password" id="password" name="password" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>">
-      <label for="confirm">Confirm new password</label>
+      <label for="confirm"><?= $te('field.confirm_new') ?></label>
       <input type="password" id="confirm" name="confirm" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>">
-      <button type="submit" class="primary block">Change password</button>
+      <button type="submit" class="primary block"><?= $te('settings.change_password') ?></button>
     </form>
   </section>
 
   <section class="page-card">
-    <h2>MCP connections</h2>
-    <p class="muted">
-      Paste one of these as the server URL in ChatGPT or another MCP client. Both ask for
-      this same username and password on the consent page.
-    </p>
+    <h2><?= $te('settings.mcp_head') ?></h2>
+    <p class="muted"><?= $te('settings.mcp_intro') ?></p>
 
     <div class="token-block">
-      <div class="account-name">Your memory</div>
+      <div class="account-name"><?= $te('settings.mcp_account') ?></div>
       <div class="token-value"><?= $h($mcp['account']) ?></div>
-      <p class="muted">The seven memory tools, over your own account only.</p>
+      <p class="muted"><?= $te('settings.mcp_account_note') ?></p>
     </div>
 
     <?php if ('' !== $mcp['all']): ?>
       <div class="token-block">
-        <div class="account-name">Every account (administrator)</div>
+        <div class="account-name"><?= $te('settings.mcp_all') ?></div>
         <div class="token-value"><?= $h($mcp['all']) ?></div>
-        <p class="muted">
-          The same tools over every enabled account, with an <code>owner</code> argument on each
-          one. It needs a connection of its own: the token of an ordinary connector is not
-          accepted here, and an account that is not an administrator is refused.
-        </p>
+        <p class="muted"><?= $t('settings.mcp_all_note') ?></p>
       </div>
     <?php endif; ?>
   </section>
 
   <section class="page-card">
-    <h2>API tokens</h2>
-    <p class="muted">
-      These are your keys to the read-only publishing APIs. Each one is shown in full so
-      you can copy it; treat it like a password, because it does not need a login.
-      Rotating replaces it immediately, and whatever was using the old one stops working.
-    </p>
+    <h2><?= $te('settings.api_head') ?></h2>
+    <p class="muted"><?= $te('settings.api_intro') ?></p>
 
     <?php foreach ($labels as $kind => $label): ?>
       <?php $entry = $tokens[$kind] ?? ['token' => '', 'enabled' => false]; ?>
       <div class="token-block">
-        <div class="account-name"><?= $h($label['name']) ?></div>
+        <div class="account-name"><?= $label['name'] ?></div>
         <p class="muted">
-          <?= $h($label['what']) ?>.
+          <?= $label['what'] ?>.
           <?php if (!$entry['enabled']): ?>
-            <strong>This API is switched off for the whole instance</strong> — a token will not
-            answer until it is enabled (its own <code>_API_ENABLED</code> setting).
+            <strong><?= $t('settings.api_disabled') ?></strong>
           <?php endif; ?>
         </p>
 
         <?php if ('' === $entry['token']): ?>
-          <p class="muted">No token yet: nothing can read that API for your account.</p>
+          <p class="muted"><?= $te('settings.no_token') ?></p>
         <?php else: ?>
           <details class="account-more">
-            <summary>Show token</summary>
+            <summary><?= $te('settings.show_token') ?></summary>
             <div class="token-value"><?= $h($entry['token']) ?></div>
           </details>
         <?php endif; ?>
@@ -129,22 +120,22 @@ $labels = [
             <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
             <input type="hidden" name="kind" value="<?= $h($kind) ?>">
             <input type="hidden" name="action" value="rotate">
-            <button type="submit"><?= '' === $entry['token'] ? 'Generate token' : 'Rotate token' ?></button>
+            <button type="submit"><?= '' === $entry['token'] ? $te('settings.generate_token') : $te('settings.rotate_token') ?></button>
           </form>
           <?php if ('' !== $entry['token']): ?>
             <form class="inline-form" method="post" action="/ui/settings/token"
-                  data-confirm="Clear your <?= $h($label['name']) ?> token? Whatever is using it stops working immediately, and it cannot be shown again.">
+                  data-confirm="<?= $te('settings.clear_confirm', ['name' => $label['name_raw']]) ?>">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="kind" value="<?= $h($kind) ?>">
               <input type="hidden" name="action" value="clear">
-              <button type="submit" class="danger">Clear</button>
+              <button type="submit" class="danger"><?= $te('settings.clear') ?></button>
             </form>
           <?php endif; ?>
         </div>
       </div>
     <?php endforeach; ?>
 
-    <p class="trash-back"><a href="/ui/backup" download>Download all my memories (zip)</a></p>
+    <p class="trash-back"><a href="/ui/backup" download><?= $te('settings.backup_link') ?></a></p>
   </section>
 
 </main>

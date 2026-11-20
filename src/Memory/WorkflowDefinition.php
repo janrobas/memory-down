@@ -222,9 +222,14 @@ MD;
      * activated definition (a plain note, or another category) and the verdict
      * would be meaningless.
      *
+     * Each problem is a code and its parameters, never a sentence: storage does
+     * not know what language the reader speaks, and the admin UI renders the very
+     * same list in Slovenian, English or Italian (see I18n\Translator, keys
+     * `workflow.*`).
+     *
      * @param mixed $tags
      *
-     * @return list<string>|null
+     * @return list<array{code: string, params: array<string, string>}>|null
      */
     public static function activationProblems(string $category, mixed $tags, string $body): ?array
     {
@@ -243,7 +248,11 @@ MD;
      * what makes a definition operative, not a validated save — and the runner,
      * not this parser, decides. Nothing here throws.
      *
-     * @return array{config: array<string, mixed>, instructions: string, problems: list<string>}
+     * @return array{
+     *     config: array<string, mixed>,
+     *     instructions: string,
+     *     problems: list<array{code: string, params: array<string, string>}>
+     * }
      */
     public static function parse(string $body): array
     {
@@ -251,7 +260,7 @@ MD;
             return [
                 'config' => [],
                 'instructions' => trim($body),
-                'problems' => ['No fenced yaml configuration block in the body (the first block must start with ```yaml).'],
+                'problems' => [self::problem('no_block')],
             ];
         }
 
@@ -268,7 +277,7 @@ MD;
         // silently lost, so it is worth saying out loud.
         $stray = preg_replace('/^(?:\s*#\s+.*(?:\R|$))*/', '', $before) ?? $before;
         if ('' !== trim($stray)) {
-            $problems[] = 'Anything before the configuration block is not part of the instructions; the block must come first.';
+            $problems[] = self::problem('stray_text');
         }
 
         ['config' => $config, 'problems' => $parsed] = self::parseConfigBlock($raw);
@@ -276,23 +285,29 @@ MD;
 
         foreach (array_keys($config) as $key) {
             if (!in_array($key, self::FIELDS, true)) {
-                $problems[] = 'Unknown field "' . $key . '" (a runner ignores it and reports it; it never widens what a definition may do).';
+                $problems[] = self::problem('unknown_field', ['field' => $key]);
             }
         }
 
         $mode = $config['mode'] ?? self::MODE_DRY_RUN;
         if (!is_string($mode) || !in_array($mode, self::MODES, true)) {
-            $problems[] = '"mode" must be one of ' . implode(', ', self::MODES) . '; found ' . self::describe($mode) . '.';
+            $problems[] = self::problem('invalid_mode', [
+                'allowed' => implode(', ', self::MODES),
+                'value' => self::describe($mode),
+            ]);
         }
 
         $schedule = $config['schedule'] ?? null;
         if (is_string($schedule) && '' !== trim($schedule) && !self::isCron($schedule)) {
-            $problems[] = '"schedule" must be a 5-field cron expression (or absent for a manual-only workflow); found ' . self::describe($schedule) . '.';
+            $problems[] = self::problem('invalid_schedule', ['value' => self::describe($schedule)]);
         }
 
         $timezone = $config['timezone'] ?? null;
         if (is_string($timezone) && '' !== trim($timezone) && !self::isTimezone($timezone)) {
-            $problems[] = '"timezone" must be an IANA zone name such as ' . self::DEFAULT_TIMEZONE . '; found ' . self::describe($timezone) . '.';
+            $problems[] = self::problem('invalid_timezone', [
+                'default' => self::DEFAULT_TIMEZONE,
+                'value' => self::describe($timezone),
+            ]);
         }
 
         $tools = $config['allowed_tools'] ?? null;
@@ -305,12 +320,12 @@ MD;
         if (is_array($tools)) {
             foreach ($tools as $tool) {
                 if (!is_string($tool) || '' === trim($tool)) {
-                    $problems[] = '"allowed_tools" must be a tool id or a list of tool ids (one per "- " line).';
+                    $problems[] = self::problem('invalid_allowed_tools');
                     break;
                 }
             }
         } elseif (null !== $tools) {
-            $problems[] = '"allowed_tools" must be a tool id or a list of tool ids (one per "- " line).';
+            $problems[] = self::problem('invalid_allowed_tools');
         }
 
         // Optional conditions and context (docs/WORKFLOWS.md §4). Absent or
@@ -318,19 +333,25 @@ MD;
         // changes mode, so a bad value is reported and nothing else happens.
         $runIf = $config['run_if'] ?? null;
         if (null !== $runIf && !self::isEmptyOrOneOf($runIf, self::RUN_IF_VALUES)) {
-            $problems[] = '"run_if" must be one of ' . implode(', ', self::RUN_IF_VALUES) . '; found ' . self::describe($runIf) . '.';
+            $problems[] = self::problem('invalid_run_if', [
+                'allowed' => implode(', ', self::RUN_IF_VALUES),
+                'value' => self::describe($runIf),
+            ]);
         }
 
         $mailContext = $config['mail_context'] ?? null;
         if (null !== $mailContext && !self::isEmptyOrOneOf($mailContext, self::MAIL_CONTEXT_VALUES)) {
-            $problems[] = '"mail_context" must be one of ' . implode(', ', self::MAIL_CONTEXT_VALUES) . '; found ' . self::describe($mailContext) . '.';
+            $problems[] = self::problem('invalid_mail_context', [
+                'allowed' => implode(', ', self::MAIL_CONTEXT_VALUES),
+                'value' => self::describe($mailContext),
+            ]);
         }
 
         // A mailbox is free-form (a name or a path), so only the type is checked:
         // a list is not a mailbox, and an empty value is the runner's default.
         $mailbox = $config['mailbox'] ?? null;
         if (null !== $mailbox && !is_string($mailbox)) {
-            $problems[] = '"mailbox" must be a mailbox name or path such as INBOX; found ' . self::describe($mailbox) . '.';
+            $problems[] = self::problem('invalid_mailbox', ['value' => self::describe($mailbox)]);
         }
 
         // A real boolean, not a string: a runner's YAML parser binds unquoted
@@ -338,7 +359,7 @@ MD;
         // Absent (or null) means false, which is a valid definition.
         $markRead = $config['mail_mark_read'] ?? null;
         if (null !== $markRead && !is_bool($markRead)) {
-            $problems[] = '"mail_mark_read" must be true or false (absent means false); found ' . self::describe($markRead) . '.';
+            $problems[] = self::problem('invalid_mail_mark_read', ['value' => self::describe($markRead)]);
         }
 
         // Optional sampling temperature (docs/WORKFLOWS.md §4). The runner parses
@@ -348,21 +369,21 @@ MD;
         $temperature = $config['llm_temperature'] ?? null;
         if (null !== $temperature) {
             if (!is_numeric($temperature)) {
-                $problems[] = '"llm_temperature" must be a number between 0 and 2; found ' . self::describe($temperature) . '.';
+                $problems[] = self::problem('invalid_llm_temperature', ['value' => self::describe($temperature)]);
             } elseif ((float) $temperature < 0 || (float) $temperature > 2) {
-                $problems[] = '"llm_temperature" must be between 0 and 2; found ' . self::describe($temperature) . '.';
+                $problems[] = self::problem('llm_temperature_range', ['value' => self::describe($temperature)]);
             }
         }
 
         if ('' === trim($instructions)) {
-            $problems[] = 'The instructions after the configuration block are empty.';
+            $problems[] = self::problem('empty_instructions');
         }
 
         // Draft markers are searched in the whole body, configuration included: a
         // `<model-id>` left in the block is exactly as much of a draft as a TODO
         // left in the instructions.
         foreach (self::draftMarkers($body) as $marker) {
-            $problems[] = 'Draft marker "' . $marker . '": a runner refuses to execute a definition that still contains one.';
+            $problems[] = self::problem('draft_marker', ['marker' => $marker]);
         }
 
         return [
@@ -377,7 +398,10 @@ MD;
      * "- " list items, "#" comments. Nested mappings are deliberately not part of
      * the format (docs/WORKFLOWS.md §4 keeps the schema flat).
      *
-     * @return array{config: array<string, mixed>, problems: list<string>}
+     * @return array{
+     *     config: array<string, mixed>,
+     *     problems: list<array{code: string, params: array<string, string>}>
+     * }
      */
     private static function parseConfigBlock(string $raw): array
     {
@@ -407,7 +431,7 @@ MD;
 
             if (1 === preg_match('/^-[ \t]*(.*)$/', $line, $item)) {
                 if (null === $listKey) {
-                    $problems[] = 'A "- " item has no field name above it (' . $line . ').';
+                    $problems[] = self::problem('list_item_without_field', ['line' => $line]);
                     continue;
                 }
                 if (!is_array($config[$listKey])) {
@@ -417,10 +441,26 @@ MD;
                 continue;
             }
 
-            $problems[] = 'Not a "key: value" line in the configuration block: ' . $line;
+            $problems[] = self::problem('invalid_config_line', ['line' => $line]);
         }
 
         return ['config' => $config, 'problems' => $problems];
+    }
+
+    /**
+     * One refusal, as a code and its parameters. The sentence is the reader's
+     * business (I18n\Translator, keys `workflow.*`).
+     *
+     * @param array<string, scalar> $params
+     *
+     * @return array{code: string, params: array<string, string>}
+     */
+    private static function problem(string $code, array $params = []): array
+    {
+        return [
+            'code' => $code,
+            'params' => array_map(static fn (mixed $value): string => is_scalar($value) ? (string) $value : '', $params),
+        ];
     }
 
     /**
@@ -552,15 +592,17 @@ MD;
     }
 
     /**
-     * A short, readable rendering of a value for a problem message.
+     * A short, language-neutral rendering of a value for a problem's parameter:
+     * a bare YAML literal, a quoted string, or a bracketed token for a value that
+     * is not a scalar at all.
      */
     private static function describe(mixed $value): string
     {
         if (is_array($value)) {
-            return 'a list';
+            return '[list]';
         }
         if (null === $value) {
-            return 'nothing';
+            return '[empty]';
         }
         if (is_bool($value)) {
             return $value ? 'true' : 'false';

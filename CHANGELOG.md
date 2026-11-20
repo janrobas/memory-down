@@ -13,6 +13,34 @@ version lives in `config.php` (`app_version`).
 
 ## [Unreleased]
 
+### Added
+- **The admin UI speaks Slovenian, English and Italian.** The chooser sits in the
+  ⋯ menu (and on the sign-in page, the OAuth consent page and `/about`, since
+  those come before any preference exists), and the choice is remembered in one
+  `memorydown_lang` cookie per browser — resolution order: cookie,
+  `Accept-Language`, then the new `APP_DEFAULT_LOCALE` (default `sl`). It is UI
+  only: memory, tags, categories and stored workflow definitions are never
+  translated or rewritten, the MCP tools stay English, and `/health` and the API
+  payloads are unchanged. `GET /ui/language?lang=…&back=…` is a plain link — one
+  cookie and a redirect, no JavaScript, no CSRF token — and it only ever returns
+  to a path inside this instance, so it cannot be used as an open redirector.
+  Plurals are real plurals (Slovenian has four forms: `1 vnos`, `2 vnosa`,
+  `5 vnosov`). Catalogues are plain PHP arrays (`src/I18n/lang/{sl,en,it}.php`)
+  rather than gettext, because a compiled locale is exactly what cheap shared
+  hosting tends to be missing.
+- The **workflow definition verdict** is translated too: the parser now returns
+  problem *codes* and their parameters instead of English sentences, and the UI
+  renders them in the reader's language, so a refused definition says the same
+  thing in all three.
+- **Login and consent refusals** carry codes rather than sentences
+  (`WebAuth::attempt()` returns `locked` / `credentials` / `disabled`), so the
+  same refusal reads correctly in every language.
+- Unit tests check that the three catalogues have identical keys, identical
+  `{placeholders}` and the plural forms their language needs, that every workflow
+  verdict code is translated, and that the codes used by `WorkflowDefinition` and
+  app.js all exist; the protocol suite drives the UI in each language, the chooser
+  endpoint (including crafted `back` values) and the translated consent page.
+
 ## [1.0.2]
 
 ### Added

@@ -4,23 +4,30 @@
  * tool, restorable until they are purged. Server-rendered so it works without
  * JavaScript, like the login and setup pages.
  *
+ * The counts are the one place the UI needs real plurals: Slovenian has four
+ * forms, English and Italian two — so `$te('trash.summary', ['n' => …])` picks
+ * the form, and the sentence itself lives in the catalogue.
+ *
  * @var string $csrf
  * @var list<array{name: string, category: string, id: string, deleted_at: string, bytes: int}> $entries
  * @var int    $bytes
  * @var string $notice
  * @var string $error
+ * @var callable $te
+ * @var callable $t
  */
 $h = static fn (string $v): string => \MemoryDown\Web\WebApp::h($v);
 $size = static function (int $bytes): string {
     return $bytes < 1024 ? $bytes . ' B' : round($bytes / 1024, 1) . ' KB';
 };
+$count = count($entries);
 ?>
 <main class="trash-card">
-  <h1>Trash</h1>
+  <h1><?= $te('trash.title') ?></h1>
   <p class="muted">
-    Deleted memories stay here until you purge them.
+    <?= $te('trash.intro') ?>
     <?php if ([] !== $entries): ?>
-      <?= count($entries) ?> entr<?= 1 === count($entries) ? 'y' : 'ies' ?>, <?= $h($size($bytes)) ?>.
+      <?= $te('trash.summary', ['n' => $count, 'size' => $size($bytes)]) ?>
     <?php endif; ?>
   </p>
 
@@ -32,7 +39,7 @@ $size = static function (int $bytes): string {
   <?php endif; ?>
 
   <?php if ([] === $entries): ?>
-    <p class="muted">Nothing has been deleted since the trash was last emptied.</p>
+    <p class="muted"><?= $te('trash.empty_list') ?></p>
   <?php else: ?>
     <ul class="trash-list">
       <?php foreach ($entries as $entry): ?>
@@ -40,20 +47,24 @@ $size = static function (int $bytes): string {
           <div class="trash-meta">
             <span class="trash-title"><?= $h($entry['id']) ?></span>
             <span class="muted">
-              <?= $h($entry['category']) ?> &middot; deleted <?= $h($entry['deleted_at']) ?> &middot; <?= $h($size($entry['bytes'])) ?>
+              <?= $te('trash.meta', [
+                  'category' => $entry['category'],
+                  'date' => $entry['deleted_at'],
+                  'size' => $size($entry['bytes']),
+              ]) ?>
             </span>
           </div>
           <div class="trash-actions">
             <form method="post" action="/ui/trash/restore">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="name" value="<?= $h($entry['name']) ?>">
-              <button type="submit">Restore</button>
+              <button type="submit"><?= $te('trash.restore') ?></button>
             </form>
             <form method="post" action="/ui/trash/purge"
-                  data-confirm="Delete <?= $h($entry['id']) ?> forever? This cannot be undone.">
+                  data-confirm="<?= $te('trash.purge_confirm', ['id' => $entry['id']]) ?>">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="name" value="<?= $h($entry['name']) ?>">
-              <button type="submit" class="danger">Delete forever</button>
+              <button type="submit" class="danger"><?= $te('trash.purge') ?></button>
             </form>
           </div>
         </li>
@@ -61,11 +72,11 @@ $size = static function (int $bytes): string {
     </ul>
 
     <form method="post" action="/ui/trash/empty" class="trash-empty"
-          data-confirm="Empty the trash? All <?= count($entries) ?> entr<?= 1 === count($entries) ? 'y' : 'ies' ?> are deleted forever, and this cannot be undone.">
+          data-confirm="<?= $te('trash.empty_confirm', ['n' => $count]) ?>">
       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
-      <button type="submit" class="danger block">Empty the trash (delete all <?= count($entries) ?> forever)</button>
+      <button type="submit" class="danger block"><?= $te('trash.empty_button', ['n' => $count]) ?></button>
     </form>
   <?php endif; ?>
 
-  <p class="trash-back"><a href="/ui">&larr; Back to memories</a></p>
+  <p class="trash-back"><a href="/ui"><?= $te('trash.back') ?></a></p>
 </main>

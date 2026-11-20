@@ -1608,3 +1608,59 @@ body.dragging .cat.drop-hover .cat-name {
 @media (prefers-reduced-motion: reduce) {
   .sidebar, .command-drawer, .backdrop { transition: none; }
 }
+
+/* --- Language chooser ------------------------------------------------------ */
+/* Three links, each labelled in its own language (I18n\LanguageSwitcher), so the
+   row stays readable to somebody who cannot read the language on screen. The
+   same markup appears in the editor's ⋯ menu, on the sign-in and setup pages and
+   on the OAuth consent page, which carries its own copy of these rules. */
+.lang-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .8rem;
+  align-items: baseline;
+}
+
+.lang-link {
+  font-size: .82rem;
+  color: var(--muted);
+  text-decoration: none;
+  padding: .1rem 0;
+  border-radius: 4px;
+}
+
+.lang-link:hover,
+.lang-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.lang-link.is-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* On the sign-in and setup cards the row sits between the form and the footer
+   link, quiet and out of the way. */
+.auth-card .lang-links {
+  margin-top: 1.25rem;
+  justify-content: center;
+}
+
+/* How the choice behaves, said once, in the menu. */
+.command-note {
+  margin: .15rem .1rem 0;
+  font-size: .7rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* In the editor the chooser lives in the ⋯ menu only. The unscripted desktop bar
+   is a single row with no room for it; the sign-in page and the consent page
+   carry their own copy, so it is never unreachable. */
+@media (min-width: 821px) {
+  #group-language { display: none; }
+  html.js .command-drawer #group-language { display: flex; }
+  html.js .command-drawer .lang-links { gap: .2rem .9rem; padding: 0 .6rem; }
+  html.js .command-drawer .command-note { padding: 0 .6rem; }
+}

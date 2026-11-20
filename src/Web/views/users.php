@@ -19,6 +19,8 @@
  * @var array<string, array<string, array{token: string, enabled: bool}>> $tokens
  * @var string $notices
  * @var string $errors
+ * @var callable $te
+ * @var callable $t
  */
 use MemoryDown\Users\UserStore;
 use MemoryDown\Web\WebApp;
@@ -28,12 +30,8 @@ $h = static fn (string $v): string => WebApp::h($v);
 <main class="page-stack">
 
   <section class="page-card">
-    <h1>Users</h1>
-    <p class="muted">
-      Every account has its own memory, its own password and its own API tokens. An account
-      signs in here with the same username and password it uses on the MCP consent page, and
-      it can only ever reach its own memory.
-    </p>
+    <h1><?= $te('users.title') ?></h1>
+    <p class="muted"><?= $te('users.intro') ?></p>
 
     <?php if ('' !== $notices): ?>
       <p class="alert ok" role="status"><?= $h($notices) ?></p>
@@ -43,35 +41,32 @@ $h = static fn (string $v): string => WebApp::h($v);
     <?php endif; ?>
 
     <p class="trash-back">
-      <a href="/ui">&larr; Back to memories</a> &middot; <a href="/ui/settings">Your settings</a>
+      <a href="/ui"><?= $te('users.back') ?></a> &middot; <a href="/ui/settings"><?= $te('users.your_settings') ?></a>
     </p>
   </section>
 
   <section class="page-card">
-    <h2>New account</h2>
-    <p class="muted">
-      The username cannot be changed later, and it becomes the name of that person's data
-      directory. Passwords must be at least <?= UserStore::MIN_PASSWORD_LENGTH ?> characters.
-    </p>
+    <h2><?= $te('users.new_account') ?></h2>
+    <p class="muted"><?= $te('users.new_account_intro', ['min' => UserStore::MIN_PASSWORD_LENGTH]) ?></p>
     <form method="post" action="/ui/users/create" autocomplete="off">
       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
-      <label for="new-id">Username</label>
+      <label for="new-id"><?= $te('field.username') ?></label>
       <input type="text" id="new-id" name="id" required pattern="[a-z0-9][a-z0-9_-]{2,31}" placeholder="alice">
-      <label for="new-role">Role</label>
+      <label for="new-role"><?= $te('users.role') ?></label>
       <select id="new-role" name="role">
-        <option value="user">user — own memory only</option>
-        <option value="admin">admin — also manages accounts</option>
+        <option value="user"><?= $te('users.role_user_option') ?></option>
+        <option value="admin"><?= $te('users.role_admin_option') ?></option>
       </select>
-      <label for="new-password">Password</label>
+      <label for="new-password"><?= $te('field.password') ?></label>
       <input type="password" id="new-password" name="password" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>">
-      <label for="new-confirm">Confirm password</label>
+      <label for="new-confirm"><?= $te('field.confirm') ?></label>
       <input type="password" id="new-confirm" name="confirm" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>">
-      <button type="submit" class="primary block">Create account</button>
+      <button type="submit" class="primary block"><?= $te('users.create') ?></button>
     </form>
   </section>
 
   <section class="page-card">
-    <h2>Accounts</h2>
+    <h2><?= $te('users.accounts') ?></h2>
 
     <?php foreach ($users as $id => $account): ?>
       <?php
@@ -83,18 +78,18 @@ $h = static fn (string $v): string => WebApp::h($v);
         <div class="account-who">
           <span class="account-name"><?= $h($account->id) ?></span>
           <span class="account-tags">
-            <span class="pill<?= $account->isAdmin() ? ' pill-accent' : '' ?>"><?= $h($account->role) ?></span>
+            <span class="pill<?= $account->isAdmin() ? ' pill-accent' : '' ?>"><?= $account->isAdmin() ? $te('users.role_admin') : $te('users.role_user') ?></span>
             <?php if (!$account->enabled): ?>
-              <span class="pill pill-danger">disabled</span>
+              <span class="pill pill-danger"><?= $te('users.disabled') ?></span>
             <?php endif; ?>
             <?php if ($own): ?>
-              <span class="pill">you</span>
+              <span class="pill"><?= $te('users.you') ?></span>
             <?php endif; ?>
             <?php if ($account->isAdmin() && $enabledAdmins <= 1 && $account->enabled): ?>
-              <span class="pill">only enabled admin</span>
+              <span class="pill"><?= $te('users.only_enabled_admin') ?></span>
             <?php endif; ?>
           </span>
-          <span class="muted">created <?= $h(gmdate('Y-m-d', $account->createdAt)) ?></span>
+          <span class="muted"><?= $te('users.created', ['date' => gmdate('Y-m-d', $account->createdAt)]) ?></span>
         </div>
 
         <div class="account-actions">
@@ -102,56 +97,57 @@ $h = static fn (string $v): string => WebApp::h($v);
             <form class="inline-form" method="post" action="/ui/users/role">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="id" value="<?= $h($id) ?>">
-              <select name="role" aria-label="Role for <?= $h($id) ?>">
-                <option value="user"<?= $account->isAdmin() ? '' : ' selected' ?>>user</option>
-                <option value="admin"<?= $account->isAdmin() ? ' selected' : '' ?>>admin</option>
+              <select name="role" aria-label="<?= $te('users.role_aria', ['id' => $id]) ?>">
+                <option value="user"<?= $account->isAdmin() ? '' : ' selected' ?>><?= $te('users.role_user') ?></option>
+                <option value="admin"<?= $account->isAdmin() ? ' selected' : '' ?>><?= $te('users.role_admin') ?></option>
               </select>
-              <button type="submit">Set role</button>
+              <button type="submit"><?= $te('users.set_role') ?></button>
             </form>
 
             <form class="inline-form" method="post" action="/ui/users/enabled">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="id" value="<?= $h($id) ?>">
               <input type="hidden" name="enabled" value="<?= $account->enabled ? '0' : '1' ?>">
-              <button type="submit"><?= $account->enabled ? 'Disable' : 'Enable' ?></button>
+              <button type="submit"><?= $account->enabled ? $te('users.disable') : $te('users.enable') ?></button>
             </form>
           <?php endif; ?>
 
           <details class="account-more">
-            <summary>Password, tokens &amp; delete</summary>
+            <summary><?= $te('users.more') ?></summary>
 
             <form class="inline-form" method="post" action="/ui/users/password" autocomplete="off">
               <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
               <input type="hidden" name="id" value="<?= $h($id) ?>">
-              <input type="password" name="password" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>" placeholder="New password" aria-label="New password for <?= $h($id) ?>">
-              <input type="password" name="confirm" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>" placeholder="Confirm" aria-label="Confirm new password for <?= $h($id) ?>">
-              <button type="submit">Reset password</button>
+              <input type="password" name="password" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>" placeholder="<?= $te('users.new_password_ph') ?>" aria-label="<?= $te('users.new_password_ph') ?>">
+              <input type="password" name="confirm" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>" placeholder="<?= $te('users.confirm_ph') ?>" aria-label="<?= $te('users.confirm_ph') ?>">
+              <button type="submit"><?= $te('users.reset_password') ?></button>
             </form>
 
             <?php if ($own): ?>
-              <p class="muted">Your own tokens are on <a href="/ui/settings">Settings</a>.</p>
+              <p class="muted"><?= $t('users.own_tokens') ?></p>
             <?php else: ?>
               <?php foreach ([UserStore::TOKEN_WRITINGS, UserStore::TOKEN_WORKFLOWS] as $kind): ?>
                 <?php $token = $tokens[$id][$kind] ?? ['token' => '', 'enabled' => false]; ?>
+                <?php $kindName = $t('settings.' . $kind . '_name'); ?>
                 <div class="inline-form">
-                  <span class="muted"><?= $h($kind) ?> token:
-                    <?= '' === $token['token'] ? 'none' : '<span class="mono-inline">' . $h($token['token']) . '</span>' ?>
+                  <span class="muted"><?= $te('users.token_line', ['kind' => $kindName]) ?>
+                    <?= '' === $token['token'] ? $te('users.token_none') : '<span class="mono-inline">' . $h($token['token']) . '</span>' ?>
                   </span>
                   <form class="inline-form" method="post" action="/ui/users/token">
                     <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
                     <input type="hidden" name="id" value="<?= $h($id) ?>">
                     <input type="hidden" name="kind" value="<?= $h($kind) ?>">
                     <input type="hidden" name="action" value="rotate">
-                    <button type="submit">Rotate</button>
+                    <button type="submit"><?= $te('users.rotate') ?></button>
                   </form>
                   <?php if ('' !== $token['token']): ?>
                     <form class="inline-form" method="post" action="/ui/users/token"
-                          data-confirm="Clear the <?= $h($kind) ?> token for <?= $h($id) ?>? Whatever is using it stops working immediately, and it cannot be shown again.">
+                          data-confirm="<?= $te('users.clear_confirm', ['kind' => $kindName, 'id' => $id]) ?>">
                       <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
                       <input type="hidden" name="id" value="<?= $h($id) ?>">
                       <input type="hidden" name="kind" value="<?= $h($kind) ?>">
                       <input type="hidden" name="action" value="clear">
-                      <button type="submit" class="danger">Clear</button>
+                      <button type="submit" class="danger"><?= $te('settings.clear') ?></button>
                     </form>
                   <?php endif; ?>
                 </div>
@@ -159,25 +155,20 @@ $h = static fn (string $v): string => WebApp::h($v);
             <?php endif; ?>
 
             <p>
-              <a href="/ui/backup?user=<?= rawurlencode($id) ?>" download>Download this account's memory (zip)</a>
+              <a href="/ui/backup?user=<?= rawurlencode($id) ?>" download><?= $te('users.download') ?></a>
             </p>
 
             <?php if (!$locked): ?>
               <form method="post" action="/ui/users/delete"
-                    data-confirm="Delete the account <?= $h($id) ?>? Its directory moves to data/users/.trash: nothing in the app can see its memory again, and only a manual restore of that directory over FTP brings it back.">
+                    data-confirm="<?= $te('users.delete_confirm', ['id' => $id]) ?>">
                 <input type="hidden" name="csrf" value="<?= $h($csrf) ?>">
                 <input type="hidden" name="id" value="<?= $h($id) ?>">
-                <button type="submit" class="danger">Delete account</button>
+                <button type="submit" class="danger"><?= $te('users.delete_account') ?></button>
               </form>
-              <p class="muted">
-                Deleting moves that account's directory to <code>data/users/.trash</code>. Its
-                memory is not erased, but nothing in the app can see it again.
-              </p>
+              <p class="muted"><?= $t('users.delete_note') ?></p>
             <?php else: ?>
               <p class="muted">
-                <?= $own
-                    ? 'You cannot change your own role, disable or delete yourself.'
-                    : 'The last enabled admin cannot be demoted, disabled or deleted.' ?>
+                <?= $own ? $te('users.locked_self') : $te('users.locked_last_admin') ?>
               </p>
             <?php endif; ?>
           </details>

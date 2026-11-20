@@ -19,6 +19,8 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MemoryDown\Config;
 use MemoryDown\Auth\TokenStore;
+use MemoryDown\I18n\Locale;
+use MemoryDown\I18n\Translator;
 use MemoryDown\Mcp\MemoryTools;
 use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
@@ -198,12 +200,30 @@ check(
 check('workflow: a plain note has no verdict', null === WorkflowDefinition::activationProblems('workflows', [], 'Samo zapisek.'));
 check('workflow: a tagged definition has a verdict', is_array(WorkflowDefinition::activationProblems('workflows', ['executable'], 'x')));
 
+// What a runner would refuse travels as a code plus its parameters, never as a
+// sentence: the same list is rendered in Slovenian, English or Italian by the
+// admin UI, so an assertion on wording would be an assertion on one translation.
+// These two helpers are how every test below reads it.
+$codes = static fn (string $body): array => array_map(
+    static fn (array $problem): string => $problem['code'],
+    WorkflowDefinition::parse($body)['problems'],
+);
+$paramsOf = static function (string $body, string $code): array {
+    foreach (WorkflowDefinition::parse($body)['problems'] as $problem) {
+        if ($code === $problem['code']) {
+            return $problem['params'];
+        }
+    }
+
+    return [];
+};
+
 // The template the admin UI pre-fills for a new workflow. A nowdoc keeps the line
 // endings of the checkout (CRLF on Windows), while the assertions below are written
 // with "\n"; normalising here keeps the test about the template, not about git.
 $template = str_replace("\r\n", "\n", WorkflowDefinition::TEMPLATE_BODY);
 $parsed = WorkflowDefinition::parse($template);
-$problems = implode(' | ', $parsed['problems']);
+$problems = implode(' | ', array_column($parsed['problems'], 'code'));
 
 check('template: carries no frontmatter of its own', !str_starts_with(ltrim($template), '---'));
 check('template: carries no H1 (the title is a field)', !str_starts_with(ltrim($template), '#'));
@@ -217,9 +237,13 @@ check('template: names a provider and a model', isset($parsed['config']['llm_pro
 check('template: instructions survive parsing', str_contains($parsed['instructions'], '## Navodila'));
 // Load-bearing: the template is a draft, so activating it before filling it in
 // cannot produce something a runner would execute.
-check('template: is refused while it is a draft', [] === array_filter($parsed['problems'], static fn (string $p): bool => !str_contains($p, 'Draft marker')), $problems);
-check('template: the refusal names the TODO', str_contains($problems, 'TODO'), $problems);
-check('template: the refusal names the placeholder model', str_contains($problems, '<placeholder>'), $problems);
+check('template: is refused while it is a draft', [] === array_filter($parsed['problems'], static fn (array $p): bool => 'draft_marker' !== $p['code']), $problems);
+check('template: the refusal names the TODO', 'TODO' === ($paramsOf($template, 'draft_marker')['marker'] ?? null), $problems);
+$templateMarkers = array_map(
+    static fn (array $problem): string => $problem['params']['marker'] ?? '',
+    array_filter($parsed['problems'], static fn (array $p): bool => 'draft_marker' === $p['code']),
+);
+check('template: the refusal names the placeholder model', in_array('<placeholder>', $templateMarkers, true), $problems);
 
 // A definition a user actually filled in.
 $filled = "```yaml\n"
@@ -234,52 +258,52 @@ $filled = "```yaml\n"
     . "```\n\n"
     . "Preglej koledar in porocaj.\n";
 $ok = WorkflowDefinition::parse($filled);
-check('definition: a filled-in definition has no problems', [] === $ok['problems'], implode(' | ', $ok['problems']));
+check('definition: a filled-in definition has no problems', [] === $ok['problems'], implode(' | ', array_column($ok['problems'], 'code')));
 check('definition: values are parsed', 'apply' === ($ok['config']['mode'] ?? null) && 'qwen3' === ($ok['config']['llm_model'] ?? null), json_encode($ok['config']));
 check('definition: instructions are the text after the block', 'Preglej koledar in porocaj.' === $ok['instructions'], var_export($ok['instructions'], true));
 
 // Each rule a runner applies, and that this parser reports.
-$bad = static fn (string $body): string => implode(' | ', WorkflowDefinition::parse($body)['problems']);
+$bad = static fn (string $body): string => implode(' | ', $codes($body));
 check(
     'definition: a missing block is reported',
-    str_contains($bad('Samo navodila brez bloka.'), 'configuration block'),
+    in_array('no_block', $codes('Samo navodila brez bloka.'), true),
     $bad('Samo navodila brez bloka.')
 );
 check(
     'definition: text before the block is reported',
-    str_contains($bad("Uvodni odstavek.\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n"), 'before the configuration block')
+    in_array('stray_text', $codes("Uvodni odstavek.\n\n```yaml\nmode: dry-run\n```\n\nNavodila.\n"), true)
 );
 check(
     'definition: an unknown mode is reported',
-    str_contains($bad("```yaml\nmode: sometimes\n```\n\nNavodila.\n"), 'mode')
+    in_array('invalid_mode', $codes("```yaml\nmode: sometimes\n```\n\nNavodila.\n"), true)
 );
 check(
     'definition: a four-field cron is reported',
-    str_contains($bad("```yaml\nschedule: \"0 7 * *\"\n```\n\nNavodila.\n"), 'schedule')
+    in_array('invalid_schedule', $codes("```yaml\nschedule: \"0 7 * *\"\n```\n\nNavodila.\n"), true)
 );
 check(
     'definition: an out-of-range cron is reported',
-    str_contains($bad("```yaml\nschedule: \"99 7 * * *\"\n```\n\nNavodila.\n"), 'schedule')
+    in_array('invalid_schedule', $codes("```yaml\nschedule: \"99 7 * * *\"\n```\n\nNavodila.\n"), true)
 );
 check(
     'definition: a bad timezone is reported',
-    str_contains($bad("```yaml\ntimezone: Mars/Olympus\n```\n\nNavodila.\n"), 'timezone')
+    in_array('invalid_timezone', $codes("```yaml\ntimezone: Mars/Olympus\n```\n\nNavodila.\n"), true)
 );
 check(
-    'definition: an unknown field is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nlimits:\n  - 5\n```\n\nNavodila.\n"), 'limits')
+    'definition: an unknown field is reported, and named',
+    'limits' === ($paramsOf("```yaml\nmode: dry-run\nlimits:\n  - 5\n```\n\nNavodila.\n", 'unknown_field')['field'] ?? null)
 );
 check(
     'definition: empty instructions are reported',
-    str_contains($bad("```yaml\nmode: dry-run\n```\n"), 'instructions')
+    in_array('empty_instructions', $codes("```yaml\nmode: dry-run\n```\n"), true)
 );
 check(
     'definition: a stray list item is reported',
-    str_contains($bad("```yaml\n  - sirota\n```\n\nNavodila.\n"), 'field name')
+    in_array('list_item_without_field', $codes("```yaml\n  - sirota\n```\n\nNavodila.\n"), true)
 );
 check(
     'definition: an angle-bracket placeholder is a draft marker',
-    str_contains($bad("```yaml\nmode: dry-run\n```\n\nPoslji na <your-address>.\n"), '<placeholder>')
+    '<placeholder>' === ($paramsOf("```yaml\nmode: dry-run\n```\n\nPoslji na <your-address>.\n", 'draft_marker')['marker'] ?? null)
 );
 check(
     'definition: a commented line is not a field',
@@ -304,7 +328,7 @@ check(
 // not something MemoryDown reads or stores (docs/WORKFLOWS.md §7).
 check('workflow: yolo is a known mode', in_array('yolo', WorkflowDefinition::MODES, true), json_encode(WorkflowDefinition::MODES));
 $yolo = WorkflowDefinition::parse("```yaml\nmode: yolo\nschedule: \"* * * * *\"\nallowed_tools:\n  - \"*\"\n```\n\nOdgovori na posto.\n");
-check('definition: mode yolo is accepted', [] === $yolo['problems'], implode(' | ', $yolo['problems']));
+check('definition: mode yolo is accepted', [] === $yolo['problems'], implode(' | ', array_column($yolo['problems'], 'code')));
 check('definition: a yolo definition is not refused', [] === WorkflowDefinition::activationProblems('workflows', ['executable'], "```yaml\nmode: yolo\n```\n\nNavodila.\n"));
 
 // The wildcard is a list item and stays as written: expanding it is the runner's
@@ -318,11 +342,11 @@ check('definition: no wildcard is expanded into tool names', ['*'] === ($yolo['c
 // genuinely empty value is still a problem.
 $scalarTools = WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools: \"*\"\n```\n\nNavodila.\n");
 check('definition: a scalar wildcard is a one-element list', ['*'] === ($scalarTools['config']['allowed_tools'] ?? null), json_encode($scalarTools['config']['allowed_tools'] ?? null));
-check('definition: a scalar wildcard raises no problem', [] === $scalarTools['problems'], implode(' | ', $scalarTools['problems']));
+check('definition: a scalar wildcard raises no problem', [] === $scalarTools['problems'], implode(' | ', array_column($scalarTools['problems'], 'code')));
 check('definition: a scalar tool id is a one-element list', ['calendar.get_events'] === (WorkflowDefinition::parse("```yaml\nmode: dry-run\nallowed_tools: calendar.get_events\n```\n\nNavodila.\n")['config']['allowed_tools'] ?? null));
 check(
     'definition: an empty allowed_tools value is still reported',
-    str_contains($bad("```yaml\nmode: dry-run\nallowed_tools: \"\"\n```\n\nNavodila.\n"), 'allowed_tools')
+    in_array('invalid_allowed_tools', $codes("```yaml\nmode: dry-run\nallowed_tools: \"\"\n```\n\nNavodila.\n"), true)
 );
 
 // The template documents all three modes and the quoting rule for the wildcard.
@@ -346,7 +370,7 @@ check(
 );
 check(
     'conditions: an unknown run_if value is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nrun_if: new_mail\n```\n\nNavodila.\n"), 'run_if')
+    in_array('invalid_run_if', $codes("```yaml\nmode: dry-run\nrun_if: new_mail\n```\n\nNavodila.\n"), true)
 );
 check(
     'conditions: an empty run_if means always and is accepted',
@@ -360,7 +384,7 @@ check(
 );
 check(
     'conditions: an unknown mail_context value is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nmail_context: all\n```\n\nNavodila.\n"), 'mail_context')
+    in_array('invalid_mail_context', $codes("```yaml\nmode: dry-run\nmail_context: all\n```\n\nNavodila.\n"), true)
 );
 check(
     'conditions: a mailbox name is accepted',
@@ -379,7 +403,7 @@ check(
 );
 check(
     'conditions: a non-string mailbox is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nmailbox:\n  - INBOX\n```\n\nNavodila.\n"), 'mailbox')
+    in_array('invalid_mailbox', $codes("```yaml\nmode: dry-run\nmailbox:\n  - INBOX\n```\n\nNavodila.\n"), true)
 );
 $allConditions = "```yaml\n"
     . "mode: dry-run\n"
@@ -390,7 +414,7 @@ $allConditions = "```yaml\n"
     . "Preglej posto in porocaj.\n";
 check(
     'conditions: all three valid keys raise no "Unknown field" problem',
-    [] === preg_grep('/Unknown field/', WorkflowDefinition::parse($allConditions)['problems']),
+    !in_array('unknown_field', $codes($allConditions), true),
     $bad($allConditions)
 );
 check(
@@ -419,11 +443,11 @@ check(
 );
 check(
     'conditions: a non-boolean mail_mark_read is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nmail_mark_read: sometimes\n```\n\nNavodila.\n"), 'mail_mark_read')
+    in_array('invalid_mail_mark_read', $codes("```yaml\nmode: dry-run\nmail_mark_read: sometimes\n```\n\nNavodila.\n"), true)
 );
 check(
     'conditions: a quoted mail_mark_read is reported (it is a string, not a bool)',
-    str_contains($bad("```yaml\nmode: dry-run\nmail_mark_read: \"true\"\n```\n\nNavodila.\n"), 'mail_mark_read')
+    in_array('invalid_mail_mark_read', $codes("```yaml\nmode: dry-run\nmail_mark_read: \"true\"\n```\n\nNavodila.\n"), true)
 );
 $mailDefinition = "```yaml\n"
     . "mode: dry-run\n"
@@ -435,7 +459,7 @@ $mailDefinition = "```yaml\n"
     . "Preglej posto in porocaj.\n";
 check(
     'conditions: a definition with the mail fields raises no "Unknown field" problem',
-    [] === preg_grep('/Unknown field/', WorkflowDefinition::parse($mailDefinition)['problems'])
+    !in_array('unknown_field', $codes($mailDefinition), true)
     && [] === WorkflowDefinition::activationProblems('workflows', ['executable'], $mailDefinition),
     $bad($mailDefinition)
 );
@@ -454,17 +478,176 @@ check(
 );
 check(
     'model: llm_temperature outside 0-2 is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nllm_temperature: 3\n```\n\nNavodila.\n"), 'llm_temperature')
+    in_array('llm_temperature_range', $codes("```yaml\nmode: dry-run\nllm_temperature: 3\n```\n\nNavodila.\n"), true)
 );
 check(
     'model: a non-numeric llm_temperature is reported',
-    str_contains($bad("```yaml\nmode: dry-run\nllm_temperature: vroce\n```\n\nNavodila.\n"), 'llm_temperature')
+    in_array('invalid_llm_temperature', $codes("```yaml\nmode: dry-run\nllm_temperature: vroce\n```\n\nNavodila.\n"), true)
 );
 check(
     'model: the boundaries 0 and 2 are accepted',
     [] === WorkflowDefinition::parse("```yaml\nmode: dry-run\nllm_temperature: 0\n```\n\nNavodila.\n")['problems']
     && [] === WorkflowDefinition::parse("```yaml\nmode: dry-run\nllm_temperature: 2\n```\n\nNavodila.\n")['problems']
 );
+
+/* ------------------------------------------------------------------ *
+ *  I18n: the UI's three languages
+ * ------------------------------------------------------------------ */
+
+section('I18n');
+
+$english = Translator::catalogue('en');
+check('i18n: English is the reference catalogue and has keys', count($english) > 150, (string) count($english));
+check('i18n: the three languages are offered', ['sl', 'en', 'it'] === Locale::supported(), json_encode(Locale::supported()));
+
+/** The placeholders of one catalogue value, across every plural form. */
+$placeholders = static function (mixed $value): array {
+    $forms = is_array($value) ? $value : [$value];
+    $found = [];
+    foreach ($forms as $text) {
+        if (!is_string($text)) {
+            continue;
+        }
+        preg_match_all('/\{([A-Za-z0-9_]+)\}/', $text, $matches);
+        foreach ($matches[1] as $name) {
+            $found[$name] = true;
+        }
+    }
+    $names = array_keys($found);
+    sort($names);
+
+    return $names;
+};
+
+foreach (['sl', 'it'] as $code) {
+    $catalogue = Translator::catalogue($code);
+
+    check("i18n[{$code}]: every English key is translated", [] === array_diff(array_keys($english), array_keys($catalogue)), implode(', ', array_diff(array_keys($english), array_keys($catalogue))));
+    check("i18n[{$code}]: no key exists only here", [] === array_diff(array_keys($catalogue), array_keys($english)), implode(', ', array_diff(array_keys($catalogue), array_keys($english))));
+
+    $empty = [];
+    $mismatched = [];
+    foreach ($english as $key => $value) {
+        $translated = $catalogue[$key] ?? null;
+        if (null === $translated) {
+            continue;
+        }
+        $texts = is_array($translated) ? $translated : [$translated];
+        foreach ($texts as $form => $text) {
+            if (!is_string($text) || '' === trim($text)) {
+                $empty[] = $key . ($texts !== [$translated] ? '.' . $form : '');
+            }
+        }
+        if ($placeholders($value) !== $placeholders($translated)) {
+            $mismatched[] = $key;
+        }
+    }
+    check("i18n[{$code}]: no empty translation", [] === $empty, implode(', ', $empty));
+    check("i18n[{$code}]: placeholders match the English key", [] === $mismatched, implode(', ', $mismatched));
+}
+
+// Slovenian needs four plural forms, English and Italian two. A catalogue that
+// offers fewer is a count that would read "5 vnos" — which is the whole reason
+// this is tested rather than eyeballed.
+$slSummary = array_keys(Translator::catalogue('sl')['trash.summary']);
+sort($slSummary);
+check('i18n: Slovenian plurals have four forms', ['few', 'one', 'other', 'two'] === $slSummary, json_encode($slSummary));
+check('i18n: English plurals have two forms', ['one', 'other'] === array_keys($english['trash.summary']));
+check('i18n: Italian plurals have two forms', ['one', 'other'] === array_keys(Translator::catalogue('it')['trash.summary']));
+check('i18n: Slovenian resolves 1 -> one', 'one' === Locale::pluralForm('sl', 1));
+check('i18n: Slovenian resolves 2 -> two', 'two' === Locale::pluralForm('sl', 2));
+check('i18n: Slovenian resolves 3 -> few', 'few' === Locale::pluralForm('sl', 3));
+check('i18n: Slovenian resolves 4 -> few', 'few' === Locale::pluralForm('sl', 4));
+check('i18n: Slovenian resolves 5 -> other', 'other' === Locale::pluralForm('sl', 5));
+check('i18n: Slovenian resolves 0 -> other', 'other' === Locale::pluralForm('sl', 0));
+check('i18n: Slovenian resolves 101 -> one', 'one' === Locale::pluralForm('sl', 101));
+check('i18n: English resolves 1 -> one and 2 -> other', 'one' === Locale::pluralForm('en', 1) && 'other' === Locale::pluralForm('en', 2));
+check('i18n: Italian resolves 1 -> one and 2 -> other', 'one' === Locale::pluralForm('it', 1) && 'other' === Locale::pluralForm('it', 2));
+
+// Codes, not locales: a client may send "it-CH" or "SL".
+check('i18n: normalize accepts a plain code', 'sl' === Locale::normalize('sl'));
+check('i18n: normalize folds case and spaces', 'it' === Locale::normalize(' IT '));
+check('i18n: normalize keeps the primary subtag', 'it' === Locale::normalize('it-CH'));
+check('i18n: normalize rejects an unsupported language', '' === Locale::normalize('fr'));
+check('i18n: normalize rejects an empty value', '' === Locale::normalize(''));
+check('i18n: normalize rejects a non-scalar', '' === Locale::normalize(['sl']));
+check('i18n: Serbian is not Slovenian', '' === Locale::normalize('sr-Latn'));
+
+check('i18n: Accept-Language picks the first supported language', 'it' === Locale::fromAcceptLanguage('de-DE,it;q=0.8,en;q=0.5'));
+check('i18n: Accept-Language honours quality values', 'en' === Locale::fromAcceptLanguage('sl;q=0.2,en;q=0.9'));
+check('i18n: Accept-Language ignores what it cannot serve', '' === Locale::fromAcceptLanguage('fr-FR,de;q=0.7'));
+check('i18n: an empty Accept-Language says nothing', '' === Locale::fromAcceptLanguage(''));
+check('i18n: a missing Accept-Language says nothing', '' === Locale::fromAcceptLanguage(null));
+
+// The order that decides what a page is rendered in: what the person chose,
+// then what their browser asks for, then the instance default.
+check('i18n: the cookie wins', 'it' === Locale::resolve('it', 'sl,en;q=0.5', 'en'));
+check('i18n: the browser is next', 'sl' === Locale::resolve(null, 'sl-SI,sl;q=0.9', 'en'));
+check('i18n: the default is last', 'en' === Locale::resolve(null, null, 'en'));
+check('i18n: an unsupported cookie falls through to the browser', 'sl' === Locale::resolve('fr', 'sl', 'en'));
+check('i18n: an unsupported default falls back to English', 'en' === Locale::resolve(null, null, 'fr'));
+check('i18n: a bogus default still yields a real language', Locale::isSupported(Locale::resolve(null, null, '')));
+
+$cookieHeader = Locale::cookieHeader('sl', true);
+check('i18n: the cookie remembers the choice for a year', str_contains($cookieHeader, 'memorydown_lang=sl') && str_contains($cookieHeader, 'Max-Age=31536000'), $cookieHeader);
+check('i18n: the cookie is HttpOnly and SameSite=Lax', str_contains($cookieHeader, 'HttpOnly') && str_contains($cookieHeader, 'SameSite=Lax'), $cookieHeader);
+check('i18n: the cookie is Secure in production', str_contains($cookieHeader, 'Secure'), $cookieHeader);
+check('i18n: no Secure on a plain-HTTP development host', !str_contains(Locale::cookieHeader('sl', false), 'Secure'));
+check('i18n: an unsupported code sets no cookie', '' === Locale::cookieHeader('fr', true));
+
+$sl = new Translator('sl');
+check('i18n: the translator reports its language', 'sl' === $sl->locale() && 'sl' === $sl->htmlLang());
+check('i18n: a translated key comes from its own catalogue', 'Jezik' === $sl->t('app.language'));
+check('i18n: placeholders are substituted', str_contains($sl->t('js.reindexed', ['n' => 12]), '12'), $sl->t('js.reindexed', ['n' => 12]));
+check('i18n: a count picks the plural form (sl 1)', '1 vnos, 2 KB.' === $sl->t('trash.summary', ['n' => 1, 'size' => '2 KB']), $sl->t('trash.summary', ['n' => 1, 'size' => '2 KB']));
+check('i18n: a count picks the plural form (sl 2)', '2 vnosa, 2 KB.' === $sl->t('trash.summary', ['n' => 2, 'size' => '2 KB']), $sl->t('trash.summary', ['n' => 2, 'size' => '2 KB']));
+check('i18n: a count picks the plural form (sl 5)', '5 vnosov, 2 KB.' === $sl->t('trash.summary', ['n' => 5, 'size' => '2 KB']), $sl->t('trash.summary', ['n' => 5, 'size' => '2 KB']));
+check('i18n: a count picks the plural form (en 2)', '2 entries, 2 KB.' === (new Translator('en'))->t('trash.summary', ['n' => 2, 'size' => '2 KB']));
+check('i18n: a count picks the plural form (it 1)', '1 elemento, 2 KB.' === (new Translator('it'))->t('trash.summary', ['n' => 1, 'size' => '2 KB']));
+check('i18n: an unknown key is returned as itself', 'no.such.key' === $sl->t('no.such.key'));
+
+// The fallback: any key a translation is missing is answered in English rather
+// than as a bare key, so a half-finished catalogue is a mixed page, not a broken
+// one. Proven without editing the catalogues, by asking for a locale whose file
+// exists but whose keys cannot all be there.
+$partial = new Translator('sl');
+check('i18n: has() reports a translated key', $partial->has('app.language'));
+check('i18n: has() rejects a key nobody has', !$partial->has('definitely.not.here'));
+
+$bundle = $sl->clientBundle();
+check('i18n: the client bundle carries the keys app.js paints', isset($bundle['js.saved'], $bundle['app.new_memory'], $bundle['definition.refuse']));
+check('i18n: the client bundle has no raw key left', [] === array_filter($bundle, static fn (string $text, string $key): bool => $text === $key, ARRAY_FILTER_USE_BOTH), json_encode(array_filter($bundle, static fn (string $text, string $key): bool => $text === $key, ARRAY_FILTER_USE_BOTH)));
+check('i18n: every bundled key is translated in Slovenian', [] === array_filter(Translator::CLIENT_KEYS, static fn (string $key): bool => !isset(Translator::catalogue('sl')[$key])));
+
+// The other direction: a string app.js asks for but the page does not carry would
+// show as a bare key in the browser, which no server-side test would notice.
+$javascript = (string) file_get_contents(dirname(__DIR__) . '/public_html/assets/app.js');
+preg_match_all("/(?<![A-Za-z0-9_\$.])t\('([a-z][A-Za-z0-9_.]+)'/", $javascript, $jsKeys);
+$jsRequested = array_values(array_filter(
+    array_unique($jsKeys[1]),
+    static fn (string $key): bool => !str_ends_with($key, '.'),
+));
+$notBundled = array_values(array_diff($jsRequested, Translator::CLIENT_KEYS));
+check('i18n: every string app.js asks for travels with the page', [] === $notBundled, implode(', ', $notBundled));
+check('i18n: app.js does ask for strings (sanity)', count($jsRequested) > 25, (string) count($jsRequested));
+
+// The workflow verdicts are catalogue keys too, and the parser must only ever
+// emit codes that exist here — otherwise a refused definition would show a key
+// instead of a reason.
+$workflowCodes = ['no_block', 'stray_text', 'unknown_field', 'invalid_mode', 'invalid_schedule', 'invalid_timezone', 'invalid_allowed_tools', 'invalid_run_if', 'invalid_mail_context', 'invalid_mailbox', 'invalid_mail_mark_read', 'invalid_llm_temperature', 'llm_temperature_range', 'empty_instructions', 'draft_marker', 'list_item_without_field', 'invalid_config_line'];
+$missing = [];
+foreach (['en', 'sl', 'it'] as $code) {
+    foreach ($workflowCodes as $workflowCode) {
+        if (!isset(Translator::catalogue($code)['workflow.' . $workflowCode])) {
+            $missing[] = $code . ':workflow.' . $workflowCode;
+        }
+    }
+}
+check('i18n: every workflow verdict code is translated', [] === $missing, implode(', ', $missing));
+
+$refused = WorkflowDefinition::activationProblems('workflows', ['executable'], "```yaml\nmode: sometimes\n```\n\nNavodila.\n");
+$refusal = (new Translator('sl'))->t('workflow.' . $refused[0]['code'], $refused[0]['params']);
+check('i18n: a real verdict renders in Slovenian', str_contains($refusal, 'sometimes') && str_contains($refusal, 'dry-run') && !str_contains($refusal, 'workflow.'), $refusal);
 
 /* ------------------------------------------------------------------ *
  *  The workflow catalog (read-only API over the workflows category)
