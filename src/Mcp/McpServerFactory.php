@@ -10,6 +10,8 @@ use Mcp\Server\Session\FileSessionStore;
 use Mcp\Server\Transport\Http\Middleware\CorsMiddleware;
 use Mcp\Server\Transport\StreamableHttpTransport;
 use MemoryDown\Kernel;
+use MemoryDown\Users\User;
+use MemoryDown\Users\UserCorpora;
 use MemoryDown\Users\UserServices;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -24,15 +26,23 @@ use Psr\Http\Message\ServerRequestInterface;
  *
  * Authentication happens HERE, before the server is built, rather than in the
  * transport's middleware chain: with accounts, the tools are constructed around
- * one user's memory store, so the user has to be known first. The gate produces
- * the same RFC 9728 401 challenge the middleware used to, and everything after
- * it runs with the store of the account the bearer token names.
+ * one user's corpus, so the user has to be known first. The gate produces the
+ * same RFC 9728 401 challenge the middleware used to, and everything after it
+ * runs with the corpus of the account the bearer token names.
  *
- * Two consequences worth knowing:
- *  - MCP sessions are kept per user (data/sessions/mcp/<id>), so a session id
- *    belonging to one account cannot be resumed by another;
- *  - every account is therefore one connector, not one endpoint: the same /mcp
- *    URL behaves as whoever signed in on the consent page.
+ * Two endpoints, one tool set:
+ *
+ *  - `/mcp` (and the base URL) is the ordinary connector: every account is one
+ *    connector, and the same URL behaves as whoever signed in on the consent
+ *    page. The tools can reach exactly that account.
+ *  - `/mcp/all` is the admin connector: administrators only (the gate answers
+ *    403, not 401, for anybody else), and it serves every enabled account at
+ *    once. It has its own audience, its own sessions and its own instructions,
+ *    so the two never contaminate each other.
+ *
+ * MCP sessions are kept per user (data/sessions/mcp/<id>), and the admin
+ * connector's sessions live one level deeper (<id>/all), so a session id
+ * belonging to one account — or one connector — cannot be resumed by another.
  */
 final class McpServerFactory
 {
@@ -73,13 +83,56 @@ Tools:
 - list_memory: see what is stored
 TXT;
 
+    /**
+     * The admin connector's extra instructions. The base text still applies;
+     * this says what is different about a connection that sees every account.
+     */
+    public const INSTRUCTIONS_ADMIN = <<<'TXT'
+ACCOUNT SCOPE — THIS CONNECTION SERVES EVERY ENABLED ACCOUNT ON THIS INSTANCE.
+
+You are not limited to one person's memory here. Every tool takes an optional "owner" (an account name such as "alice"):
+- Every result carries "owner": the account it came from. When you report something found in another account, name that account, so it is never mistaken for the user's own memory.
+- Reads (search_memory, recall, read_memory, list_memory) search EVERY account when "owner" is omitted, and one account when it is given. Prefer "owner" once you know whose memory you need — an unfiltered recall mixes several people's context.
+- Writes (remember, update_memory, forget_memory) go to "owner", defaulting to your own account. Writing into somebody else's memory is a real change to their data: do it only when the user asked for it, and say which account you are writing to.
+- An entry cannot be moved between accounts. "owner" locates an entry; it never relocates one.
+- Deleting moves the entry into THAT account's trash, where only its owner can restore it from the admin UI. Treat a cross-account delete as permanent.
+- Disabled accounts are not visible at all: they cannot be searched, read or written.
+TXT;
+
     public static function build(UserServices $services, string $userId): Server
     {
         $kernel = Kernel::get();
-        $config = $kernel->config;
-        $logger = $kernel->logger;
 
-        $tools = new MemoryTools($services->memory, $services->search);
+        return self::server(
+            new MemoryTools(UserCorpora::only($kernel->users, $kernel->userServices, $userId), $userId),
+            $userId,
+            self::INSTRUCTIONS . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary(),
+        );
+    }
+
+    /**
+     * The server behind /mcp/all: every enabled account, one set of tools.
+     *
+     * The acting account is still the token's subject — it decides the default
+     * write target and whose sessions these are — but the corpus is everything
+     * the instance holds.
+     */
+    public static function buildAdmin(User $admin): Server
+    {
+        $kernel = Kernel::get();
+        $corpora = new UserCorpora($kernel->users, $kernel->userServices);
+
+        return self::server(
+            new MemoryTools($corpora, $admin->id, crossAccount: true),
+            $admin->id . DIRECTORY_SEPARATOR . 'all',
+            self::INSTRUCTIONS . "\n\n" . self::INSTRUCTIONS_ADMIN . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary(),
+        );
+    }
+
+    private static function server(MemoryTools $tools, string $sessionScope, string $instructions): Server
+    {
+        $kernel = Kernel::get();
+        $config = $kernel->config;
 
         $builder = Server::builder()
             ->setServerInfo(
@@ -87,11 +140,11 @@ TXT;
                 version: $config->appVersion,
                 description: 'Persistent Markdown-backed memory for AI agents.',
             )
-            ->setLogger($logger)
-            ->setInstructions(self::INSTRUCTIONS . "\n\n" . \MemoryDown\Memory\RecommendedTags::summary())
+            ->setLogger($kernel->logger)
+            ->setInstructions($instructions)
             ->setCapabilities(new ServerCapabilities(tools: true, resources: false, prompts: false))
             ->setSession(new FileSessionStore(
-                $config->mcpSessionsPath . DIRECTORY_SEPARATOR . $userId,
+                $config->mcpSessionsPath . DIRECTORY_SEPARATOR . $sessionScope,
                 $config->mcpSessionTtl,
             ));
 
@@ -131,13 +184,28 @@ TXT;
     {
         $kernel = Kernel::get();
 
-        $user = $kernel->mcpGate->authenticate($request);
-        if (null === $user) {
-            return $kernel->mcpGate->challenge($request);
+        $actor = $kernel->mcpGate->actor($request);
+        if ($actor instanceof ResponseInterface) {
+            return $actor;
         }
 
-        $server = self::build($kernel->userServices->for($user->id), $user->id);
+        $server = self::build($kernel->userServices->for($actor->id), $actor->id);
 
         return $server->run(self::transport($request));
+    }
+
+    /**
+     * /mcp/all: everything, for administrators only.
+     */
+    public static function runAdmin(ServerRequestInterface $request): ResponseInterface
+    {
+        $kernel = Kernel::get();
+
+        $actor = $kernel->mcpGate->actor($request, adminEndpoint: true);
+        if ($actor instanceof ResponseInterface) {
+            return $actor;
+        }
+
+        return self::buildAdmin($actor)->run(self::transport($request));
     }
 }

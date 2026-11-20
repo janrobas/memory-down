@@ -19,6 +19,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MemoryDown\Config;
 use MemoryDown\Auth\TokenStore;
+use MemoryDown\Mcp\MemoryTools;
 use MemoryDown\Memory\Frontmatter;
 use MemoryDown\Memory\MemoryIndex;
 use MemoryDown\Memory\MemorySearch;
@@ -35,7 +36,9 @@ use MemoryDown\Support\FileLogger;
 use MemoryDown\Support\RateLimiter;
 use MemoryDown\Users\Migration;
 use MemoryDown\Users\UserDirectories;
+use MemoryDown\Users\UserCorpora;
 use MemoryDown\Users\UserPaths;
+use MemoryDown\Users\UserServicesFactory;
 use MemoryDown\Users\UserStore;
 use MemoryDown\Workflows\WorkflowCatalog;
 
@@ -557,6 +560,24 @@ check('config: the public writings API is off by default', false === $config->pu
 check('config: exposes no instance-wide API tokens', !property_exists($config, 'publicApiToken') && !property_exists($config, 'workflowsApiToken'));
 $enabled = new Config($minimal + ['workflows_api_enabled' => true]);
 check('config: an explicit flag is honoured', true === $enabled->workflowsApiEnabled);
+
+// Each MCP endpoint is its own OAuth audience, and each has its own RFC 9728
+// metadata document. Sharing one audience would let an ordinary connector's
+// token reach the admin endpoint, which is exactly what must not happen.
+check('config: /mcp resource', 'https://example.test/mcp' === $config->resourceForPath('/mcp'));
+check('config: admin resource is its own audience', 'https://example.test/mcp/all' === $config->resourceForPath('/mcp/all'));
+check('config: base URL resource', 'https://example.test' === $config->resourceForPath('/'));
+check('config: /mcp metadata URL', 'https://example.test/.well-known/oauth-protected-resource/mcp' === $config->protectedResourceMetadataUrl('/mcp'));
+check(
+    'config: admin metadata URL',
+    'https://example.test/.well-known/oauth-protected-resource/mcp/all' === $config->protectedResourceMetadataUrl('/mcp/all'),
+    $config->protectedResourceMetadataUrl('/mcp/all')
+);
+check(
+    'config: every canonical resource is listed',
+    ['https://example.test', 'https://example.test/mcp', 'https://example.test/mcp/all'] === $config->canonicalResources(),
+    json_encode($config->canonicalResources())
+);
 
 // The switch has to be documented where a deployment looks for it; an
 // undocumented variable is a variable nobody sets. The token is documented as
@@ -1512,6 +1533,143 @@ check('bearer: extracted', 'abc123' === BearerToken::fromRequest($bearerRequest-
 check('bearer: scheme is case-insensitive', 'abc123' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'bEaReR   abc123  ')));
 check('bearer: another scheme is not a bearer', '' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'Basic abc123')));
 check('bearer: an empty value is empty', '' === BearerToken::fromRequest($bearerRequest->withHeader('Authorization', 'Bearer ')));
+
+/* ------------------------------------------------------------------ *
+ *  MCP tools: one corpus (the ordinary connector) vs every corpus (admin)
+ * ------------------------------------------------------------------ */
+
+section('MCP: one corpus vs every corpus');
+
+$toolRoot = $root . '/mcp-tools';
+@mkdir($toolRoot . '/auth', 0775, true);
+$toolUsers = UserStore::at($toolRoot . '/auth');
+$toolUsers->create('alice', 'alice-password', UserStore::ROLE_ADMIN);
+$toolUsers->create('bob', 'bob-password');
+$toolUsers->create('carol', 'carol-password');
+// carol's memory is written first, then her account is disabled: the data stays,
+// the account becomes invisible to the admin connector.
+$toolFactory = new UserServicesFactory(new UserPaths($toolRoot . '/users'), false);
+$toolFactory->for('carol')->memory->create('Carol wrote this while she was still enabled.', 'Carol secret', 'facts');
+$toolUsers->setEnabled('carol', false);
+
+/** Call one tool the way MCP does: by name, with named arguments. */
+$callTool = static function (array $definitions, string $name, array $arguments): array {
+    foreach ($definitions as $definition) {
+        if ($definition['name'] === $name) {
+            $result = ($definition['handler'])(...$arguments);
+
+            return [
+                'isError' => $result->isError,
+                'data' => is_array($result->structuredContent) ? $result->structuredContent : [],
+                'text' => (string) ($result->content[0]->text ?? ''),
+            ];
+        }
+    }
+
+    return ['isError' => true, 'data' => [], 'text' => 'no such tool: ' . $name];
+};
+
+$everyCorpus = new UserCorpora($toolUsers, $toolFactory);
+check('corpora: every enabled account is visible', ['alice', 'bob'] === $everyCorpus->owners(), json_encode($everyCorpus->owners()));
+check('corpora: a disabled account is invisible', !$everyCorpus->has('carol'));
+check('corpora: an unknown account is invisible', !$everyCorpus->has('nobody'));
+check('corpora: an invisible account cannot be resolved to a store', $refuses(static fn () => $everyCorpus->store('carol')));
+check('corpora: a restricted set sees only its own account', ['bob'] === UserCorpora::only($toolUsers, $toolFactory, 'bob')->owners());
+check('corpora: restricting to a disabled account sees nothing', [] === UserCorpora::only($toolUsers, $toolFactory, 'carol')->owners());
+
+$allTools = (new MemoryTools($everyCorpus, 'alice', crossAccount: true))->definitions();
+$allSchemas = array_column($allTools, 'inputSchema', 'name');
+$singleTools = (new MemoryTools(UserCorpora::only($toolUsers, $toolFactory, 'bob'), 'bob'))->definitions();
+$singleSchemas = array_column($singleTools, 'inputSchema', 'name');
+
+$toolsWithOwner = 0;
+$toolsWithoutOwner = 0;
+foreach ($allSchemas as $schema) {
+    $toolsWithOwner += array_key_exists('owner', $schema['properties'] ?? []) ? 1 : 0;
+}
+foreach ($singleSchemas as $schema) {
+    $toolsWithoutOwner += array_key_exists('owner', $schema['properties'] ?? []) ? 0 : 1;
+}
+check('admin connector: all 7 tools take an owner', 7 === $toolsWithOwner, (string) $toolsWithOwner);
+check('ordinary connector: no tool exposes owner at all', 7 === $toolsWithoutOwner, (string) $toolsWithoutOwner);
+
+// --- Writes go where "owner" says, and nowhere else.
+$created = $callTool($allTools, 'remember', ['content' => 'Bob keeps bees on the roof.', 'title' => 'Bob bees', 'category' => 'facts', 'owner' => 'bob']);
+$bobId = (string) ($created['data']['memory']['id'] ?? '');
+check('admin remember: writes into the named account', false === $created['isError'] && 'bob' === ($created['data']['memory']['owner'] ?? ''), json_encode($created));
+check('admin remember: the file lands in that account', '' !== $bobId && is_file($toolRoot . '/users/bob/memory/facts/' . $bobId . '.md'), $bobId);
+check('admin remember: and not in the acting account', '' !== $bobId && !is_file($toolRoot . '/users/alice/memory/facts/' . $bobId . '.md'));
+
+$own = $callTool($allTools, 'remember', ['content' => 'Alice likes quiet mornings.', 'title' => 'Alice mornings', 'category' => 'preferences']);
+check('admin remember: no owner means your own account', 'alice' === ($own['data']['memory']['owner'] ?? ''), json_encode($own));
+$aliceId = (string) ($own['data']['memory']['id'] ?? '');
+check('admin remember: the file lands in your own account', '' !== $aliceId && is_file($toolRoot . '/users/alice/memory/preferences/' . $aliceId . '.md'));
+
+$refused = $callTool($allTools, 'remember', ['content' => 'Carol must not receive this.', 'owner' => 'carol']);
+check('admin remember: a disabled account is refused', true === $refused['isError'] && str_contains($refused['text'], 'Unknown account'), $refused['text']);
+check('admin remember: nothing was written for it', 1 === $toolFactory->for('carol')->memory->count(), (string) $toolFactory->for('carol')->memory->count());
+
+// --- Reads search every account, and say where each result came from.
+$found = $callTool($allTools, 'search_memory', ['query' => 'bees']);
+check('admin search: finds an entry in another account', $bobId === ($found['data']['results'][0]['id'] ?? ''), json_encode($found['data']));
+check('admin search: labels the account it came from', 'bob' === ($found['data']['results'][0]['owner'] ?? ''));
+check('admin search: names the accounts it searched', ['alice', 'bob'] === ($found['data']['owners'] ?? []), json_encode($found['data']['owners'] ?? null));
+
+$hidden = $callTool($allTools, 'search_memory', ['query' => 'Carol secret']);
+check('admin search: a disabled account is invisible', [] === ($hidden['data']['results'] ?? null), json_encode($hidden['data']));
+
+$scoped = $callTool($allTools, 'search_memory', ['query' => 'bees', 'owner' => 'alice']);
+check('admin search: owner narrows it to one account', [] === ($scoped['data']['results'] ?? null));
+$unknownOwner = $callTool($allTools, 'search_memory', ['query' => 'bees', 'owner' => 'carol']);
+check('admin search: an invisible owner is refused', true === $unknownOwner['isError'] && str_contains($unknownOwner['text'], 'Unknown account'));
+
+// Active results rank before archived ones, across accounts too.
+$everyCorpus->store('alice')->create('Kayaking on the Soča.', 'Alice kayaking', 'facts');
+$everyCorpus->store('bob')->create('Kayaking notes, kept for reference.', 'Bob kayaking', 'facts', archived: true);
+$ranked = $callTool($allTools, 'search_memory', ['query' => 'kayaking', 'limit' => 5]);
+check('admin search: active results rank before archived ones', 'alice' === ($ranked['data']['results'][0]['owner'] ?? ''), json_encode(array_column($ranked['data']['results'] ?? [], 'owner')));
+
+// --- One id, no owner: the entry is found where it lives.
+$read = $callTool($allTools, 'read_memory', ['id' => $bobId]);
+check('admin read: an id alone finds the entry in another account', 'bob' === ($read['data']['memory']['owner'] ?? ''), json_encode($read));
+check('admin read: and returns the whole body', str_contains((string) ($read['data']['memory']['body'] ?? ''), 'bees'));
+
+$updated = $callTool($allTools, 'update_memory', ['id' => $bobId, 'content' => 'Bob keeps bees on the roof and sells the honey.']);
+$bobFile = $toolRoot . '/users/bob/memory/facts/' . $bobId . '.md';
+check('admin update: rewrites the copy in the account that holds it', false === $updated['isError'] && str_contains((string) @file_get_contents($bobFile), 'sells the honey'), $updated['text']);
+check('admin update: it does not create a copy in the acting account', !is_file($toolRoot . '/users/alice/memory/facts/' . $bobId . '.md'));
+
+// --- An id that exists twice is refused, not guessed.
+$everyCorpus->store('alice')->create('The same id, in two accounts.', 'Ambiguous', 'facts', id: 'shared-id-abc123');
+$everyCorpus->store('bob')->create('The same id, in two accounts.', 'Ambiguous', 'facts', id: 'shared-id-abc123');
+$ambiguous = $callTool($allTools, 'read_memory', ['id' => 'shared-id-abc123']);
+check('admin read: an id in two accounts is refused, naming both', true === $ambiguous['isError'] && str_contains($ambiguous['text'], 'alice') && str_contains($ambiguous['text'], 'bob'), $ambiguous['text']);
+$resolved = $callTool($allTools, 'read_memory', ['id' => 'shared-id-abc123', 'owner' => 'bob']);
+check('admin read: owner resolves the ambiguity', false === $resolved['isError'] && 'bob' === ($resolved['data']['memory']['owner'] ?? ''));
+
+// --- A delete goes to that account's own trash.
+$deleted = $callTool($allTools, 'forget_memory', ['id' => $bobId]);
+check('admin forget: deletes the entry', false === $deleted['isError'] && !is_file($bobFile), $deleted['text']);
+check('admin forget: into that account\'s trash, where its owner can restore it', [] !== (glob($toolRoot . '/users/bob/memory/.trash/*') ?: []));
+check('admin forget: the acting account\'s trash is untouched', [] === (glob($toolRoot . '/users/alice/memory/.trash/*') ?: []));
+
+// --- Listing merges, counts per account, and still never ships a body.
+$listed = $callTool($allTools, 'list_memory', ['limit' => 50]);
+$accounts = $listed['data']['accounts'] ?? [];
+check('admin list: reports one row per visible account', 2 === count($accounts), json_encode($accounts));
+check('admin list: with the entry count of each', 2 === count(array_filter($accounts, static fn (array $a): bool => is_int($a['entries'] ?? null))), json_encode($accounts));
+check('admin list: total is the sum of the accounts', array_sum(array_column($accounts, 'entries')) === ($listed['data']['total'] ?? -1), json_encode([$accounts, $listed['data']['total'] ?? null]));
+check('admin list: labels each entry with its account', in_array('alice', array_column($listed['data']['memories'] ?? [], 'owner'), true), json_encode(array_column($listed['data']['memories'] ?? [], 'owner')));
+check('admin list: never returns a body', [] === array_filter($listed['data']['memories'] ?? [], static fn (array $m): bool => array_key_exists('body', $m)));
+
+// --- The ordinary connector keeps its single-corpus behaviour.
+$singleRemember = $callTool($singleTools, 'remember', ['content' => 'Asked for alice, written as bob.', 'title' => 'Structural guard', 'owner' => 'alice']);
+$guardId = (string) ($singleRemember['data']['memory']['id'] ?? '');
+check('ordinary connector: an owner argument cannot reach another account', '' !== $guardId && is_file($toolRoot . '/users/bob/memory/facts/' . $guardId . '.md'), $guardId);
+check('ordinary connector: and nothing appeared in the named account', '' !== $guardId && !is_file($toolRoot . '/users/alice/memory/facts/' . $guardId . '.md'));
+$singleRead = $callTool($singleTools, 'read_memory', ['id' => 'shared-id-abc123']);
+check('ordinary connector: an id that exists twice is simply its own copy', false === $singleRead['isError'] && str_contains((string) ($singleRead['data']['memory']['path'] ?? ''), 'facts/'), $singleRead['text']);
+check('ordinary connector: no account is named in a response', !array_key_exists('owner', $singleRead['data']['memory'] ?? []));
 
 /* ------------------------------------------------------------------ *
  *  Summary

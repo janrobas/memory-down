@@ -27,6 +27,7 @@ use Psr\Log\LoggerInterface;
  *   POST /oauth/token                                 OAuth token endpoint
  *   POST /oauth/register                              RFC 7591 DCR
  *   POST /mcp, GET /mcp, DELETE /mcp                  MCP (Streamable HTTP)
+ *   POST /mcp/all, GET /mcp/all, DELETE /mcp/all      MCP, every account (admin only)
  *   POST /                                            MCP at the base URL too
  *   GET  /                                            redirect to /ui (humans)
  *   GET  /about                                       human-facing links & diagnostics
@@ -34,7 +35,9 @@ use Psr\Log\LoggerInterface;
  *   GET  /api/workflows[/{id}]                         workflow definitions (bearer)
  *
  * ChatGPT may probe the base URL instead of /mcp, so the MCP endpoint is
- * mounted at both paths.
+ * mounted at both paths. The admin connector is deliberately *not* mounted at
+ * the base URL: reaching every account has to be an explicit walk through
+ * discovery, consent and a token bound to /mcp/all.
  */
 final class App
 {
@@ -83,12 +86,14 @@ final class App
                 '/health/oauth' === $path && 'GET' === $method => $this->json($this->healthOauth()),
                 '/.well-known/oauth-protected-resource' === $path && 'GET' === $method => $this->json(Kernel::get()->auth->protectedResourceMetadata('/'), 200, 300),
                 '/.well-known/oauth-protected-resource/mcp' === $path && 'GET' === $method => $this->json(Kernel::get()->auth->protectedResourceMetadata('/mcp'), 200, 300),
+                '/.well-known/oauth-protected-resource' . Config::MCP_ALL_PATH === $path && 'GET' === $method => $this->json(Kernel::get()->auth->protectedResourceMetadata(Config::MCP_ALL_PATH), 200, 300),
                 in_array($path, ['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'], true) && 'GET' === $method => $this->json(Kernel::get()->auth->authorizationServerMetadata(), 200, 300),
                 '/oauth/authorize' === $path => Kernel::get()->auth->handleAuthorize($request),
                 '/oauth/token' === $path && 'POST' === $method => Kernel::get()->auth->handleToken($request),
                 '/oauth/revoke' === $path && 'POST' === $method => Kernel::get()->auth->handleRevoke($request),
                 '/oauth/register' === $path && 'POST' === $method => Kernel::get()->auth->handleRegister($request),
                 '/mcp' === $path && in_array($method, ['POST', 'GET', 'DELETE'], true) => McpServerFactory::run($request),
+                Config::MCP_ALL_PATH === $path && in_array($method, ['POST', 'GET', 'DELETE'], true) => McpServerFactory::runAdmin($request),
                 '/' === $path && 'POST' === $method => McpServerFactory::run($request),
                 '/' === $path && 'GET' === $method && $this->wantsEventStream($request) => McpServerFactory::run($request),
                 // A plain browser visit belongs in the admin UI, not on a page of
@@ -264,23 +269,33 @@ final class App
         $kernel = Kernel::get();
         $versions = static fn (array $cases): array => array_map(static fn ($v): string => $v->value, $cases);
 
-        // The tool set is the same for every account; the schema is built from a
-        // store only because the handlers close over one. With no accounts there
-        // is nothing to serve at /mcp, so the list is empty rather than absent.
+        // The tool set is the same for every account; the schema is built from
+        // a corpus only because the handlers close over one. With no accounts
+        // there is nothing to serve at /mcp, so the list is empty rather than
+        // absent. This endpoint has no identity of its own, so it reports the
+        // shape of the tools — never whose corpus they would read.
         $ids = $kernel->users->ids();
         $tools = [];
         if ([] !== $ids) {
-            $services = $kernel->userServices->for($ids[0]);
+            $corpora = \MemoryDown\Users\UserCorpora::only($kernel->users, $kernel->userServices, $ids[0]);
             $tools = array_map(
                 static fn (array $t): string => $t['name'],
-                (new \MemoryDown\Mcp\MemoryTools($services->memory, $services->search))->definitions(),
+                (new \MemoryDown\Mcp\MemoryTools($corpora, $ids[0]))->definitions(),
             );
         }
 
         return [
             'status' => 'ok',
-            'endpoints' => ['/mcp', '/'],
+            'endpoints' => ['/mcp', '/', Config::MCP_ALL_PATH],
             'transport' => 'streamable-http (POST/GET/DELETE)',
+            'admin_endpoint' => [
+                'path' => Config::MCP_ALL_PATH,
+                // The same seven tools, on every enabled account, for admins
+                // only. Saying so here is not a secret: the endpoint is public,
+                // it is the token that is not.
+                'required_role' => \MemoryDown\Users\UserStore::ROLE_ADMIN,
+                'scopes' => 'every enabled account',
+            ],
             'protocol_eras' => [
                 'handshake' => $versions(\Mcp\Schema\Enum\ProtocolVersion::handshakeVersions()),
                 'modern' => $versions(\Mcp\Schema\Enum\ProtocolVersion::modernVersions()),
@@ -304,6 +319,7 @@ final class App
                 'protected_resource' => [
                     $base . '/.well-known/oauth-protected-resource',
                     $base . '/.well-known/oauth-protected-resource/mcp',
+                    $base . '/.well-known/oauth-protected-resource' . Config::MCP_ALL_PATH,
                 ],
                 'authorization_server' => [
                     $base . '/.well-known/oauth-authorization-server',
@@ -495,6 +511,7 @@ a{color:#146c43}
 <h1>{$this->config->appName}</h1>
 <p>Personal AI memory server (v{$this->config->appVersion}). Persistent memory is stored as Markdown files.</p>
 <p>This host serves the MCP endpoint at <code>/mcp</code> (and at the base URL) over Streamable HTTP with OAuth 2.1.</p>
+<p>Administrators also get <code>/mcp/all</code>: the same tools, over every enabled account. It is bound to its own OAuth audience, so an ordinary connector cannot reach it.</p>
 <ul>
 {$uiLink}
 <li><a href="/health">/health</a></li>

@@ -106,10 +106,12 @@ if (!$keepServer) {
     putenv('ADMIN_PASSWORD_HASH=' . password_hash('test-password', PASSWORD_DEFAULT));
     putenv('PUBLIC_API_ENABLED=true');
     putenv('WORKFLOWS_API_ENABLED=true');
-    // The main chain signs in many times; the per-IP login limit (default 10)
-    // gets its own dedicated-server section, so this instance gets a generous
-    // cap. HSTS is on here so the header is assertable in this chain.
+    // The main chain signs in many times — and now also mints tokens for the
+    // admin connector — so the consent and token endpoints get a generous cap
+    // here. Their limits have dedicated servers of their own where they matter.
     putenv('RATE_LIMIT_LOGIN_MAX=100');
+    putenv('RATE_LIMIT_CONSENT_MAX=100');
+    putenv('RATE_LIMIT_TOKEN_MAX=200');
     putenv('HSTS_ENABLED=true');
 
     // The child `php -S` server inherits the current PHP configuration (its
@@ -350,6 +352,21 @@ $mcp = jsonBody($r['body']);
 check('GET /health/mcp -> 200', 200 === $r['status']);
 check('GET /health/mcp -> 7 tools', 7 === count($mcp['tools'] ?? []));
 check('GET /health/mcp -> both protocol eras', isset($mcp['protocol_eras']['handshake'], $mcp['protocol_eras']['modern']));
+check('GET /health/mcp -> lists both endpoints', in_array('/mcp/all', $mcp['endpoints'] ?? [], true), json_encode($mcp['endpoints'] ?? null));
+check('GET /health/mcp -> says the admin endpoint is admins only', 'admin' === ($mcp['admin_endpoint']['required_role'] ?? ''), json_encode($mcp['admin_endpoint'] ?? null));
+
+// The admin endpoint answers even without a token, and its challenge names its
+// own metadata document: a client must discover the audience it will be bound to.
+$r = request('POST', '/mcp/all', [
+    'Content-Type' => 'application/json',
+    'Accept' => 'application/json, text/event-stream',
+], '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}');
+check('POST /mcp/all without token -> 401', 401 === $r['status'], (string) $r['status']);
+check(
+    'POST /mcp/all -> challenge points at the admin metadata',
+    str_contains($r['headers']['www-authenticate'] ?? '', $base . '/.well-known/oauth-protected-resource/mcp/all'),
+    $r['headers']['www-authenticate'] ?? ''
+);
 
 $r = request('GET', '/health/oauth');
 $oauth = jsonBody($r['body']);
@@ -399,6 +416,11 @@ check('RS metadata: scopes_supported', in_array(SCOPE, $rs['scopes_supported'] ?
 $r = request('GET', '/.well-known/oauth-protected-resource/mcp');
 $rsMcp = jsonBody($r['body']);
 check('RS metadata at /mcp path: resource == base/mcp', ($rsMcp['resource'] ?? '') === $base . '/mcp');
+
+$r = request('GET', '/.well-known/oauth-protected-resource/mcp/all');
+$rsAll = jsonBody($r['body']);
+check('RS metadata at the admin path: resource == base/mcp/all', ($rsAll['resource'] ?? '') === $base . '/mcp/all', $r['body']);
+check('RS metadata at the admin path: same authorization server', ($rsAll['authorization_servers'][0] ?? '') === $base);
 
 $r = request('GET', '/.well-known/oauth-authorization-server');
 $as = jsonBody($r['body']);
@@ -2804,6 +2826,217 @@ $r = request('POST', '/ui/logout', ['Content-Type' => 'application/x-www-form-ur
 check('admin logout -> 302', 302 === $r['status'], (string) $r['status']);
 $r = request('GET', '/ui');
 check('GET /ui after logout -> 302 to login', 302 === $r['status'] && str_contains($r['headers']['location'] ?? '', '/ui/login'));
+
+/* ------------------------------------------------------------------ *
+ *  The admin connector: /mcp/all serves every enabled account
+ * ------------------------------------------------------------------ */
+
+section('MCP: the admin connector (/mcp/all)');
+
+/**
+ * A full consent + code exchange for one account and one resource. The consent
+ * page is where the account is chosen, and the resource is where the token may
+ * be used, so both are parameters here.
+ *
+ * @return array<string, mixed> the token response
+ */
+$issueToken = static function (string $username, string $password, string $resource) use ($clientId, $redirectUri, $form): array {
+    [$verifier, $challenge] = pkcePair();
+    $query = http_build_query([
+        'client_id' => $clientId,
+        'redirect_uri' => $redirectUri,
+        'response_type' => 'code',
+        'scope' => SCOPE,
+        'state' => 'state-admin-connector',
+        'code_challenge' => $challenge,
+        'code_challenge_method' => 'S256',
+        'resource' => $resource,
+    ]);
+    $r = request('POST', '/oauth/authorize?' . $query, $form([]), http_build_query([
+        'decision' => 'allow', 'username' => $username, 'password' => $password,
+    ]));
+    parse_str((string) parse_url($r['headers']['location'] ?? '', PHP_URL_QUERY), $callback);
+    $r = request('POST', '/oauth/token', $form([]), http_build_query([
+        'grant_type' => 'authorization_code',
+        'code' => (string) ($callback['code'] ?? ''),
+        'code_verifier' => $verifier,
+        'client_id' => $clientId,
+        'redirect_uri' => $redirectUri,
+        'resource' => $resource,
+    ]));
+
+    return jsonBody($r['body']);
+};
+
+// The admin signed back in (the settings section changed the password) and
+// created a second account to reach across.
+$r = request('GET', '/ui/login');
+preg_match('/name="csrf" value="([^"]+)"/', $r['body'], $loginMatch);
+$loginCsrf = $loginMatch[1] ?? '';
+$r = request('POST', '/ui/login', $form([]), http_build_query(['csrf' => $loginCsrf, 'username' => 'test-user', 'password' => 'a-new-admin-password']));
+check('admin connector: the admin signs in again', 302 === $r['status'], (string) $r['status']);
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $adminMatch);
+$apiCsrf = $adminMatch[1] ?? '';
+$r = request('POST', '/ui/users/create', $form([]), http_build_query([
+    'csrf' => $apiCsrf, 'id' => 'cross-user', 'role' => 'user',
+    'password' => 'cross-password', 'confirm' => 'cross-password',
+]));
+check('admin connector: a second account exists to reach across', 302 === $r['status'], (string) $r['status']);
+
+// The settings page offers the connector URL to an admin.
+$r = request('GET', '/ui/settings');
+check('admin connector: settings show the admin URL to an admin', str_contains($r['body'], $base . '/mcp/all'), $r['body']);
+
+// --- An admin gets a token for the admin audience.
+$adminAll = $issueToken('test-user', 'a-new-admin-password', $base . '/mcp/all');
+$allAccess = (string) ($adminAll['access_token'] ?? '');
+check('admin connector: an admin is issued a token', '' !== $allAccess, json_encode($adminAll));
+check('admin connector: the token is bound to its own audience', ($adminAll['resource'] ?? '') === $base . '/mcp/all', (string) ($adminAll['resource'] ?? ''));
+
+$allAuth = ['Authorization' => 'Bearer ' . $allAccess, 'Content-Type' => 'application/json', 'Accept' => 'application/json, text/event-stream'];
+$r = request('POST', '/mcp/all', $allAuth, $body);
+$allInit = jsonBody($r['body']);
+check('admin connector: initialize -> 200', 200 === $r['status'], $r['body']);
+check('admin connector: the instructions say it serves every account', str_contains((string) ($allInit['result']['instructions'] ?? ''), 'EVERY ENABLED ACCOUNT'), $allInit['result']['instructions'] ?? '');
+$allSession = $allAuth + ['Mcp-Session-Id' => $r['headers']['mcp-session-id'] ?? ''];
+
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
+$allToolList = jsonBody($r['body'])['result']['tools'] ?? [];
+$withOwner = array_filter($allToolList, static fn (array $t): bool => array_key_exists('owner', $t['inputSchema']['properties'] ?? []));
+check('admin connector: still 7 tools', 7 === count($allToolList), json_encode(array_column($allToolList, 'name')));
+check('admin connector: every tool takes an owner', 7 === count($withOwner), json_encode(array_column($withOwner, 'name')));
+
+// --- Writing into somebody else's memory, by naming the account.
+$r = request('POST', '/mcp/all', $allSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => [
+        'content' => 'Cross-account probe: the roof bees belong to this account.',
+        'title' => 'Cross account bee note',
+        'category' => 'facts',
+        'owner' => 'cross-user',
+    ]],
+]));
+$crossRemember = toolResult(jsonBody($r['body']));
+$crossId = (string) ($crossRemember['memory']['id'] ?? '');
+check('admin connector: remember(owner=…) writes into that account', '' !== $crossId && is_file($tmp . '/users/cross-user/memory/facts/' . $crossId . '.md'), $crossId);
+check('admin connector: and not into the admin\'s own memory', '' !== $crossId && !is_file($memoryRoot . '/facts/' . $crossId . '.md'));
+check('admin connector: the response names the account it wrote to', 'cross-user' === ($crossRemember['memory']['owner'] ?? ''), json_encode($crossRemember));
+
+// --- Reading across accounts: search, list and read find it without an owner.
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"roof bees"}}}');
+$allSearch = toolResult(jsonBody($r['body']));
+check('admin connector: search finds another account\'s entry', $crossId === ($allSearch['results'][0]['id'] ?? ''), json_encode($allSearch));
+check('admin connector: each result names its account', 'cross-user' === ($allSearch['results'][0]['owner'] ?? ''));
+check(
+    'admin connector: it reports every account it searched',
+    in_array('test-user', $allSearch['owners'] ?? [], true) && in_array('cross-user', $allSearch['owners'] ?? [], true),
+    json_encode($allSearch['owners'] ?? null)
+);
+
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"read_memory","arguments":{"id":"' . $crossId . '"}}}');
+$allRead = toolResult(jsonBody($r['body']));
+check('admin connector: read_memory finds it by id alone', 'cross-user' === ($allRead['memory']['owner'] ?? ''), json_encode($allRead));
+check('admin connector: and returns the whole body', str_contains((string) ($allRead['memory']['body'] ?? ''), 'roof bees'));
+
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_memory","arguments":{"limit":50}}}');
+$allList = toolResult(jsonBody($r['body']));
+$accountIds = array_column($allList['accounts'] ?? [], 'id');
+check('admin connector: list_memory reports each account', in_array('test-user', $accountIds, true) && in_array('cross-user', $accountIds, true), json_encode($allList['accounts'] ?? null));
+check('admin connector: list_memory still ships no bodies', [] === array_filter($allList['memories'] ?? [], static fn (array $m): bool => array_key_exists('body', $m)));
+
+// --- Updating and deleting act on the account that holds the entry.
+$r = request('POST', '/mcp/all', $allSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 7, 'method' => 'tools/call',
+    'params' => ['name' => 'update_memory', 'arguments' => [
+        'id' => $crossId,
+        'content' => 'Cross-account probe, rewritten: the bees moved to the garden.',
+    ]],
+]));
+$crossFile = $tmp . '/users/cross-user/memory/facts/' . $crossId . '.md';
+check(
+    'admin connector: update_memory rewrites the other account\'s copy',
+    false === (jsonBody($r['body'])['result']['isError'] ?? true) && str_contains((string) @file_get_contents($crossFile), 'moved to the garden'),
+    $r['body']
+);
+check('admin connector: it did not create a copy in the admin\'s memory', !is_file($memoryRoot . '/facts/' . $crossId . '.md'));
+
+// --- A disabled account is invisible: not searched, not read, not written.
+$r = request('POST', '/ui/users/enabled', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'cross-user', 'enabled' => '0']));
+check('admin connector: the second account is disabled', 302 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"roof bees"}}}');
+$goneSearch = toolResult(jsonBody($r['body']));
+check('admin connector: a disabled account is not searched', [] === ($goneSearch['results'] ?? null), json_encode($goneSearch));
+check('admin connector: nor named as searched', !in_array('cross-user', $goneSearch['owners'] ?? [], true), json_encode($goneSearch['owners'] ?? null));
+
+$r = request('POST', '/mcp/all', $allSession, '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"read_memory","arguments":{"id":"' . $crossId . '"}}}');
+check('admin connector: a disabled account cannot be read', true === (jsonBody($r['body'])['result']['isError'] ?? false), $r['body']);
+
+$r = request('POST', '/mcp/all', $allSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 10, 'method' => 'tools/call',
+    'params' => ['name' => 'remember', 'arguments' => ['content' => 'Must not land.', 'owner' => 'cross-user']],
+]));
+check('admin connector: a disabled account cannot be written', true === (jsonBody($r['body'])['result']['isError'] ?? false), $r['body']);
+
+$r = request('POST', '/ui/users/enabled', $form([]), http_build_query(['csrf' => $apiCsrf, 'id' => 'cross-user', 'enabled' => '1']));
+check('admin connector: re-enabled, and nothing was lost', 302 === $r['status'] && is_file($crossFile), (string) $r['status']);
+
+// --- A delete lands in that account's trash, where its owner can restore it.
+$r = request('POST', '/mcp/all', $allSession, json_encode([
+    'jsonrpc' => '2.0', 'id' => 11, 'method' => 'tools/call',
+    'params' => ['name' => 'forget_memory', 'arguments' => ['id' => $crossId]],
+]));
+clearstatcache(true, $crossFile);
+check('admin connector: forget_memory deletes it', false === (jsonBody($r['body'])['result']['isError'] ?? true) && !is_file($crossFile), $r['body']);
+check(
+    'admin connector: into that account\'s own trash',
+    [] !== (glob($tmp . '/users/cross-user/memory/.trash/*') ?: []),
+    json_encode(glob($tmp . '/users/cross-user/memory/.trash/*') ?: [])
+);
+
+// --- Who may not use it: anybody who is not an admin.
+$userAll = $issueToken('cross-user', 'cross-password', $base . '/mcp/all');
+$r = request('POST', '/mcp/all', [
+    'Authorization' => 'Bearer ' . (string) ($userAll['access_token'] ?? ''),
+    'Content-Type' => 'application/json',
+    'Accept' => 'application/json, text/event-stream',
+], $body);
+check('admin connector: a plain user is refused', 403 === $r['status'], (string) $r['status']);
+check('admin connector: the refusal is not an OAuth challenge', !isset($r['headers']['www-authenticate']), json_encode($r['headers']));
+check('admin connector: the refusal says why', str_contains($r['body'], 'administrators'), $r['body']);
+
+// --- Audience separation, both ways: the tokens are not interchangeable.
+$adminMcp = $issueToken('test-user', 'a-new-admin-password', $base . '/mcp');
+$r = request('POST', '/mcp/all', [
+    'Authorization' => 'Bearer ' . (string) ($adminMcp['access_token'] ?? ''),
+    'Content-Type' => 'application/json',
+    'Accept' => 'application/json, text/event-stream',
+], $body);
+check('admin connector: a token for /mcp is not accepted there', 401 === $r['status'], (string) $r['status']);
+
+$r = request('POST', '/mcp', $allAuth, $body);
+check('admin connector: its own token is not accepted at /mcp', 401 === $r['status'], (string) $r['status']);
+
+// --- The ordinary connector is untouched: seven tools, no owner anywhere.
+$mcpAuth = [
+    'Authorization' => 'Bearer ' . (string) ($adminMcp['access_token'] ?? ''),
+    'Content-Type' => 'application/json',
+    'Accept' => 'application/json, text/event-stream',
+];
+$r = request('POST', '/mcp', $mcpAuth, $body);
+$mcpSession = $mcpAuth + ['Mcp-Session-Id' => $r['headers']['mcp-session-id'] ?? ''];
+$r = request('POST', '/mcp', $mcpSession, '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}');
+$plainTools = jsonBody($r['body'])['result']['tools'] ?? [];
+$plainWithOwner = array_filter($plainTools, static fn (array $t): bool => array_key_exists('owner', $t['inputSchema']['properties'] ?? []));
+check('admin connector: the ordinary connector still has 7 tools', 7 === count($plainTools), json_encode(array_column($plainTools, 'name')));
+check('admin connector: and offers no owner at all', [] === $plainWithOwner, json_encode(array_column($plainWithOwner, 'name')));
+
+// Back to the state the next section expects: signed out.
+$r = request('GET', '/ui');
+preg_match('/data-csrf="([^"]+)"/', $r['body'], $signOutMatch);
+$r = request('POST', '/ui/logout', $form([]), http_build_query(['csrf' => $signOutMatch[1] ?? '']));
+check('admin connector: signing out afterwards works', 302 === $r['status'], (string) $r['status']);
 
 /* ------------------------------------------------------------------ *
  *  OAuth: revocation endpoint (RFC 7009) and refresh reuse detection

@@ -634,9 +634,10 @@ final class AuthorizationServer
     private function normalizeResource(string $resource): string
     {
         $resource = rtrim($resource, '/');
-        $base = $this->config->appBaseUrl;
 
-        return in_array($resource, [$base, $base . '/mcp'], true) ? $resource : '';
+        // Every canonical endpoint of this instance is an acceptable resource;
+        // anything else (including a token audience from another host) is not.
+        return in_array($resource, $this->config->canonicalResources(), true) ? $resource : '';
     }
 
     /**

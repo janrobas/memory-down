@@ -7,17 +7,34 @@ namespace MemoryDown\Mcp;
 use Mcp\Schema\Content\TextContent;
 use Mcp\Schema\Result\CallToolResult;
 use Mcp\Schema\ToolAnnotations;
+use MemoryDown\Memory\Corpora;
 use MemoryDown\Memory\MemoryStore;
 use MemoryDown\Memory\PathValidator;
 use MemoryDown\Memory\RecommendedTags;
-use MemoryDown\Memory\SearchEngine;
 
 /**
- * The six MCP tools of V1, written for AI agents.
+ * The MCP tools, written for AI agents.
  *
- * Every tool returns a CallToolResult with both a human-readable text block
- * and structuredContent; errors are reported inside the result (isError=true)
- * so the calling LLM can see and self-correct.
+ * Every tool returns a CallToolResult with both a human-readable text block and
+ * structuredContent; errors are reported inside the result (isError=true) so the
+ * calling LLM can see and self-correct.
+ *
+ * The tools are built around a {@see Corpora} instead of a single store, because
+ * the same definitions serve two very different connections:
+ *
+ *  - the ordinary `/mcp` connector sees exactly one corpus: the account whose
+ *    bearer token is being served. The `owner` argument does not exist there —
+ *    it is not in the schema — so "read somebody else's memory" is not a call
+ *    that can be made at all;
+ *  - the admin connector (`/mcp/all`) sees every enabled account. There every
+ *    tool gains `owner`, results are labelled with the account they came from,
+ *    and reads with no owner search across all of them.
+ *
+ * Keeping one implementation matters more than it looks: the per-account
+ * protections (writings read-only, the reserved `executable` tag, the trash,
+ * the size ceiling) live in the store and in these handlers, so a cross-account
+ * write is refused by exactly the same code that refuses a local one. There is
+ * no second, looser path for administrators.
  */
 final class MemoryTools
 {
@@ -26,9 +43,16 @@ final class MemoryTools
     /** Upper bound on a single memory body, to protect shared hosting. */
     private const MAX_CONTENT_BYTES = 102400;
 
+    /**
+     * @param Corpora $corpora   the corpora this connection may touch
+     * @param string  $owner     the acting account: the default target for
+     *                           writes, and the only one on `/mcp`
+     * @param bool    $crossAccount whether the `owner` argument is offered
+     */
     public function __construct(
-        private readonly MemoryStore $store,
-        private readonly SearchEngine $search,
+        private readonly Corpora $corpora,
+        private readonly string $owner,
+        private readonly bool $crossAccount = false,
     ) {
     }
 
@@ -60,25 +84,28 @@ final class MemoryTools
                 . 'of creating a duplicate. Unrelated information is never overwritten. '
                 . 'Tags are freeform EXCEPT the reserved tag "executable", which is rejected here: it marks a '
                 . 'workflow definition and can only be added by the user in the admin UI, because a workflow '
-                . 'that a runner executes must be authorised by a human, not by an agent.',
+                . 'that a runner executes must be authorised by a human, not by an agent.'
+                . $this->scopeNote('Writes go to the account named by "owner".'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: false,
                 idempotentHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
-                    'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
-                    'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected. To draft a post, store it in "ideas" or "notes" instead — the user moves it into writings in the admin UI.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only, see docs/WORKFLOWS.md).'],
-                    'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
-                ],
-                'required' => ['content'],
-            ],
-            'handler' => function (string $content, string $title = '', string $category = 'facts', array $tags = [], bool $archived = false): CallToolResult {
+            'inputSchema' => $this->inputSchema([
+                'content' => ['type' => 'string', 'description' => 'The memory content (Markdown allowed).'],
+                'title' => ['type' => 'string', 'description' => 'Short descriptive title, used for the filename and the H1 heading.'],
+                'category' => ['type' => 'string', 'description' => 'One of: preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes. Defaults to "facts" (use "notes" for anything that does not clearly fit another category). The "writings" category is read-only through MCP and is rejected. To draft a post, store it in "ideas" or "notes" instead — the user moves it into writings in the admin UI.'],
+                'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Optional but recommended: 1-3 short lowercase tags for grouping and search, e.g. ["project-x", "meeting-notes"]. ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only, see docs/WORKFLOWS.md).'],
+                'archived' => ['type' => 'boolean', 'description' => 'Set true to store the memory as archived. Archived memories are kept and remain searchable, but are ranked after active ones. Default false.'],
+            ] + $this->ownerProperty('The account to write to (e.g. "alice"). Omit to write to your own account.'), ['content']),
+            'handler' => function (string $content, string $title = '', string $category = 'facts', array $tags = [], bool $archived = false, string $owner = ''): CallToolResult {
+                $target = $this->targetStore($owner);
+                if (null === $target) {
+                    return $this->unknownOwner($owner);
+                }
+                [$ownerId, $store] = $target;
+
                 $title = trim($title);
                 $content = trim($content);
                 if ('' === $content) {
@@ -104,7 +131,7 @@ final class MemoryTools
                 }
                 $tags = array_values(array_filter(array_map('strval', $tags)));
 
-                $duplicate = $this->store->findDuplicate($content, $title, $category);
+                $duplicate = $store->findDuplicate($content, $title, $category);
                 if (null !== $duplicate) {
                     // An existing entry carrying the reserved tag is never
                     // rewritten here: what a runner executes is the definition
@@ -122,21 +149,21 @@ final class MemoryTools
                     if ($archived) {
                         $changes['archived'] = true;
                     }
-                    $updated = $this->store->update($duplicate['category'], $duplicate['id'], $changes);
+                    $updated = $store->update($duplicate['category'], $duplicate['id'], $changes);
 
                     return self::ok([
                         'action' => 'updated',
                         'message' => 'Updated the existing memory that already represented this information.',
-                        'memory' => self::publicDocument($updated),
+                        'memory' => $this->publicDocument($updated, $this->account($ownerId)),
                     ]);
                 }
 
-                $doc = $this->store->create($content, $title, $category, $tags, archived: $archived);
+                $doc = $store->create($content, $title, $category, $tags, archived: $archived);
 
                 return self::ok([
                     'action' => 'created',
                     'message' => 'Memory stored.',
-                    'memory' => self::publicDocument($doc),
+                    'memory' => $this->publicDocument($doc, $this->account($ownerId)),
                 ]);
             },
         ];
@@ -151,55 +178,71 @@ final class MemoryTools
                 . 'user\'s relevant preferences, projects, decisions, facts and history in mind before '
                 . 'answering. You do not need the user to ask about their memory. Without a query the most '
                 . 'recently updated memories are returned; with a query, the most relevant ones. Archived '
-                . 'memories are included but ranked after active ones; pass archived="active" to exclude them.',
+                . 'memories are included but ranked after active ones; pass archived="active" to exclude them.'
+                . $this->scopeNote('Without "owner" it loads from every account at once, so name the account when you know whose context you need.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories. May include "tag:foo" to require a tag.'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are returned like any other, but that category is read-only through MCP.'],
-                    'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
-                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
-                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
-                ],
-            ],
-            'handler' => function (string $query = '', string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
+            'inputSchema' => $this->inputSchema([
+                'query' => ['type' => 'string', 'description' => 'Optional words describing the topic you need context on (e.g. a project, person or preference). Omit to get the most recently updated memories. May include "tag:foo" to require a tag.'],
+                'category' => ['type' => 'string', 'description' => 'Restrict to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are returned like any other, but that category is read-only through MCP.'],
+                'limit' => ['type' => 'integer', 'description' => 'Maximum number of memories to return (default 10, max 50).'],
+                'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
+            ] + $this->ownerProperty('The account to load from. Omit to load from every account.')),
+            'handler' => function (string $query = '', string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all', string $owner = ''): CallToolResult {
                 if (!PathValidator::isCategory($category) && '' !== $category) {
                     return self::fail('Invalid category.');
+                }
+                $owners = $this->ownersFor($owner);
+                if (null === $owners) {
+                    return $this->unknownOwner($owner);
                 }
                 $limit = min(max(1, $limit), 50);
                 $query = trim($query);
                 $archivedFilter = self::archivedFilter($archived);
                 $probe = $limit + 1;
 
-                $docs = '' !== $query
-                    ? $this->search->search(
-                        $query,
-                        '' !== $category ? $category : null,
-                        $probe,
-                        includeBody: true,
-                        tag: '' !== $tag ? $tag : null,
-                        archived: $archivedFilter,
-                    )
-                    : $this->store->list(
-                        '' !== $category ? $category : null,
-                        $probe,
-                        $archivedFilter,
-                        '' !== $tag ? $tag : null,
-                    );
+                $docs = [];
+                foreach ($owners as $ownerId) {
+                    $found = '' !== $query
+                        ? $this->corpora->search($ownerId)->search(
+                            $query,
+                            '' !== $category ? $category : null,
+                            $probe,
+                            includeBody: true,
+                            tag: '' !== $tag ? $tag : null,
+                            archived: $archivedFilter,
+                        )
+                        : $this->corpora->store($ownerId)->list(
+                            '' !== $category ? $category : null,
+                            $probe,
+                            $archivedFilter,
+                            '' !== $tag ? $tag : null,
+                        );
+                    foreach ($found as $doc) {
+                        if ($this->crossAccount) {
+                            $doc['owner'] = $ownerId;
+                        }
+                        $docs[] = $doc;
+                    }
+                }
 
+                // Same rule as one corpus, applied to the merged set: active
+                // before archived, then the best match, then the freshest.
+                $docs = self::sortMerged($docs, '' !== $query);
                 [$docs, $returned, $hasMore] = self::page($docs, $limit);
 
                 if ([] === $docs) {
-                    return self::ok(['memories' => [], 'returned' => 0, 'has_more' => false, 'message' => 'No memories found.']);
+                    return self::ok(['memories' => [], 'returned' => 0, 'has_more' => false, 'message' => 'No memories found.']
+                        + $this->accountsPayload($owners));
                 }
 
-                $public = array_map(self::publicDocument(...), $docs);
+                $public = array_map(fn (array $doc): array => $this->publicDocument($doc, $doc['owner'] ?? null), $docs);
 
-                return self::ok(['memories' => $public, 'returned' => $returned, 'has_more' => $hasMore]);
+                return self::ok(['memories' => $public, 'returned' => $returned, 'has_more' => $hasMore]
+                    + $this->accountsPayload($owners));
             },
         ];
     }
@@ -217,22 +260,19 @@ final class MemoryTools
                 . 'Results never carry the body, only a SHORT SNIPPET of it and its size in "chars": call '
                 . 'read_memory with the returned id to read an entry in full. '
                 . 'Archived memories are included but ranked after active ones; pass archived="active" to '
-                . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".',
+                . 'exclude them. The query may contain "tag:foo" to require a tag and "is:archived"/"is:active".'
+                . $this->scopeNote('Without "owner" it searches every account at once and each result names the account it came from.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
-                    'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are searchable, but that category is read-only through MCP.'],
-                    'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
-                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
-                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
-                ],
-                'required' => ['query'],
-            ],
+            'inputSchema' => $this->inputSchema([
+                'query' => ['type' => 'string', 'description' => 'What to look up in the user\'s memory, e.g. a preference, favorite thing, past decision, fact about the user, or anything they may have asked you to remember. May include "tag:foo".'],
+                'category' => ['type' => 'string', 'description' => 'Restrict the search to one category (preferences, projects, decisions, workflows, ideas, references, goals, facts, people, context, notes, writings). Entries in "writings" are searchable, but that category is read-only through MCP.'],
+                'limit' => ['type' => 'integer', 'description' => 'Maximum results (default 10, max 50).'],
+                'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
+            ] + $this->ownerProperty('The account to search. Omit to search every account.'), ['query']),
             // NOTE: parameter names must mirror the JSON schema keys exactly —
             // the MCP SDK matches arguments by parameter name with no
             // snake_case conversion. A mismatch silently falls back to the
@@ -242,7 +282,7 @@ final class MemoryTools
             // body of up to 50 matches in one result is wasteful, and
             // read_memory reads a single entry in full. recall still returns
             // bodies for context loading.
-            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
+            'handler' => function (string $query, string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all', string $owner = ''): CallToolResult {
                 $query = trim($query);
                 if ('' === $query) {
                     return self::fail('query must not be empty.');
@@ -250,21 +290,35 @@ final class MemoryTools
                 if (!PathValidator::isCategory($category) && '' !== $category) {
                     return self::fail('Invalid category.');
                 }
+                $owners = $this->ownersFor($owner);
+                if (null === $owners) {
+                    return $this->unknownOwner($owner);
+                }
                 $limit = min(max(1, $limit), 50);
                 $probe = $limit + 1;
 
-                $results = $this->search->search(
-                    $query,
-                    '' !== $category ? $category : null,
-                    $probe,
-                    includeBody: false,
-                    tag: '' !== $tag ? $tag : null,
-                    archived: self::archivedFilter($archived),
-                );
+                $results = [];
+                foreach ($owners as $ownerId) {
+                    $found = $this->corpora->search($ownerId)->search(
+                        $query,
+                        '' !== $category ? $category : null,
+                        $probe,
+                        includeBody: false,
+                        tag: '' !== $tag ? $tag : null,
+                        archived: self::archivedFilter($archived),
+                    );
+                    foreach ($found as $doc) {
+                        if ($this->crossAccount) {
+                            $doc['owner'] = $ownerId;
+                        }
+                        $results[] = $doc;
+                    }
+                }
 
+                $results = self::sortMerged($results, true);
                 [$results, $returned, $hasMore] = self::page($results, $limit);
 
-                return self::ok(self::searchPayload($results, $returned, $hasMore));
+                return self::ok(self::searchPayload($results, $returned, $hasMore) + $this->accountsPayload($owners));
             },
         ];
     }
@@ -279,25 +333,22 @@ final class MemoryTools
                 . 'they returned whenever you need the actual text — to show an entry to the user, to check it '
                 . 'before changing it, or to append to / edit part of it. The whole body is returned by '
                 . 'default; pass offset and max_chars to page through a very long entry. Reading is always '
-                . 'allowed, including entries in the read-only "writings" category.',
+                . 'allowed, including entries in the read-only "writings" category.'
+                . $this->scopeNote('Ids are unique across accounts, so "owner" is only needed when the same id exists in more than one.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'id' => ['type' => 'string', 'description' => 'The id of the entry (e.g. "mentor-od-novembra-2024-96e3d3"), or its path exactly as returned by the other tools (e.g. "facts/mentor-od-novembra-2024-96e3d3.md"). A trailing ".md" is optional.'],
-                    'category' => ['type' => 'string', 'description' => 'Optional. Only needed to disambiguate; otherwise the category is taken from the id or path.'],
-                    'offset' => ['type' => 'integer', 'description' => 'Optional character offset to start at (default 0). Use with max_chars to page through a long entry.'],
-                    'max_chars' => ['type' => 'integer', 'description' => 'Optional maximum number of characters to return (default 0 = everything from offset on, no truncation).'],
-                    'include_frontmatter' => ['type' => 'boolean', 'description' => 'Also return the raw frontmatter block as stored on disk (default false; tags, created, updated, archived and public are always returned as structured fields anyway).'],
-                ],
-                'required' => ['id'],
-            ],
+            'inputSchema' => $this->inputSchema([
+                'id' => ['type' => 'string', 'description' => 'The id of the entry (e.g. "mentor-od-novembra-2024-96e3d3"), or its path exactly as returned by the other tools (e.g. "facts/mentor-od-novembra-2024-96e3d3.md"). A trailing ".md" is optional.'],
+                'category' => ['type' => 'string', 'description' => 'Optional. Only needed to disambiguate; otherwise the category is taken from the id or path.'],
+                'offset' => ['type' => 'integer', 'description' => 'Optional character offset to start at (default 0). Use with max_chars to page through a long entry.'],
+                'max_chars' => ['type' => 'integer', 'description' => 'Optional maximum number of characters to return (default 0 = everything from offset on, no truncation).'],
+                'include_frontmatter' => ['type' => 'boolean', 'description' => 'Also return the raw frontmatter block as stored on disk (default false; tags, created, updated, archived and public are always returned as structured fields anyway).'],
+            ] + $this->ownerProperty('The account the entry belongs to. Omit to look in every account.'), ['id']),
             // Parameter names mirror the JSON schema keys exactly (see the note
             // on search_memory: the SDK does no snake_case conversion).
-            'handler' => function (string $id, string $category = '', int $offset = 0, int $max_chars = 0, bool $include_frontmatter = false): CallToolResult {
+            'handler' => function (string $id, string $category = '', int $offset = 0, int $max_chars = 0, bool $include_frontmatter = false, string $owner = ''): CallToolResult {
                 $reference = MemoryStore::locate($id);
                 if (null === $reference) {
                     return self::fail('Invalid memory id or path. Pass the id or path returned by search_memory or list_memory, e.g. "facts/mentor-od-novembra-2024-96e3d3.md".');
@@ -307,12 +358,15 @@ final class MemoryTools
                 }
 
                 // Explicit argument, then the category carried by the path, then
-                // a scan of the whole corpus (ids are globally unique).
-                $resolved = '' !== $category
-                    ? $category
-                    : ($reference['category'] ?? $this->categoryFor($reference['id']));
-                $doc = null !== $resolved ? $this->store->read($resolved, $reference['id']) : null;
-                if (null === $doc || null === $resolved) {
+                // a scan of the visible corpora (ids are globally unique).
+                $wanted = '' !== $category ? $category : ($reference['category'] ?? null);
+                $hit = $this->locate($reference['id'], $wanted, $owner);
+                if (!$hit['ok']) {
+                    return self::fail($hit['error']);
+                }
+                $store = $this->corpora->store($hit['owner']);
+                $doc = $store->read($hit['category'], $reference['id']);
+                if (null === $doc) {
                     return self::fail("No memory entry found with id {$reference['id']}.");
                 }
 
@@ -324,7 +378,7 @@ final class MemoryTools
                 $returned = mb_strlen($window);
                 $hasMore = $offset + $returned < $bodyChars;
 
-                $memory = self::publicDocument($doc);
+                $memory = $this->publicDocument($doc, $this->account($hit['owner']));
                 $memory['body'] = $window;
 
                 $data = [
@@ -344,7 +398,7 @@ final class MemoryTools
                         . 'update_memory, or the missing text will be lost.';
                 }
                 if ($include_frontmatter) {
-                    $data['frontmatter'] = self::frontmatterBlock($this->store->raw($resolved, $reference['id']));
+                    $data['frontmatter'] = self::frontmatterBlock($store->raw($hit['category'], $reference['id']));
                 }
 
                 return self::ok($data);
@@ -365,26 +419,23 @@ final class MemoryTools
                 . 'can be moved into that category. The reserved tag "executable" cannot be added here, and an '
                 . 'entry that already carries it (a workflow definition the user authorised) is read-only '
                 . 'through MCP: it cannot be edited, archived or moved, only read — ask the user to change it '
-                . 'in the admin UI.',
+                . 'in the admin UI.'
+                . $this->scopeNote('"owner" only says where to find the entry: an entry cannot be moved between accounts.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: false,
                 idempotentHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'id' => ['type' => 'string', 'description' => 'The id of the memory entry to update.'],
-                    'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
-                    'title' => ['type' => 'string', 'description' => 'New title.'],
-                    'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only).'],
-                    'category' => ['type' => 'string', 'description' => 'New category; the file is moved there. The "writings" category is read-only through MCP: entries cannot be moved into it.'],
-                    'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
-                ],
-                'required' => ['id'],
-            ],
-            'handler' => function (string $id, string $content = '', string $title = '', array $tags = [], string $category = '', ?bool $archived = null): CallToolResult {
+            'inputSchema' => $this->inputSchema([
+                'id' => ['type' => 'string', 'description' => 'The id of the memory entry to update.'],
+                'content' => ['type' => 'string', 'description' => 'New body content (Markdown allowed).'],
+                'title' => ['type' => 'string', 'description' => 'New title.'],
+                'tags' => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Replacement tag list (short lowercase tags for grouping and search). ' . RecommendedTags::summary() . ' The reserved tag "executable" cannot be set here (admin UI only).'],
+                'category' => ['type' => 'string', 'description' => 'New category; the file is moved there. The "writings" category is read-only through MCP: entries cannot be moved into it.'],
+                'archived' => ['type' => 'boolean', 'description' => 'Set true to archive the entry, false to restore it to active.'],
+            ] + $this->ownerProperty('The account the entry belongs to. Omit to look in every account.'), ['id']),
+            'handler' => function (string $id, string $content = '', string $title = '', array $tags = [], string $category = '', ?bool $archived = null, string $owner = ''): CallToolResult {
                 if (!PathValidator::isId($id)) {
                     return self::fail('Invalid memory id.');
                 }
@@ -421,23 +472,28 @@ final class MemoryTools
                     return self::fail('Nothing to update: provide at least one of content, title, tags, category or archived.');
                 }
 
-                // A read-only category is refused wherever the entry lives, so a
-                // writing can never be edited (or archived) through MCP.
-                $currentCategory = $this->categoryFor($id);
-                if (null === $currentCategory) {
+                // The entry is located first: which account it lives in decides
+                // which store is written, and the read-only category rules are
+                // then applied to that account's copy.
+                $hit = $this->locate($id, null, $owner);
+                if (!$hit['ok']) {
+                    return self::fail($hit['error']);
+                }
+                $store = $this->corpora->store($hit['owner']);
+                if (PathValidator::isWriteProtectedCategory($hit['category'])) {
+                    return self::failWriteProtected($hit['category'], 'this memory cannot be updated here.');
+                }
+                $current = $store->read($hit['category'], $id);
+                if (null === $current) {
                     return self::fail("No memory entry found with id {$id}.");
                 }
-                if (PathValidator::isWriteProtectedCategory($currentCategory)) {
-                    return self::failWriteProtected($currentCategory, 'this memory cannot be updated here.');
-                }
-                $current = $this->store->read($currentCategory, $id);
                 $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
                 if ('' !== $reserved) {
                     return self::failHumanOnlyTag($reserved, 'this memory cannot be changed here.');
                 }
 
                 try {
-                    $doc = $this->store->update($currentCategory, $id, $changes);
+                    $doc = $store->update($hit['category'], $id, $changes);
                 } catch (\InvalidArgumentException $e) {
                     return self::fail($e->getMessage());
                 }
@@ -445,7 +501,7 @@ final class MemoryTools
                 return self::ok([
                     'action' => 'updated',
                     'message' => 'Memory updated.',
-                    'memory' => self::publicDocument($doc),
+                    'memory' => $this->publicDocument($doc, $this->account($hit['owner'])),
                 ]);
             },
         ];
@@ -461,22 +517,19 @@ final class MemoryTools
                 . 'it first if the target is ambiguous. The entry disappears from memory, search and recall. '
                 . 'Entries in the "writings" category are read-only through MCP and cannot be deleted here. '
                 . 'An entry carrying the reserved tag "executable" (a workflow definition) cannot be deleted '
-                . 'here either — deleting an authorised workflow is the user\'s call in the admin UI.',
+                . 'here either — deleting an authorised workflow is the user\'s call in the admin UI.'
+                . $this->scopeNote('A deleted entry goes to that account\'s own trash, where only its owner can restore it.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: false,
                 destructiveHint: true,
                 idempotentHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'id' => ['type' => 'string', 'description' => 'The id of the memory entry to delete.'],
-                    'category' => ['type' => 'string', 'description' => 'The category the entry lives in (used to locate the file). The "writings" category is read-only through MCP.'],
-                ],
-                'required' => ['id'],
-            ],
-            'handler' => function (string $id, string $category = ''): CallToolResult {
+            'inputSchema' => $this->inputSchema([
+                'id' => ['type' => 'string', 'description' => 'The id of the memory entry to delete.'],
+                'category' => ['type' => 'string', 'description' => 'The category the entry lives in (used to locate the file). The "writings" category is read-only through MCP.'],
+            ] + $this->ownerProperty('The account the entry belongs to. Omit to look in every account.'), ['id']),
+            'handler' => function (string $id, string $category = '', string $owner = ''): CallToolResult {
                 if (!PathValidator::isId($id)) {
                     return self::fail('Invalid memory id.');
                 }
@@ -484,21 +537,25 @@ final class MemoryTools
                     return self::fail('Invalid category.');
                 }
 
-                $currentCategory = '' !== $category ? $category : $this->categoryFor($id);
-                if (null === $currentCategory) {
+                $hit = $this->locate($id, '' !== $category ? $category : null, $owner);
+                if (!$hit['ok']) {
+                    return self::fail($hit['error']);
+                }
+                $store = $this->corpora->store($hit['owner']);
+                if (PathValidator::isWriteProtectedCategory($hit['category'])) {
+                    return self::failWriteProtected($hit['category'], 'this memory cannot be deleted here.');
+                }
+                $current = $store->read($hit['category'], $id);
+                if (null === $current) {
                     return self::fail("No memory entry found with id {$id}.");
                 }
-                if (PathValidator::isWriteProtectedCategory($currentCategory)) {
-                    return self::failWriteProtected($currentCategory, 'this memory cannot be deleted here.');
-                }
-                $current = $this->store->read($currentCategory, $id);
                 $reserved = PathValidator::humanOnlyTag($current['tags'] ?? []);
                 if ('' !== $reserved) {
                     return self::failHumanOnlyTag($reserved, 'this memory cannot be deleted here.');
                 }
 
                 try {
-                    $deleted = $this->store->delete($currentCategory, $id);
+                    $deleted = $store->delete($hit['category'], $id);
                 } catch (\RuntimeException $e) {
                     // The trash is unwritable: refuse rather than destroy the
                     // entry, and say why so it is not mistaken for a protocol bug.
@@ -512,7 +569,7 @@ final class MemoryTools
                     'action' => 'deleted',
                     'message' => "Memory entry {$id} deleted. It is in the trash and can still be restored in the admin UI.",
                     'id' => $id,
-                ]);
+                ] + ($this->crossAccount ? ['owner' => $hit['owner']] : []));
             },
         ];
     }
@@ -526,41 +583,65 @@ final class MemoryTools
                 . 'Bodies are never returned here — each entry carries its size in "chars" instead: follow up '
                 . 'with read_memory to read one entry in full. '
                 . 'With no category all categories are listed. Archived memories are included but listed '
-                . 'after active ones; pass archived="active" to exclude them.',
+                . 'after active ones; pass archived="active" to exclude them.'
+                . $this->scopeNote('Without "owner" it lists every account at once and reports how many entries each holds.'),
             'annotations' => new ToolAnnotations(
                 readOnlyHint: true,
                 openWorldHint: false,
             ),
-            'inputSchema' => [
-                'type' => 'object',
-                'properties' => [
-                    'category' => ['type' => 'string', 'description' => 'Restrict to one category.'],
-                    'limit' => ['type' => 'integer', 'description' => 'Maximum entries (default 10, max 200).'],
-                    'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
-                    'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
-                ],
-            ],
-            'handler' => function (string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all'): CallToolResult {
+            'inputSchema' => $this->inputSchema([
+                'category' => ['type' => 'string', 'description' => 'Restrict to one category.'],
+                'limit' => ['type' => 'integer', 'description' => 'Maximum entries (default 10, max 200).'],
+                'tag' => ['type' => 'string', 'description' => 'Optional: return only memories carrying this exact tag (case-insensitive).'],
+                'archived' => ['type' => 'string', 'enum' => ['all', 'active', 'archived'], 'description' => 'Which memories to include: "all" (default, active first then archived), "active" only, or "archived" only.'],
+            ] + $this->ownerProperty('The account to list. Omit to list every account.')),
+            'handler' => function (string $category = '', int $limit = self::DEFAULT_LIMIT, string $tag = '', string $archived = 'all', string $owner = ''): CallToolResult {
                 if (!PathValidator::isCategory($category) && '' !== $category) {
                     return self::fail('Invalid category.');
                 }
+                $owners = $this->ownersFor($owner);
+                if (null === $owners) {
+                    return $this->unknownOwner($owner);
+                }
                 $limit = min(max(1, $limit), 200);
 
-                $docs = $this->store->list(
-                    '' !== $category ? $category : null,
-                    $limit,
-                    self::archivedFilter($archived),
-                    '' !== $tag ? $tag : null,
-                );
+                $docs = [];
+                $total = 0;
+                $accounts = [];
+                $categories = [];
+                foreach ($owners as $ownerId) {
+                    $store = $this->corpora->store($ownerId);
+                    $entries = $store->count();
+                    $total += $entries;
+                    $accounts[$ownerId] = ['id' => $ownerId, 'entries' => $entries];
+                    foreach ($store->categories() as $name) {
+                        $categories[$name] = true;
+                    }
+                    foreach ($store->list('' !== $category ? $category : null, $limit, self::archivedFilter($archived), '' !== $tag ? $tag : null) as $doc) {
+                        if ($this->crossAccount) {
+                            $doc['owner'] = $ownerId;
+                        }
+                        $docs[] = $doc;
+                    }
+                }
 
-                return self::ok([
-                    'categories' => $this->store->categories(),
-                    'total' => $this->store->count(),
+                $docs = self::page(self::sortMerged($docs, false), $limit)[0];
+                $names = array_keys($categories);
+                sort($names);
+
+                $payload = [
+                    'categories' => $names,
+                    'total' => $total,
                     'returned' => count($docs),
                     // Metadata only: the listing is for discovering what exists,
                     // so each entry ships its size instead of its body.
-                    'memories' => array_map(static fn (array $doc): array => self::publicDocument($doc, false), $docs),
-                ]);
+                    'memories' => array_map(fn (array $doc): array => $this->publicDocument($doc, $doc['owner'] ?? null, false), $docs),
+                ];
+                if ($this->crossAccount) {
+                    $payload['accounts'] = array_values($accounts);
+                }
+
+                return self::ok($payload);
             },
         ];
     }
@@ -601,6 +682,20 @@ final class MemoryTools
     }
 
     /**
+     * The accounts a call searched, added only on the connector that serves
+     * several. On `/mcp` there is nothing to disambiguate, so the field would
+     * just be noise.
+     *
+     * @param list<string> $owners
+     *
+     * @return array<string, mixed>
+     */
+    private function accountsPayload(array $owners): array
+    {
+        return $this->crossAccount ? ['owners' => $owners] : [];
+    }
+
+    /**
      * Split a data set into a single page plus a "more available" flag. The
      * caller is expected to have fetched one extra item (limit + 1) so that
      * has_more is exact rather than a guess.
@@ -618,22 +713,196 @@ final class MemoryTools
     }
 
     /**
-     * Locate the category of an id across all categories — including the
-     * read-only ones, so an entry in a write-protected category is found (and
-     * then refused) rather than being silently defaulted elsewhere. Memory ids
-     * carry a random suffix and are globally unique across the whole corpus, so
-     * at most one category can contain a given id. Returns null when no
-     * category contains the id.
+     * Order results that came from one or more accounts: active before archived,
+     * then (for a search) the best match, then the freshest entry.
+     *
+     * This is the same rule the single-corpus engines already apply, so merging
+     * one account changes nothing. Across accounts the relevance score is not
+     * strictly comparable — a tiny corpus scores higher on bm25 than a large one
+     * for the same match — which is why freshness breaks ties and why this is
+     * documented rather than dressed up as a global ranking.
+     *
+     * `rank` is renumbered after merging, because each account numbered its own
+     * results from 1.
+     *
+     * @param list<array<string, mixed>> $docs
+     *
+     * @return list<array<string, mixed>>
      */
-    private function categoryFor(string $id): ?string
+    private static function sortMerged(array $docs, bool $byScore): array
     {
-        foreach ($this->store->categories() as $category) {
-            if (null !== $this->store->read($category, $id)) {
-                return $category;
+        usort($docs, static function (array $a, array $b) use ($byScore): int {
+            $archived = (int) ($a['archived'] ?? false) <=> (int) ($b['archived'] ?? false);
+            if (0 !== $archived) {
+                return $archived;
+            }
+            if ($byScore) {
+                $score = ((float) ($b['score'] ?? 0)) <=> ((float) ($a['score'] ?? 0));
+                if (0 !== $score) {
+                    return $score;
+                }
+            }
+
+            return (int) ($b['updated_ts'] ?? 0) <=> (int) ($a['updated_ts'] ?? 0);
+        });
+
+        foreach ($docs as $i => $doc) {
+            if (array_key_exists('rank', $doc)) {
+                $docs[$i]['rank'] = $i + 1;
             }
         }
 
-        return null;
+        return $docs;
+    }
+
+    /**
+     * Locate an entry in the corpora this connector can see.
+     *
+     * A single-account connector has exactly one corpus, so this is the old
+     * "which category is this id in" scan. The admin connector may see several
+     * accounts: an id found in more than one of them is refused rather than
+     * guessed, because picking one silently is not something a write tool may
+     * do. Ids carry a random suffix and collisions are vanishingly unlikely —
+     * "vanishingly unlikely" is not "impossible", and this is a delete path.
+     *
+     * @return array{ok: bool, owner: string, category: string, error: string}
+     */
+    private function locate(string $id, ?string $category, string $ownerHint): array
+    {
+        $owners = $this->ownersFor($ownerHint);
+        if (null === $owners) {
+            return ['ok' => false, 'owner' => '', 'category' => '', 'error' => $this->unknownOwnerMessage($ownerHint)];
+        }
+
+        $hits = [];
+        foreach ($owners as $ownerId) {
+            $store = $this->corpora->store($ownerId);
+            foreach (null !== $category ? [$category] : $store->categories() as $candidate) {
+                if (null !== $store->read($candidate, $id)) {
+                    $hits[] = ['owner' => $ownerId, 'category' => $candidate];
+                    break;
+                }
+            }
+        }
+
+        if ([] === $hits) {
+            return ['ok' => false, 'owner' => '', 'category' => '', 'error' => "No memory entry found with id {$id}."];
+        }
+        if (count($hits) > 1) {
+            $where = implode(', ', array_map(static fn (array $hit): string => $hit['owner'], $hits));
+
+            return [
+                'ok' => false,
+                'owner' => '',
+                'category' => '',
+                'error' => "The id {$id} exists in more than one account ({$where}). Pass owner to say which one.",
+            ];
+        }
+
+        return ['ok' => true, 'owner' => $hits[0]['owner'], 'category' => $hits[0]['category'], 'error' => ''];
+    }
+
+    /**
+     * The accounts a read may touch: the named one, or every visible one when
+     * no owner was given. Null means the name is not reachable here.
+     *
+     * @return list<string>|null
+     */
+    private function ownersFor(string $ownerHint): ?array
+    {
+        $hint = $this->crossAccount ? trim($ownerHint) : '';
+        if ('' === $hint) {
+            return $this->corpora->owners();
+        }
+
+        return $this->corpora->has($hint) ? [$hint] : null;
+    }
+
+    /**
+     * The account a write goes to: the named one, or the acting account.
+     *
+     * @return array{0: string, 1: MemoryStore}|null
+     */
+    private function targetStore(string $ownerHint): ?array
+    {
+        $hint = $this->crossAccount ? trim($ownerHint) : '';
+        $owner = '' !== $hint ? $hint : $this->owner;
+        if (!$this->corpora->has($owner)) {
+            return null;
+        }
+
+        return [$owner, $this->corpora->store($owner)];
+    }
+
+    private function unknownOwner(string $owner): CallToolResult
+    {
+        return self::fail($this->unknownOwnerMessage($owner));
+    }
+
+    private function unknownOwnerMessage(string $owner): string
+    {
+        return 'Unknown account "' . trim($owner) . '": it does not exist, or it is disabled and therefore not '
+            . 'visible here. Omit owner to use your own account.';
+    }
+
+    /**
+     * The `owner` argument, offered only on the connector that serves several
+     * accounts.
+     *
+     * On `/mcp` the property is absent from the schema altogether, so "reach
+     * another corpus" is not a call that can be expressed — the restriction is
+     * structural, not a check somebody could forget to write.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function ownerProperty(string $description): array
+    {
+        if (!$this->crossAccount) {
+            return [];
+        }
+
+        return ['owner' => ['type' => 'string', 'description' => $description]];
+    }
+
+    /**
+     * The account a document belongs to, in the response, when it is worth
+     * saying. Null on the single-account connector.
+     */
+    private function account(?string $ownerId): ?string
+    {
+        return $this->crossAccount ? $ownerId : null;
+    }
+
+    /**
+     * What this connection can reach, appended to each tool description so the
+     * calling model reads it where it looks for the tool, not only in the server
+     * instructions.
+     */
+    private function scopeNote(string $detail): string
+    {
+        if (!$this->crossAccount) {
+            return '';
+        }
+
+        return ' ACCOUNT SCOPE: this connection serves EVERY enabled account, not just yours — every result '
+            . 'carries its "owner", and every write takes an "owner" (default: your own account). '
+            . 'Disabled accounts are not visible here. ' . $detail;
+    }
+
+    /**
+     * @param array<string, mixed>              $properties
+     * @param list<string>                      $required
+     *
+     * @return array<string, mixed>
+     */
+    private function inputSchema(array $properties, array $required = []): array
+    {
+        $schema = ['type' => 'object', 'properties' => $properties];
+        if ([] !== $required) {
+            $schema['required'] = $required;
+        }
+
+        return $schema;
     }
 
     /**
@@ -657,14 +926,20 @@ final class MemoryTools
      * the body is replaced by `chars` rather than dropped silently. Recall and
      * the single-entry tools load the body deliberately and keep it.
      *
+     * `owner` is added only when the connector serves several accounts, so the
+     * single-account response shape is unchanged.
+     *
      * @param array<string, mixed> $doc
      *
      * @return array<string, mixed>
      */
-    private static function publicDocument(array $doc, bool $withBody = true): array
+    private function publicDocument(array $doc, ?string $ownerId, bool $withBody = true): array
     {
         $public = $doc;
         $public['path'] = $doc['category'] . '/' . $doc['id'] . '.md';
+        if (null !== $ownerId) {
+            $public['owner'] = $ownerId;
+        }
         if (!$withBody && isset($public['body'])) {
             $public['chars'] = mb_strlen((string) $public['body']);
             unset($public['body']);

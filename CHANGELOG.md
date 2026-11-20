@@ -14,6 +14,19 @@ version lives in `config.php` (`app_version`).
 ## [Unreleased]
 
 ### Added
+- An **admin MCP connector** at `/mcp/all`: the same seven tools, over every
+  enabled account at once. Each tool gains an `owner` argument — reads search one
+  account or all of them, writes go to `owner` (default: your own account) — and
+  every result says which account it came from. It is its own OAuth audience with
+  its own RFC 9728 metadata
+  (`/.well-known/oauth-protected-resource/mcp/all`), so a token minted for `/mcp`
+  is refused there and vice versa; a non-admin's valid token gets `403` (no
+  challenge, so it is not sent back into OAuth). Disabled accounts are invisible to
+  it, a cross-account delete lands in that account's own trash, and the per-account
+  protections (`writings` read-only, the reserved `executable` tag) apply unchanged
+  because the same handlers run. The ordinary `/mcp` connector never exposes
+  `owner` at all. `/ui/settings` shows both connector URLs (`AGENTS.md`,
+  "Amendment: the admin MCP connector").
 - Workflow definitions understand the optional runner fields `run_if`
   (`unread_mail` | `unread_mail_any`), `mail_context` (`unread`), `mailbox` and
   `mail_mark_read` (a boolean, default `false`),

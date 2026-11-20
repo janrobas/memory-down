@@ -514,6 +514,13 @@ final class WebApp
             'csrf' => $this->auth->csrfToken(),
             'user' => $user,
             'tokens' => $this->tokenList($user),
+            'mcp' => [
+                // What to paste into an MCP client. The admin endpoint is only
+                // listed for admins: it is not a secret, but offering a URL
+                // that will answer 403 to a plain user is not helpful either.
+                'account' => $this->config->resourceForPath('/mcp'),
+                'all' => $user->isAdmin() ? $this->config->resourceForPath(Config::MCP_ALL_PATH) : '',
+            ],
             'apiEnabled' => [
                 UserStore::TOKEN_WRITINGS => $this->config->publicApiEnabled,
                 UserStore::TOKEN_WORKFLOWS => $this->config->workflowsApiEnabled,

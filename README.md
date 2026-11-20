@@ -78,6 +78,11 @@ ChatGPT / OpenCode / other MCP clients → MCP over HTTPS → OAuth 2.1 → Memo
 - **Diagnostics** at `/health`, `/health/mcp`, `/health/oauth`, with a human
   page of links at `/about` (the site root itself opens the admin UI).
 - **Filesystem-safe:** strict path whitelisting prevents traversal.
+- **An admin connector** at `/mcp/all` for administrators: the same seven tools,
+  over every enabled account at once, with an `owner` argument on each. It is a
+  separate OAuth audience, so an ordinary connector's token cannot reach it, and
+  the ordinary `/mcp` connector offers no `owner` at all. See
+  [The admin connector](#the-admin-connector).
 
 ## Requirements
 
@@ -604,6 +609,7 @@ every account.
 | Endpoint | Purpose |
 | --- | --- |
 | `/.well-known/oauth-protected-resource` and `.../mcp` | RFC 9728 resource metadata |
+| `/.well-known/oauth-protected-resource/mcp/all` | RFC 9728 metadata for the admin connector |
 | `/.well-known/oauth-authorization-server` / `/.well-known/openid-configuration` | RFC 8414 / OIDC discovery |
 | `/oauth/authorize` | Consent page (sign in as the account to connect) |
 | `/oauth/token` | Token endpoint |
@@ -631,20 +637,53 @@ After connecting, paste the block from [`CHATGPT-INSTRUCTIONS.md`](CHATGPT-INSTR
 into ChatGPT's custom instructions so it uses MemoryDown by default instead of its
 built-in memory.
 
+### The admin connector
+
+An administrator can add a **second** connector that serves every enabled account
+at once:
+
+```
+https://memory.example.com/mcp/all
+```
+
+It is the same seven tools; each one gains an `owner` argument (an account name).
+Reads (`search_memory`, `recall`, `read_memory`, `list_memory`) cover every
+enabled account when `owner` is omitted, one account when it is given, and each
+result says which account it came from. Writes (`remember`, `update_memory`,
+`forget_memory`) go to `owner`, or to your own account when it is omitted.
+
+Things worth knowing before you point an agent at it:
+
+- **It is a separate connection with its own consent.** `/mcp/all` is its own OAuth
+  audience, so a token minted for `/mcp` is refused there (and the other way
+  round). Add it as a second connector and sign in as the admin account.
+- **Non-admins are refused with `403`**, not sent back into OAuth: the connection
+  simply is not available to them. Demoting or disabling the admin kills the token
+  with the next role/epoch change.
+- **Disabled accounts are invisible** — not searched, not listed, not readable,
+  not writable. Data is untouched and comes back when the account is re-enabled.
+- **A cross-account delete goes to that account's trash**, where only its owner can
+  restore it; treat it as permanent.
+- The settings page (`/ui/settings`) shows both URLs, so there is nothing to
+  memorise.
+
+The ordinary `/mcp` connector never offers `owner`: the argument is not in its tool
+schemas at all, so an agent there cannot even ask for another corpus.
+
 ## Testing & diagnostics
 
 ```bash
 curl -s https://memory.example.com/health
 composer test              # unit tests + full protocol chain
 php tests/unit-tests.php   # frontmatter (incl. CRLF), path guards, accounts, migration, search query, rate limiter
-php tests/run-tests.php    # chain: health → discovery → 401 → DCR → consent → token → MCP → tools → accounts → revocation → rate limits → traversal
+php tests/run-tests.php    # chain: health → discovery → 401 → DCR → consent → token → MCP → tools → accounts → admin connector → revocation → rate limits → traversal
 ```
 
 `/health` reports `checks.users` (how many accounts exist) and
 `checks.search_index.engine` as `sqlite-fts5` (indexed) or `direct` (fallback),
 plus `checks.log_bytes` and `checks.disk_free_bytes` so a filling disk is
-visible before it breaks anything. `/health/mcp` lists the tools and reports
-whether MCP session storage is writable.
+visible before it breaks anything. `/health/mcp` lists the tools, both endpoints
+and whether MCP session storage is writable.
 
 `/health` reports `checks.search_index.engine` as `sqlite-fts5` (indexed) or
 `direct` (fallback).
@@ -654,9 +693,10 @@ whether MCP session storage is writable.
 - **Accounts are the isolation boundary.** Every account's memory lives in its
   own directory, with its own store, its own search index and its own MCP
   sessions, and a bearer token names the account it may act as. There is no
-  query, path or tool call that reaches across that line — and the admin UI does
-  not offer a convenient way around it either: an admin can download another
-  account's memory, never browse or edit it.
+  query, path or tool call that reaches across that line except through the admin
+  connector (`/mcp/all`, admin role, its own audience, `owner`-labelled results),
+  and the admin UI does not offer a convenient way around it either: an admin can
+  download another account's memory, never browse or edit it.
 - Memory paths are whitelisted (categories/ids by regex plus canonical-path
   containment); traversal and deletion outside the memory root are rejected.
   Account ids get the same treatment, because an id is a directory name.

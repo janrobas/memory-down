@@ -9,6 +9,12 @@ namespace MemoryDown;
  */
 final class Config
 {
+    /**
+     * The admin MCP endpoint: every enabled account through one connection.
+     * Mounted beside `/mcp` (and the base URL), and bound to its own audience.
+     */
+    public const MCP_ALL_PATH = '/mcp/all';
+
     public readonly string $appBaseUrl;
     public readonly string $appEnv;
     public readonly string $appName;
@@ -109,21 +115,46 @@ final class Config
 
     /**
      * Canonical resource identifier for the MCP endpoint mounted at $path
-     * ("/mcp" or "/"). Always HTTPS in production, HTTP in development.
+     * ("/", "/mcp" or "/mcp/all"). Always HTTPS in production, HTTP in
+     * development.
+     *
+     * Each endpoint is its own audience: a token minted for `/mcp` is not
+     * accepted at `/mcp/all`, so gaining admin reach always takes a second
+     * consent by an account that actually is an admin.
      */
     public function resourceForPath(string $path): string
     {
         $path = '/' . trim($path, '/');
 
-        return '/mcp' === $path ? $this->appBaseUrl . '/mcp' : $this->appBaseUrl;
+        return match ($path) {
+            '/mcp' => $this->appBaseUrl . '/mcp',
+            self::MCP_ALL_PATH => $this->appBaseUrl . self::MCP_ALL_PATH,
+            default => $this->appBaseUrl,
+        };
     }
 
     public function protectedResourceMetadataUrl(string $path): string
     {
         $path = '/' . trim($path, '/');
 
-        return '/mcp' === $path
-            ? $this->appBaseUrl . '/.well-known/oauth-protected-resource/mcp'
-            : $this->appBaseUrl . '/.well-known/oauth-protected-resource';
+        return match ($path) {
+            '/mcp' => $this->appBaseUrl . '/.well-known/oauth-protected-resource/mcp',
+            self::MCP_ALL_PATH => $this->appBaseUrl . '/.well-known/oauth-protected-resource' . self::MCP_ALL_PATH,
+            default => $this->appBaseUrl . '/.well-known/oauth-protected-resource',
+        };
+    }
+
+    /**
+     * Every resource identifier this instance is an audience for.
+     *
+     * @return list<string>
+     */
+    public function canonicalResources(): array
+    {
+        return [
+            $this->appBaseUrl,
+            $this->appBaseUrl . '/mcp',
+            $this->appBaseUrl . self::MCP_ALL_PATH,
+        ];
     }
 }

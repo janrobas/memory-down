@@ -841,10 +841,11 @@ out-of-scope list changes.
   hosting, with no daemon and no sweep of session files.
 - **Roles are `admin` and `user`.** Admins manage accounts; users manage their own
   password, tokens and backup. An admin may **download** any account's memory and
-  nothing else — reading or editing somebody else's entries in the UI is not
-  offered, so the isolation is not undone by a convenience. The last enabled admin
-  can be neither demoted, disabled nor deleted, and no one can do it to
-  themselves.
+  nothing else *in the admin UI* — reading or editing somebody else's entries
+  there is not offered, so the isolation is not undone by a convenience. (The one
+  deliberate exception is the admin MCP connector, `/mcp/all`; see the amendment
+  below.) The last enabled admin can be neither demoted, disabled nor deleted, and
+  no one can do it to themselves.
 - **Deletion is recoverable at every level**: memories go to that account's
   `memory/.trash/`, a deleted account's directory goes to `data/users/.trash/`.
 - **Seeding is one-shot.** A pre-accounts instance is migrated on first boot from
@@ -855,6 +856,59 @@ out-of-scope list changes.
 - **Still out of scope here:** self-service sign-up, per-account quotas, and
   anything resembling a hosted multi-tenant service. One instance serves a
   household or a team.
+
+### Amendment: the admin MCP connector (in scope)
+
+An administrator can connect one extra MCP client that serves **every enabled
+account at once**, under the constraints that follow. This is the single, explicit
+exception to "one connector, one corpus"; nothing else about accounts changes.
+
+- **It is its own endpoint and its own audience.** `/mcp/all`, next to `/mcp` and
+  the base URL, with its own RFC 9728 metadata
+  (`/.well-known/oauth-protected-resource/mcp/all`) and its own token `resource`.
+  Tokens are **not** interchangeable: a token consented for `/mcp` is rejected at
+  `/mcp/all` and vice versa. Reaching every account therefore takes its own walk
+  through discovery, consent and a fresh token — it is never inherited from an
+  ordinary connector.
+- **Admin role is checked on every request, and refused as 403.** A valid token of
+  a non-admin account is answered with `403` and no `WWW-Authenticate` header: the
+  credentials are fine, the door is not open, and a 401 would send the client back
+  into OAuth forever. A role change bumps the account's auth epoch, so a demoted
+  admin's connector dies with it.
+- **The same seven tools, with an `owner` argument.** Reads (`search_memory`,
+  `recall`, `read_memory`, `list_memory`) search every enabled account when
+  `owner` is omitted and one when it is given; every result carries the `owner` it
+  came from. Writes (`remember`, `update_memory`, `forget_memory`) go to `owner`,
+  defaulting to the acting account. There is no second implementation: the same
+  `MemoryTools` handlers run, so the per-account protections — `writings`
+  read-only, the reserved `executable` tag, the trash, the body-size ceiling —
+  apply to a cross-account write exactly as they do to a local one.
+- **On `/mcp` the `owner` argument does not exist.** It is absent from the tool
+  schemas of the ordinary connector, so "reach another corpus" is not a call that
+  can be expressed there. The restriction is structural, not a check that could be
+  forgotten.
+- **Disabled accounts are invisible**, in both directions and in both connectors:
+  they are not searched, not listed, not readable and not writable. Disabling is
+  still a credentials act (data is untouched and comes back on re-enable), but this
+  connector is deliberately stricter than that.
+- **Deletion stays recoverable, by the owner.** A cross-account `forget_memory`
+  moves the file into *that* account's `memory/.trash/`, where only its owner can
+  restore it in the admin UI. An administrator therefore treats a cross-account
+  delete as permanent — which is what the tool description says.
+- **The admin UI is unchanged.** It still shows and edits only the signed-in
+  account's memory, and an admin still may only *download* another account's
+  corpus. Cross-account reading and writing exist in one place — this connector —
+  so the exception stays auditable.
+- **Cross-account search merges, it does not reconcile.** Each account is searched
+  through its own Markdown store and its own disposable index, and the results are
+  merged: active before archived, then relevance, then freshness. bm25 scores from
+  different corpora are not strictly comparable, which is why freshness breaks
+  ties; per-account limits bound the work, and there is no new index, no new table
+  and no background job.
+- **Still out of scope here:** any other way to read another account's memory
+  (UI browsing, a per-account admin switch, a shared corpus), and any notion of an
+  administrator acting *as* another account — the token's `sub` always stays the
+  admin who consented.
 
 Still explicitly **out of scope**: embeddings/vector search, teams, billing,
 background jobs/queues, self-service account creation.

@@ -9,6 +9,7 @@
  * @var \MemoryDown\Users\User $user
  * @var array<string, array{token: string, enabled: bool}> $tokens
  * @var array<string, bool> $apiEnabled
+ * @var array{account: string, all: string} $mcp
  * @var string $notices
  * @var string $errors
  */
@@ -66,6 +67,32 @@ $labels = [
       <input type="password" id="confirm" name="confirm" required autocomplete="new-password" minlength="<?= UserStore::MIN_PASSWORD_LENGTH ?>">
       <button type="submit" class="primary block">Change password</button>
     </form>
+  </section>
+
+  <section class="page-card">
+    <h2>MCP connections</h2>
+    <p class="muted">
+      Paste one of these as the server URL in ChatGPT or another MCP client. Both ask for
+      this same username and password on the consent page.
+    </p>
+
+    <div class="token-block">
+      <div class="account-name">Your memory</div>
+      <div class="token-value"><?= $h($mcp['account']) ?></div>
+      <p class="muted">The seven memory tools, over your own account only.</p>
+    </div>
+
+    <?php if ('' !== $mcp['all']): ?>
+      <div class="token-block">
+        <div class="account-name">Every account (administrator)</div>
+        <div class="token-value"><?= $h($mcp['all']) ?></div>
+        <p class="muted">
+          The same tools over every enabled account, with an <code>owner</code> argument on each
+          one. It needs a connection of its own: the token of an ordinary connector is not
+          accepted here, and an account that is not an administrator is refused.
+        </p>
+      </div>
+    <?php endif; ?>
   </section>
 
   <section class="page-card">
