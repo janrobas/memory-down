@@ -13,6 +13,8 @@ version lives in `config.php` (`app_version`).
 
 ## [Unreleased]
 
+## [1.0.2]
+
 ### Added
 - **Private entries.** Any memory can be marked *Private* in the editor (a
   checkbox beside Archived/Public) and is then invisible to every AI-facing
@@ -88,6 +90,11 @@ version lives in `config.php` (`app_version`).
 - `list_memory` no longer returns entry bodies. Its description always promised
   metadata only; the bodies were removed and replaced by `chars`. `recall` keeps
   returning bodies, as documented.
+- A checkbox toggled while a save was in flight (Archived, Public, Private) could
+  be recorded as saved without ever reaching the server: the editor marked the
+  *live* form state as saved instead of the payload it had posted. It now
+  snapshots exactly what was sent — with the id the server assigned after a
+  rename — so a late click stays dirty and is saved.
 
 ## [1.0.1]
 
