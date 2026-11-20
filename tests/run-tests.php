@@ -3605,6 +3605,15 @@ $langJar = $GLOBALS['memorydown_cookies'];
 $r = request('GET', '/ui/login');
 check('language: no cookie and no header -> the instance default', str_contains($r['body'], 'lang="en"') && str_contains($r['body'], 'Sign in'), 'login page');
 
+// The strings app.js paints travel in a data attribute, so the page must carry
+// valid, HTML-escaped JSON: an attribute that ends at the first quote leaves
+// app.js with an empty bundle and the interface showing raw keys such as
+// "js.no_active". Asserting the attribute parses is what catches that.
+preg_match('/data-i18n="([^"]*)"/', $r['body'], $i18nAttribute);
+$bundle = json_decode(html_entity_decode($i18nAttribute[1] ?? '', ENT_QUOTES | ENT_HTML5), true);
+check('language: the page carries a parseable bundle for app.js', is_array($bundle) && isset($bundle['js.no_active']), (string) ($i18nAttribute[1] ?? ''));
+check('language: the bundle is in the page language', 'No active memories.' === ($bundle['js.no_active'] ?? null), (string) ($bundle['js.no_active'] ?? ''));
+
 $GLOBALS['memorydown_cookies'] = ['memorydown_lang' => 'sl'];
 $r = request('GET', '/ui/login');
 check('language: a Slovenian cookie renders Slovenian', str_contains($r['body'], 'lang="sl"') && str_contains($r['body'], 'Prijava'), 'login page');

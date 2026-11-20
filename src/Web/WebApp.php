@@ -1696,13 +1696,16 @@ final class WebApp
             'lang' => $translator->htmlLang(),
             'languageLinks' => LanguageSwitcher::html($translator, $this->currentUri),
             'languageBlurb' => $translator->e('app.language_blurb'),
-            // Safe inside a double-quoted HTML attribute: the HEX flags escape
-            // every character that could end it or start a tag.
-            'i18nJson' => (string) json_encode(
+            // Escaped here, once, because the layout drops this straight into a
+            // double-quoted attribute: JSON's own quotes would end that attribute
+            // and leave app.js parsing a truncated string — which is exactly how
+            // the interface ends up showing raw keys like "js.no_active".
+            // (JSON_HEX_* is not enough: it escapes quotes INSIDE string values,
+            // never the structural ones that delimit them.)
+            'i18nJson' => self::h((string) json_encode(
                 $translator->clientBundle(),
-                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
-                | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT,
-            ),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            )),
         ];
 
         $content = (static function () use ($template, $data): string {
