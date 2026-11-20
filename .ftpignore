@@ -12,6 +12,9 @@ tests/
 TODO.md
 *.log
 
+# Screenshots and page snapshots from a local browser session.
+.playwright-mcp/
+
 # Secrets: uploaded once, by hand, via `ftp_sync.py push .env .env`.
 .env
 
